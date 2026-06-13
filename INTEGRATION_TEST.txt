@@ -1,0 +1,146 @@
+// Integration test - verify all phases working
+const PHASES = {
+  PHASE_2: "Message Persistence - Save/load chat messages from Supabase",
+  PHASE_3: "File Persistence - Save/load generated files from Supabase",
+  PHASE_4: "Agent System - Real agent detection and orchestration",
+  PHASE_5: "Memory System - 3-tier (context/sql/storage) memory management",
+  PHASE_6: "Auth Integration - Real Supabase Auth with user sessions",
+};
+
+/**
+ * INTEGRATION TEST CHECKLIST
+ * 
+ * Run these in order in the app (localhost:3000):
+ */
+
+// TEST 1: Authentication (Phase 6)
+// Expected: If not logged in, see login prompt. Sign up/login should work.
+// ✓ Implemented in: contexts/AuthContext.tsx
+// ✓ Integrated in: app/layout.tsx via AuthProvider
+
+// TEST 2: Session Management (Phase 6)  
+// Expected: User can create/switch between sessions
+// ✓ Implemented in: useAuth() hook
+// ✓ Integrated in: ChatWorkspacePage.tsx uses session?.id
+
+// TEST 3: Message Persistence (Phase 2)
+// Expected:
+// 1. Type a message → press Enter
+// 2. Message appears in chat
+// 3. Reload page → message still there
+// ✓ Implemented in: ChatWorkspacePage.tsx (loadSessionMessages)
+// ✓ Save logic: addMessage() → saveMessage()
+// ✓ Database: chat_messages table with RLS
+
+// TEST 4: File Persistence (Phase 3)
+// Expected:
+// 1. Ask agent: "Create a React component for a button"
+// 2. Files appear in left sidebar
+// 3. Reload page → files still there
+// ✓ Implemented in: ChatWorkspacePage.tsx (loadSessionFiles, buildFileTree)
+// ✓ Save logic: ChatComposer.tsx extracts files → saveFile()
+// ✓ Database: files table with RLS
+
+// TEST 5: Agent System (Phase 4)
+// Expected:
+// 1. Ask planning question → Planning agent used
+// 2. Ask code generation → Coding agent used
+// 3. Ask review question → Reviewing agent used
+// ✓ Implemented in: ChatComposer.tsx (detectAgent)
+// ✓ System prompts for each agent defined
+// ✓ Agent metadata saved to database
+
+// TEST 6: Memory System (Phase 5)
+// Expected:
+// 1. Conversation starts in 'context' stage
+// 2. At 30+ messages, switches to 'sql' stage
+// 3. At 100+ messages, switches to 'storage' stage
+// ✓ Implemented in: lib/memory.ts (MemoryManager)
+// ✓ Integrated in: ChatWorkspacePage.tsx (memoryStage state)
+// ✓ 3-tier system:
+//   - context: In-memory React state (fast, limited)
+//   - sql: Supabase storage (scalable, indexed)
+//   - storage: Future long-term memory (embeddings)
+
+export const TESTING_GUIDE = {
+  setup: [
+    "1. App should be running on http://localhost:3000",
+    "2. Supabase project must be configured with schema from setup-supabase.sql",
+    ".env must have NEXT_PUBLIC_SUPABASE_URL and NEXT_PUBLIC_SUPABASE_ANON_KEY",
+  ],
+  
+  test_auth: [
+    "Goal: Test Phase 6 (Authentication)",
+    "1. Visit http://localhost:3000",
+    "2. Should see login/signup form",
+    "3. Sign up with email/password",
+    "4. Should be redirected to chat workspace",
+    "5. User ID should be tied to Supabase auth",
+  ],
+
+  test_messages: [
+    "Goal: Test Phase 2 (Message Persistence)",
+    "1. In chat, type: 'Hello from CodePilot'",
+    "2. Press Enter",
+    "3. Message appears in chat bubble",
+    "4. Check Supabase dashboard → chat_messages table → see message",
+    "5. Reload page (Ctrl+R)",
+    "6. Message should still be there ✓",
+  ],
+
+  test_files: [
+    "Goal: Test Phase 3 (File Persistence)",
+    "1. Ask agent: 'Create a React counter component in src/app/Counter.tsx'",
+    "2. Wait for response",
+    "3. File 'Counter.tsx' appears in left sidebar",
+    "4. Check Supabase dashboard → files table → see Counter.tsx",
+    "5. Reload page (Ctrl+R)",
+    "6. File tree should still show Counter.tsx ✓",
+  ],
+
+  test_agents: [
+    "Goal: Test Phase 4 (Agent System)",
+    "1. Ask: 'Create a plan for building a todo app' → Planning agent",
+    "2. Ask: 'Generate TypeScript code for a Button component' → Coding agent",
+    "3. Ask: 'Review this code for security issues' → Reviewing agent",
+    "4. Each response should have agent icon/label",
+    "5. Agent metadata saved to database",
+  ],
+
+  test_memory: [
+    "Goal: Test Phase 5 (Memory System)",
+    "1. Start fresh conversation → memoryStage = 'context'",
+    "2. Send 30+ messages → memoryStage switches to 'sql'",
+    "3. Send 100+ messages → memoryStage switches to 'storage'",
+    "4. Check workspaceTopbar for memory stage indicator",
+    "5. All messages stored in appropriate tier",
+  ],
+
+  expected_behavior: {
+    onLoad: "App loads empty or with previous session data",
+    onMessage: "Message instantly appears, then persists to DB",
+    onFileGeneration: "Files appear in tree, then persist to DB",
+    onReload: "All data (messages + files) restored from DB",
+    onAgentResponse: "Agent type saved with message metadata",
+    onMemoryStageChange: "UI updates memory stage indicator",
+  },
+
+  success_criteria: [
+    "✅ Auth: Can sign up, login, create sessions",
+    "✅ Phase 2: Messages persist across reload",
+    "✅ Phase 3: Files persist across reload",
+    "✅ Phase 4: Agents detected and labeled correctly",
+    "✅ Phase 5: Memory stage adjusts with conversation size",
+    "✅ Phase 6: User sessions isolated (RLS working)",
+    "✅ No 404s or console errors",
+    "✅ Supabase operations complete without timeout",
+  ],
+
+  debug: {
+    check_browser_console: "F12 → Console tab → no red errors",
+    check_network: "F12 → Network tab → POST to /api/ai/chat-completion working",
+    check_supabase: "Dashboard → SQL Editor → SELECT * FROM chat_messages",
+    check_auth: "Dashboard → Auth → Users → see your account",
+    check_storage: "Dashboard → Storage → see file records",
+  },
+};
