@@ -35,7 +35,7 @@ const API_KEYS: Record<string, string | undefined> = {
 // Hardening pass #5 — server-side caps to keep the AI provider happy and
 // prevent runaway costs / payload-too-large errors that would otherwise
 // surface as opaque 500s. Adjust if you legitimately need more.
-const MAX_TOTAL_PROMPT_CHARS = 400_000; // ~100K tokens — safe for GPT-4o
+const MAX_TOTAL_PROMPT_CHARS = 400_000; // ~100K tokens for current large-context OpenAI models
 const MAX_MESSAGE_COUNT = 200;
 
 function totalPromptChars(messages: unknown[]): number {
@@ -68,7 +68,7 @@ function formatErrorResponse(error: unknown, provider?: string) {
  *
  * Callers used the rocket-flavoured `max_completion_tokens` field; the
  * OpenAI SDK calls this `max_tokens` (the o1/o3-only `max_completion_tokens`
- * alias is rejected by gpt-4o). We translate it transparently so the
+ * alias is rejected by some chat-completions models). We translate it transparently so the
  * existing front-end and auto-fix loop keep working unchanged.
  */
 function normalizeParameters(parameters: Record<string, unknown>): Record<string, unknown> {

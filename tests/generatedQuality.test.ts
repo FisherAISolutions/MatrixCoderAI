@@ -57,12 +57,12 @@ describe('runGeneratedQualityAudit', () => {
     expect(result.log).toMatch(/baseUrl|paths/);
   });
 
-  it('fails imported tiny placeholder components', () => {
+  it('fails imported files with explicit stub markers', () => {
     const result = runGeneratedQualityAudit([
       pkg,
       tsconfig,
       file('src/app/history/page.tsx', `import HistoryPage from '@/components/HistoryPage';\nexport default HistoryPage;`),
-      file('src/components/HistoryPage.tsx', `export default function HistoryPage() { return <main>History</main>; }`),
+      file('src/components/HistoryPage.tsx', `export default function HistoryPage() { throw new Error('Not implemented'); }`),
     ]);
 
     expect(result.ok).toBe(false);
@@ -80,6 +80,36 @@ describe('runGeneratedQualityAudit', () => {
         `'use client';\nimport { useState } from 'react';\nexport default function TaskForm(){const [title,setTitle]=useState('');return <form onSubmit={(event)=>event.preventDefault()}><input value={title} onChange={(event)=>setTitle(event.target.value)} /><button>Add</button></form>;}`
       ),
     ]);
+
+    expect(result.ok).toBe(true);
+  });
+
+  it('does not fail short valid Tailwind globals or functional note helpers as placeholders', () => {
+    const result = runGeneratedQualityAudit(
+      [
+        pkg,
+        tsconfig,
+        file('src/app/layout.tsx', `import './globals.css';\nexport default function RootLayout({ children }: { children: React.ReactNode }) { return <html><body>{children}</body></html>; }`),
+        file('src/app/page.tsx', `import { getNotes } from '@/lib/notesStorage';\nimport { seedNotes } from '@/lib/seedNotes';\nimport EditNoteModal from '@/components/modals/EditNoteModal';\nexport default function Page(){ return <main><EditNoteModal open={false} onClose={() => {}} onSave={() => {}} />{getNotes().length + seedNotes.length}</main>; }`),
+        file('src/app/add-note/page.tsx', `export default function AddNotePage(){ return <main>Add note</main>; }`),
+        file('src/app/history/page.tsx', `export default function HistoryPage(){ return <main>History</main>; }`),
+        file('src/app/globals.css', '@tailwind base;\n@tailwind components;\n@tailwind utilities;\n'),
+        file(
+          'src/lib/notesStorage.ts',
+          `import type { Note } from '@/types/note';\nconst KEY = 'notes';\nexport function getNotes(): Note[] { if (typeof window === 'undefined') return []; return JSON.parse(localStorage.getItem(KEY) || '[]'); }\nexport function saveNotes(notes: Note[]) { localStorage.setItem(KEY, JSON.stringify(notes)); }`
+        ),
+        file(
+          'src/lib/seedNotes.ts',
+          `import type { Note } from '@/types/note';\nexport const seedNotes: Note[] = [{ id: '1', title: 'Welcome', body: 'First note', updatedAt: Date.now() }];`
+        ),
+        file('src/types/note.ts', 'export interface Note { id: string; title: string; body: string; updatedAt: number }'),
+        file(
+          'src/components/modals/EditNoteModal.tsx',
+          `'use client';\nexport default function EditNoteModal({ open, onClose, onSave }: { open: boolean; onClose: () => void; onSave: () => void }) { if (!open) return null; return <section><input placeholder="Note title" /><button onClick={onSave}>Save</button><button onClick={onClose}>Cancel</button></section>; }`
+        ),
+      ],
+      'Build a notes app with add-note page, history page, Tailwind, TypeScript, and localStorage.'
+    );
 
     expect(result.ok).toBe(true);
   });
@@ -236,5 +266,36 @@ export default function HistoryPage() {
     expect(result.ok).toBe(false);
     expect(result.errors.some((error) => error.file === 'src/app/add/page.tsx')).toBe(true);
     expect(result.errors.some((error) => /add-note|duplicate/i.test(error.message))).toBe(true);
+  });
+
+  it('fails route pages with pasted client code after server code before build', () => {
+    const result = runGeneratedQualityAudit([
+      pkg,
+      tsconfig,
+      file(
+        'src/app/add-note/page.tsx',
+        `import { NoteForm } from '@/components/NoteForm';
+
+export default function AddNotePage() {
+  return <AddNoteClient />;
+}
+
+'use client';
+
+import { useRouter } from 'next/navigation';
+import { useState } from 'react';
+
+function AddNoteClient() {
+  const [loading, setLoading] = useState(false);
+  return <NoteForm busy={loading} />;
+}
+`
+      ),
+      file('src/components/NoteForm.tsx', `'use client';\nexport function NoteForm(){ return <form />; }`),
+    ]);
+
+    expect(result.ok).toBe(false);
+    expect(result.errors.some((error) => error.file === 'src/app/add-note/page.tsx')).toBe(true);
+    expect(result.errors.some((error) => /misplaced 'use client'|import statement after executable code/i.test(error.message))).toBe(true);
   });
 });

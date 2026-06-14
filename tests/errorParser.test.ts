@@ -106,6 +106,29 @@ describe('parseValidationOutput — Next.js invariants', () => {
   });
 });
 
+describe('parseValidationOutput — webpack import trace', () => {
+  it('extracts the source file from an import trace after a wasm/SWC stack', () => {
+    const log = `at __wbg_adapter_50 (file:///home/project/node_modules/next/wasm/@next/swc-wasm-nodejs/wasm.js#cjs:349:10)
+at real (file:///home/project/node_modules/next/wasm/@next/swc-wasm-nodejs/wasm.js#cjs:140:20)
+Import trace for requested module:
+./src/app/edit/[id]/page.tsx
+
+> Build failed because of webpack errors`;
+    const errs = parseValidationOutput(log, 'nextjs');
+
+    expect(errs.some((error) => error.file === 'src/app/edit/[id]/page.tsx')).toBe(true);
+    expect(looksLikeFailure(log)).toBe(true);
+  });
+
+  it('extracts globals.css from css-loader generated module paths', () => {
+    const log =
+      './src/app/globals.css.webpack[javascript/auto]!=!./node_modules/next/dist/build/webpack/loaders/css-loader/src/index.js??ruleSet[1].rules[14].oneOf[10].use[2]!./node_modules/next/dist/build/webpack/loaders/postcss-loader/src/index.js??ruleSet[1].rules[14].oneOf[10].use[3]!./src/app/globals.css\n\n> Build failed because of webpack errors';
+    const errs = parseValidationOutput(log, 'nextjs');
+
+    expect(errs.some((error) => error.file === 'src/app/globals.css')).toBe(true);
+  });
+});
+
 describe('looksLikeFailure', () => {
   it('returns true for common failure indicators', () => {
     expect(looksLikeFailure('Failed to compile.\n\n./src/page.tsx:1:1')).toBe(true);

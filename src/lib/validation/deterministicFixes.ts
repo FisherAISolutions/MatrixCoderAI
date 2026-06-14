@@ -1,6 +1,7 @@
 import type { FileNode } from '@/app/chat-workspace/components/types';
 import { flattenTree } from '@/lib/repo/heuristics';
 import { findDuplicateEffectiveAppRoutes } from '@/lib/repo/appRoutes';
+import { FALLBACK_GLOBALS_CSS, isCssPath, sanitizeCssContent } from '@/lib/repo/cssSanitizer';
 import type { ValidationResult } from './engine';
 
 interface DeterministicUpdate {
@@ -174,6 +175,28 @@ function fixNext15PageProps(
   };
 }
 
+function isGlobalsCssPath(path: string): boolean {
+  return /(?:^|\/)globals\.css$/i.test(path);
+}
+
+function cssFailureNeedsGlobalsFallback(error: { file?: string; message?: string; raw?: string }): boolean {
+  const text = `${error.file ?? ''}\n${error.message ?? ''}\n${error.raw ?? ''}`;
+  return (
+    /globals\.css/i.test(text) &&
+    /css-loader|postcss-loader|Unknown word|Build failed while compiling this module|webpack errors/i.test(text)
+  );
+}
+
+function updateFile(file: FileNode, content: string): FileNode {
+  return {
+    ...file,
+    content,
+    size: content.length,
+    lastModified: new Date().toISOString(),
+    isNew: false,
+  };
+}
+
 export function applyDeterministicFixes(
   files: FileNode[],
   validation: ValidationResult
@@ -185,6 +208,28 @@ export function applyDeterministicFixes(
   );
   const updates = new Map<string, DeterministicUpdate>();
   const deletes = new Map<string, DeterministicDelete>();
+
+  for (const file of byPath.values()) {
+    if (!file.content || !isCssPath(file.path)) continue;
+    const sanitized = sanitizeCssContent(file.path, file.content);
+    if (sanitized !== file.content) {
+      updates.set(file.path, {
+        file: updateFile(file, sanitized),
+        reason: `sanitized invalid CSS in ${file.path}`,
+      });
+    }
+  }
+
+  const globalsFallbackNeeded = validation.errors.some(cssFailureNeedsGlobalsFallback);
+  if (globalsFallbackNeeded) {
+    const globals = Array.from(byPath.values()).find((file) => isGlobalsCssPath(file.path));
+    if (globals) {
+      updates.set(globals.path, {
+        file: updateFile(globals, FALLBACK_GLOBALS_CSS),
+        reason: `replaced ${globals.path} with safe globals.css fallback after CSS build failure`,
+      });
+    }
+  }
 
   for (const duplicate of findDuplicateEffectiveAppRoutes(files)) {
     for (const path of duplicate.deletePaths) {
@@ -220,13 +265,7 @@ export function applyDeterministicFixes(
     const next15PageProps = fixNext15PageProps(file.content, error.message);
     if (next15PageProps.reason && next15PageProps.content !== file.content) {
       updates.set(file.path, {
-        file: {
-          ...file,
-          content: next15PageProps.content,
-          size: next15PageProps.content.length,
-          lastModified: new Date().toISOString(),
-          isNew: false,
-        },
+        file: updateFile(file, next15PageProps.content),
         reason: next15PageProps.reason,
       });
       continue;
@@ -239,13 +278,7 @@ export function applyDeterministicFixes(
     if (!fixed.reason || fixed.content === file.content) continue;
 
     updates.set(file.path, {
-      file: {
-        ...file,
-        content: fixed.content,
-        size: fixed.content.length,
-        lastModified: new Date().toISOString(),
-        isNew: false,
-      },
+      file: updateFile(file, fixed.content),
       reason: fixed.reason,
     });
   }

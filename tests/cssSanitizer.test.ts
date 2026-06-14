@@ -37,4 +37,54 @@ describe('cssSanitizer', () => {
     });
     expect(issues[0].snippet).toContain('2 | =======');
   });
+
+  it('rewrites safe scrollbar pseudo-element @apply usage to plain CSS', () => {
+    const cleaned = sanitizeCssContent(
+      'src/app/globals.css',
+      `@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+body {
+  @apply bg-gray-50 text-gray-900;
+}
+
+::-webkit-scrollbar {
+  @apply w-2 bg-transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  @apply bg-gray-300 rounded;
+}
+`
+    );
+
+    expect(cleaned).toContain('@apply bg-gray-50 text-gray-900;');
+    expect(cleaned).toContain('width: 8px;');
+    expect(cleaned).toContain('background: transparent;');
+    expect(cleaned).toContain('background: #d1d5db;');
+    expect(cleaned).toContain('border-radius: 0.25rem;');
+    expect(cleaned).not.toContain('@apply w-2 bg-transparent;');
+    expect(cleaned).not.toContain('@apply bg-gray-300 rounded;');
+  });
+
+  it('reports pseudo-element @apply usage that cannot be safely rewritten', () => {
+    const issues = findCssSanityIssues([
+      file(
+        'src/app/globals.css',
+        `@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+::before {
+  @apply content-[''] absolute inset-0;
+}
+`
+      ),
+    ]);
+
+    expect(issues).toHaveLength(1);
+    expect(issues[0].path).toBe('src/app/globals.css');
+    expect(issues[0].reason).toMatch(/@apply is unsafe inside pseudo-element/i);
+  });
 });

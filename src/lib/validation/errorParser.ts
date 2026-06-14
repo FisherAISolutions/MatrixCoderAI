@@ -70,6 +70,8 @@ const SHELL_NOT_FOUND_REGEX =
 const NEXT_FILE_HEAD_REGEX = /^\.?\/?([^\s:]+\.(?:tsx?|jsx?|css|mjs|cjs)):(\d+):(\d+)/m;
 const MODULE_NOT_FOUND_REGEX = /Module not found:\s+(?:Error:\s+)?Can't resolve\s+'([^']+)'(?:\s+in\s+'([^']+)')?/g;
 const CANNOT_FIND_MODULE_REGEX = /Cannot find module\s+'([^']+)'/g;
+const IMPORT_TRACE_FILE_REGEX = /Import trace for requested module:\s*\n\s*\.?\/?([^\s\n]+\.(?:tsx?|jsx?|css|mjs|cjs))/g;
+const CSS_LOADER_RESOURCE_REGEX = /(?:^|!|\.\/)(src\/app\/[^!\s'"`]+\.css|app\/[^!\s'"`]+\.css)/g;
 
 // ---------- Next.js prerender / export errors (App Router) ----------
 //   Error occurred prerendering page "/add". Read more: ...
@@ -166,6 +168,26 @@ export function parseValidationOutput(
     push({
       source: 'module',
       message: `Cannot find module: ${m[1]}`,
+      raw: m[0],
+    });
+  }
+  IMPORT_TRACE_FILE_REGEX.lastIndex = 0;
+  while ((m = IMPORT_TRACE_FILE_REGEX.exec(clean)) !== null) {
+    push({
+      source: source === 'unknown' ? 'nextjs' : source,
+      file: m[1],
+      message:
+        'Build failed while compiling this module. Inspect this file for malformed syntax, misplaced directives, or imports pasted after executable code.',
+      raw: m[0],
+    });
+  }
+  CSS_LOADER_RESOURCE_REGEX.lastIndex = 0;
+  while ((m = CSS_LOADER_RESOURCE_REGEX.exec(clean)) !== null) {
+    push({
+      source: source === 'unknown' ? 'nextjs' : source,
+      file: m[1],
+      message:
+        'Build failed while compiling this CSS module. Inspect this file for unsafe @apply usage, malformed syntax, or PostCSS/Tailwind incompatibilities.',
       raw: m[0],
     });
   }
@@ -269,6 +291,7 @@ export function looksLikeFailure(output: string): boolean {
     /\berror\s+ts\d+\b/i.test(clean) ||
     clean.includes('module not found') ||
     clean.includes('cannot find module') ||
+    clean.includes('import trace for requested module') ||
     clean.includes('command not found') ||
     clean.includes('npm err!') ||
     clean.includes('npm error') ||

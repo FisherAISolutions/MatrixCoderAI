@@ -446,7 +446,7 @@ function runCssSanityStep(files: FileNode[]): StepResult {
       status: 'ok',
       durationMs: performance.now() - start,
       errors: [],
-      log: '[css-sanity] CSS files are free of markdown fences, SEARCH/REPLACE markers, and leaked path comments.\n',
+      log: '[css-sanity] CSS files are free of markdown fences, SEARCH/REPLACE markers, leaked path comments, and unsafe pseudo-element @apply usage.\n',
     };
   }
 
@@ -475,16 +475,24 @@ function runCssSanityStep(files: FileNode[]): StepResult {
 }
 
 function appendCssUnknownWordContext(files: FileNode[], result: StepResult): StepResult {
-  if (result.status !== 'failed' || !/Unknown word/i.test(result.log)) return result;
-  const match = result.log.match(/Syntax error:\s+([^\s]+\.css)\s+Unknown word/i);
-  if (!match) return result;
-  const cssPath = match[1].replace(/^\.\//, '');
+  if (
+    result.status !== 'failed' ||
+    !/(Unknown word|css-loader|postcss-loader|Build failed while compiling this module)/i.test(result.log)
+  ) {
+    return result;
+  }
   const flat = flattenTree(files).filter(
     (file) => file.type === 'file' && typeof file.content === 'string'
   );
+  const cssPaths = Array.from(result.log.matchAll(/\.?\/?((?:src\/)?app\/[^)\s'"`]+\.css|[^)\s'"`]+\/globals\.css)/g))
+    .map((match) => match[1].replace(/^\.\//, ''));
+  const cssPath = cssPaths.find((path) => !path.includes('node_modules'));
   const file =
-    flat.find((item) => item.path === cssPath) ??
-    flat.find((item) => item.path.endsWith('/' + cssPath));
+    (cssPath
+      ? flat.find((item) => item.path === cssPath) ??
+        flat.find((item) => item.path.endsWith('/' + cssPath))
+      : undefined) ??
+    flat.find((item) => item.path.endsWith('/globals.css'));
   if (!file || typeof file.content !== 'string') return result;
 
   const lines = file.content.split(/\r?\n/);
@@ -496,13 +504,19 @@ function appendCssUnknownWordContext(files: FileNode[], result: StepResult): Ste
     .slice(start, end)
     .map((line, index) => `${String(start + index + 1).padStart(4, ' ')} | ${line}`)
     .join('\n');
-  const context = `\n[css-error-context] ${file.path} around suspected Unknown word:\n${snippet}\n`;
+  const fullContent =
+    file.content.length > 4000
+      ? `${file.content.slice(0, 4000)}\n/* ... ${file.content.length - 4000} chars truncated ... */`
+      : file.content;
+  const context =
+    `\n[css-error-context] ${file.path} content during CSS build failure:\n` +
+    `${fullContent}\n\n[css-error-context] ${file.path} focused snippet:\n${snippet}\n`;
   const error: ParsedError = {
     source: 'styling',
     file: file.path,
     line: sanityIssue?.line,
     message:
-      'Next build reported CSS "Unknown word". The raw snippet is included; replace the file with valid CSS only if needed.',
+      'Next build failed while compiling CSS. The actual CSS content is included; replace unsafe @apply usage or fall back to plain CSS.',
     raw: context.trim(),
   };
   return {
@@ -1017,8 +1031,9 @@ export async function runValidation(
       return finalize({ success: false, skipped: false });
     }
 
-    // 6. CSS sanity. Catch leaked markdown / SEARCH/REPLACE markers before
-    // spending time in Next build; the log includes nearby source lines.
+    // 6. CSS sanity. Catch leaked markdown / SEARCH/REPLACE markers and
+    // unsafe pseudo-element @apply usage before spending time in Next build;
+    // the log includes nearby source lines.
     onStatus?.('Checking CSS syntax inputs...');
     const cssSanityStep = runCssSanityStep(files);
     steps.push(cssSanityStep);

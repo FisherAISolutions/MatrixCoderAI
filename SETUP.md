@@ -215,7 +215,8 @@ Use these in order — each builds on the previous.
 **Prompt-too-large**:
 
 ```bash
-PAYLOAD=$(python3 -c "import json; print(json.dumps({'provider':'OPEN_AI','model':'gpt-4o','messages':[{'role':'user','content':'x'*500000}]}))")
+MODEL="${MODEL:?Set MODEL to the configured OpenAI model id first}"
+PAYLOAD=$(python3 -c "import json, os; print(json.dumps({'provider':'OPEN_AI','model':os.environ['MODEL'],'messages':[{'role':'user','content':'x'*500000}]}))")
 curl -s -X POST "http://localhost:3000/api/ai/chat-completion" \
   -H "Content-Type: application/json" -d "$PAYLOAD" | head -c 400
 ```
@@ -226,7 +227,8 @@ Expected: HTTP 413 with body
 **Too many messages**:
 
 ```bash
-PAYLOAD=$(python3 -c "import json; msgs=[{'role':'user','content':'hi'} for _ in range(250)]; print(json.dumps({'provider':'OPEN_AI','model':'gpt-4o','messages':msgs}))")
+MODEL="${MODEL:?Set MODEL to the configured OpenAI model id first}"
+PAYLOAD=$(python3 -c "import json, os; msgs=[{'role':'user','content':'hi'} for _ in range(250)]; print(json.dumps({'provider':'OPEN_AI','model':os.environ['MODEL'],'messages':msgs}))")
 curl -s -X POST "http://localhost:3000/api/ai/chat-completion" \
   -H "Content-Type: application/json" -d "$PAYLOAD" | head -c 400
 ```

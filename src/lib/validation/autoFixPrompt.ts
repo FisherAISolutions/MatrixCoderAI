@@ -449,10 +449,13 @@ Rules for this repair:
     three directives: \`@tailwind base;\`, \`@tailwind components;\`,
     and \`@tailwind utilities;\`.
   - If \`globals.css\` fails with \`Unknown word\`, leaked markdown fences,
-    or leaked SEARCH/REPLACE markers, replace the entire file body with
-    valid CSS only. The replacement body must NOT contain \`\`\`css\`,
-    \`\`\`\`, \`// path:\`, \`<<<<<<< SEARCH\`, \`=======\`, or
-    \`>>>>>>> REPLACE\` except for the required outer edit markers.
+    leaked SEARCH/REPLACE markers, or css-loader/postcss-loader errors,
+    replace the entire file body with valid CSS only. Do NOT use
+    \`@apply\` inside pseudo-elements such as \`::-webkit-scrollbar\`,
+    \`::-webkit-scrollbar-thumb\`, \`::before\`, or \`::after\`; use
+    plain CSS properties there. The replacement body must NOT contain
+    \`\`\`css\`, \`\`\`\`, \`// path:\`, \`<<<<<<< SEARCH\`, \`=======\`,
+    or \`>>>>>>> REPLACE\` except for the required outer edit markers.
     Safe fallback content:
 
     @tailwind base;
@@ -466,6 +469,18 @@ Rules for this repair:
 
     body {
       margin: 0;
+      background: #f9fafb;
+      color: #111827;
+    }
+
+    ::-webkit-scrollbar {
+      width: 8px;
+      background: transparent;
+    }
+
+    ::-webkit-scrollbar-thumb {
+      background: #d1d5db;
+      border-radius: 9999px;
     }
   - Do NOT create tiny placeholders. Required generated components must
     contain state, handlers, rendering, and persistence needed by the

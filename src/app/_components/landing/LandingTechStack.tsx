@@ -12,7 +12,7 @@ const STACK = [
   { name: 'React 19', sub: 'server + client' },
   { name: 'Tailwind', sub: 'matrix theme' },
   { name: 'Supabase', sub: 'auth + storage' },
-  { name: 'OpenAI', sub: 'gpt-4.1 default' },
+  { name: 'OpenAI', sub: 'primary model' },
   { name: 'WebContainer', sub: 'in-browser sandbox' },
   { name: 'Monaco', sub: 'edit anywhere' },
 ];

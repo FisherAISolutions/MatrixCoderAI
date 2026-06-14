@@ -101,4 +101,32 @@ export default function AddNotePage({ searchParams }: AddNotePageProps) {
     );
     expect(report.updates[0].file.content).toContain('resolvedSearchParams?.edit');
   });
+
+  it('replaces globals.css with a safe fallback after CSS build failures', () => {
+    const report = applyDeterministicFixes(
+      [
+        file(
+          'src/app/globals.css',
+          `@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+::-webkit-scrollbar {
+  @apply w-2 bg-transparent;
+}
+`
+        ),
+      ],
+      validation(
+        'src/app/globals.css',
+        'Build failed while compiling this CSS module. css-loader postcss-loader webpack errors'
+      )
+    );
+
+    expect(report.mutated).toBe(true);
+    expect(report.updates[0].file.path).toBe('src/app/globals.css');
+    expect(report.updates[0].file.content).toContain('background: #f9fafb;');
+    expect(report.updates[0].file.content).toContain('::-webkit-scrollbar');
+    expect(report.updates[0].file.content).not.toContain('@apply');
+  });
 });

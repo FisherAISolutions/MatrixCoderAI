@@ -56,33 +56,19 @@ function isLikelyRequiredTarget(path: string): boolean {
 
 function looksPlaceholder(content: string): boolean {
   const compact = content.replace(/\s+/g, ' ').trim();
-  const lower = compact.toLowerCase();
-  const hasImplementationSignals =
-    /\b(useState|useEffect|useMemo|useReducer|useRef)\b/.test(compact) ||
-    /\b(onClick|onChange|onSubmit|onInput)\b/.test(compact) ||
-    /\b(localStorage|fetch|map\(|filter\(|reduce\(|sort\()\b/.test(compact) ||
-    /\binterface\s+\w+|type\s+\w+\s*=|const\s+\w+\s*=/.test(compact) ||
-    /\bexport\s+(?:async\s+)?function\b/.test(compact);
+  const obviousStubPatterns = [
+    /\bTODO\b/i,
+    /\bFIXME\b/i,
+    /\bimplement later\b/i,
+    /\bnot implemented\b/i,
+    /\bmock implementation\b/i,
+    /throw\s+new\s+Error\s*\(\s*["'`]not implemented["'`]\s*\)/i,
+    /\bplaceholder\s+(?:component|file|implementation|stub)\b/i,
+    /\bstub\s+(?:component|file|implementation|only)\b/i,
+    /(?:^|\n)\s*(?:(?:\/\/|\/\*|\*)\s*)?(?:placeholder|stub)\s*$/i,
+  ];
 
-  if (
-    /return\s+(?:null|<>\s*<\/>|<div>\s*(?:todo|placeholder|stub|coming soon)?\s*<\/div>)/i.test(compact)
-  ) {
-    return true;
-  }
-
-  if (/\b(todo:\s*implement|stub only|placeholder component|coming soon)\b/i.test(compact)) {
-    return true;
-  }
-
-  if (compact.length < 180 && !hasImplementationSignals) {
-    return true;
-  }
-
-  if (lower.includes('placeholder') && compact.length < 260 && !hasImplementationSignals) {
-    return true;
-  }
-
-  return false;
+  return obviousStubPatterns.some((pattern) => pattern.test(compact));
 }
 
 function hasTailwindDirectives(content: string): boolean {
@@ -227,6 +213,77 @@ function hasTerm(content: string, term: string): boolean {
   return new RegExp(`\\b${term}\\b`, 'i').test(content);
 }
 
+function stripLeadingCommentsAndWhitespace(content: string): string {
+  let next = content.trimStart();
+  let changed = true;
+  while (changed) {
+    changed = false;
+    const lineComment = next.match(/^\/\/[^\n]*(?:\n|$)/);
+    if (lineComment) {
+      next = next.slice(lineComment[0].length).trimStart();
+      changed = true;
+      continue;
+    }
+    const blockComment = next.match(/^\/\*[\s\S]*?\*\//);
+    if (blockComment) {
+      next = next.slice(blockComment[0].length).trimStart();
+      changed = true;
+    }
+  }
+  return next;
+}
+
+function hasTopClientDirective(content: string): boolean {
+  return /^['"]use client['"];?/.test(stripLeadingCommentsAndWhitespace(content));
+}
+
+function hasMisplacedClientDirective(content: string): boolean {
+  return /['"]use client['"];?/.test(content) && !hasTopClientDirective(content);
+}
+
+function hasLateImportDeclaration(content: string): boolean {
+  const lines = content.split(/\r?\n/);
+  let seenCode = false;
+  let inBlockComment = false;
+
+  for (const line of lines) {
+    let trimmed = line.trim();
+    if (!trimmed) continue;
+
+    if (inBlockComment) {
+      if (trimmed.includes('*/')) {
+        trimmed = trimmed.slice(trimmed.indexOf('*/') + 2).trim();
+        inBlockComment = false;
+        if (!trimmed) continue;
+      } else {
+        continue;
+      }
+    }
+
+    if (trimmed.startsWith('/*')) {
+      if (!trimmed.includes('*/')) {
+        inBlockComment = true;
+        continue;
+      }
+      trimmed = trimmed.slice(trimmed.indexOf('*/') + 2).trim();
+      if (!trimmed) continue;
+    }
+
+    if (trimmed.startsWith('//')) continue;
+    if (/^['"]use client['"];?$/.test(trimmed) || /^['"]use server['"];?$/.test(trimmed)) {
+      if (seenCode) return true;
+      continue;
+    }
+    if (/^import(?:\s|{|\*)/.test(trimmed)) {
+      if (seenCode) return true;
+      continue;
+    }
+    seenCode = true;
+  }
+
+  return false;
+}
+
 export function runGeneratedQualityAudit(
   files: FileNode[],
   requirements = ''
@@ -315,6 +372,22 @@ export function runGeneratedQualityAudit(
       duplicate.paths[0],
       `Duplicate App Router pages resolve to "${duplicate.route}": ${duplicate.paths.join(', ')}. Route group folders like "(dashboard)" do not change the URL, so merge these pages before build.`
     );
+  }
+
+  for (const file of flat) {
+    if (!/\.(?:tsx|jsx|ts|js)$/.test(file.path)) continue;
+    const content = file.content ?? '';
+    if (hasMisplacedClientDirective(content)) {
+      fail(
+        file.path,
+        `${file.path} contains a misplaced 'use client' directive. Client directives must be the first statement in a file. For App Router route pages, keep page.tsx as a Server Component and move interactive code into a separate 'use client' child component.`
+      );
+    } else if (hasLateImportDeclaration(content)) {
+      fail(
+        file.path,
+        `${file.path} contains an import statement after executable code. ES imports must stay at the top of the module. Split pasted client code into its own component file before build.`
+      );
+    }
   }
 
   const tsconfig = byPath.get('tsconfig.json');

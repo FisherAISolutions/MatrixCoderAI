@@ -4,7 +4,7 @@ import { Send, Brain, Code2, Eye, ChevronDown, Zap } from 'lucide-react';
 import toast from 'react-hot-toast';
 
 import { useChat } from '@/lib/hooks/useChat';
-import { PRIMARY_MODEL, AI_PROVIDER } from '@/lib/ai/modelConfig';
+import { PRIMARY_MODEL, AUTO_FIX_MODEL, AI_PROVIDER } from '@/lib/ai/modelConfig';
 import { ChatMessage, AgentType, MemoryStage, FileNode } from './types';
 import {
   buildContextForPrompt,
@@ -19,6 +19,10 @@ import {
 } from '@/lib/repo/extractors';
 import { applyEditSequence } from '@/lib/repo/patcher';
 import { flattenTree } from '@/lib/repo/heuristics';
+import {
+  createNextScaffoldFiles,
+  NEXT_SCAFFOLD_PATHS,
+} from '@/lib/repo/nextScaffoldTemplates';
 import { runAutoFixLoop, isAutoFixRunning } from '@/lib/validation';
 import { analyzeAndAddMissingDependencies } from '@/lib/dependencies';
 import { pushTerminalLog } from '@/lib/terminal/store';
@@ -701,6 +705,10 @@ BEFORE-RESPOND VALIDATOR — run this checklist once before sending
   unless the user explicitly asked.
 □ Every Client-side feature (\`onClick\`, hooks, browser APIs) lives
   in a file whose FIRST line is \`'use client';\`.
+□ No route \`page.tsx\` contains a second pasted client block after the
+  server page. If a page needs hooks, create a separate child component
+  file with \`'use client';\` as its first statement and import it.
+□ No file has \`import\` declarations after executable code.
 □ No \`<Link>\` contains a nested \`<a>\` child.
 □ Layouts use the \`metadata\` export, not a manual \`<head>\`.
 □ API routes are under \`app/api/<name>/route.ts\`, not \`pages/api/\`.
@@ -879,9 +887,9 @@ interface ActiveBatchGeneration {
 const LARGE_APP_BATCHES: GenerationBatch[] = [
   {
     id: 1,
-    title: 'package/config/layout/globals',
+    title: 'root page shell',
     scope:
-      'Create only package/config/layout/global stylesheet/root homepage shell files. Use the src/app App Router root only: include package.json, next config, tsconfig, Tailwind/PostCSS config, src/app/layout.tsx, src/app/globals.css, and src/app/page.tsx if needed. Never create root app/ files.',
+      'Core Next.js scaffold files are already created by Matrix Coder from deterministic templates. Do NOT emit package.json, tsconfig.json, next.config.mjs, postcss.config.js, tailwind.config.ts, src/app/globals.css, or src/app/layout.tsx. Create only src/app/page.tsx if the app needs a root homepage shell. Never create root app/ files.',
   },
   {
     id: 2,
@@ -908,6 +916,8 @@ const LARGE_APP_BATCHES: GenerationBatch[] = [
       'Create only small missing glue files or corrections discovered from prior batches. Do not duplicate files already emitted. End with a concise final file list.',
   },
 ];
+
+const NEXT_SCAFFOLD_PATH_SET = new Set<string>(NEXT_SCAFFOLD_PATHS);
 
 function shouldBatchGenerationRequest(text: string, agent: AgentType, files: FileNode[]): boolean {
   if (agent !== 'coding') return false;
@@ -943,6 +953,7 @@ function buildBatchPrompt(
     '- Do not run validation or claim validation passed.',
     '- Do not ask the user to say continue.',
     '- Do not emit files outside this batch scope.',
+    `- Do not emit deterministic scaffold files: ${NEXT_SCAFFOLD_PATHS.join(', ')}. Matrix Coder creates these from templates before generation.`,
     '- If a needed file belongs to a later batch, list it under NEXT BATCH NOTES instead of creating it now.',
     continuation
       ? `Continuation repair: the previous response was incomplete (${continuation.reason}). Files successfully parsed before the truncation have already been saved. Regenerate ONLY the missing or truncated file(s)${continuation.missingPaths?.length ? `: ${continuation.missingPaths.join(', ')}` : continuation.lastCompletePath ? ` after ${continuation.lastCompletePath}` : ''}. Do not re-emit files that were already completed.`
@@ -991,6 +1002,14 @@ export default function ChatComposer({
   const batchGenerationRef = useRef<ActiveBatchGeneration | null>(null);
 
   const { response, isLoading, error, sendMessage } = useChat(AI_PROVIDER, PRIMARY_MODEL, true);
+
+  useEffect(() => {
+    pushTerminalLog({
+      level: 'info',
+      text: `[AI] Primary Model: ${PRIMARY_MODEL}\n[AI] Auto Fix Model: ${AUTO_FIX_MODEL}\n`,
+      timestamp: Date.now(),
+    });
+  }, []);
 
   const launchAgentRequest = useCallback(
     (
@@ -1258,6 +1277,7 @@ export default function ChatComposer({
       let createsCount = 0;
       let extractedPathsForDiagnostics: string[] = [];
       let persistedScheduledPathsForDiagnostics: string[] = [];
+      let ignoredProtectedScaffoldCount = 0;
       let incompleteBatchContinuation:
         | { lastCompletePath?: string | null; reason: string; missingPaths?: string[] }
         | null = null;
@@ -1274,7 +1294,29 @@ export default function ChatComposer({
             : 'Coding Agent response received; extracting generated files.'
         );
         const extracted = extractFromAssistantResponse(finalContent);
-        const { creates, edits, malformedEdits, malformedEditReasons } = extracted;
+        const protectedCreates = activeBatch
+          ? extracted.creates.filter((file) => NEXT_SCAFFOLD_PATH_SET.has(file.path))
+          : [];
+        const protectedEdits = activeBatch
+          ? extracted.edits.filter((edit) => NEXT_SCAFFOLD_PATH_SET.has(normalizeEditPath(edit.path)))
+          : [];
+        ignoredProtectedScaffoldCount = protectedCreates.length + protectedEdits.length;
+        const creates = activeBatch
+          ? extracted.creates.filter((file) => !NEXT_SCAFFOLD_PATH_SET.has(file.path))
+          : extracted.creates;
+        const edits = activeBatch
+          ? extracted.edits.filter((edit) => !NEXT_SCAFFOLD_PATH_SET.has(normalizeEditPath(edit.path)))
+          : extracted.edits;
+        const { malformedEdits, malformedEditReasons } = extracted;
+        if (ignoredProtectedScaffoldCount > 0) {
+          pushTerminalLog({
+            level: 'warn',
+            text:
+              `[scaffold-template] ignored ${ignoredProtectedScaffoldCount} LLM-emitted scaffold action(s): ` +
+              `${[...protectedCreates.map((file) => file.path), ...protectedEdits.map((edit) => normalizeEditPath(edit.path))].join(', ')}\n`,
+            timestamp: Date.now(),
+          });
+        }
         extractedPathsForDiagnostics = Array.from(
           new Set([...creates.map((file) => file.path), ...edits.map((edit) => edit.path)])
         );
@@ -1605,6 +1647,11 @@ export default function ChatComposer({
             'generation',
             `No files were written because ${malformedEdits.length} edit block(s) were malformed.`
           );
+        } else if (activeBatchGeneration && ignoredProtectedScaffoldCount > 0) {
+          completePreviewStage(
+            'generation',
+            `Ignored ${ignoredProtectedScaffoldCount} protected scaffold file action(s); deterministic templates already own those files.`
+          );
         } else {
           failPreviewStage(
             'generation',
@@ -1663,7 +1710,7 @@ export default function ChatComposer({
       // (isAutoFixRunning()), so multiple assistant turns in flight
       // cannot stack.
       // -------------------------------------------------------------
-      if ((appliedAnyEdit || createdAny) && activeBatchGeneration) {
+      if ((appliedAnyEdit || createdAny || ignoredProtectedScaffoldCount > 0) && activeBatchGeneration) {
         const isFinalBatch =
           activeBatchGeneration.index >= activeBatchGeneration.batches.length - 1;
         const launchDelay = createdAny ? createsCount * 200 + 500 : 500;
@@ -1862,6 +1909,62 @@ export default function ChatComposer({
     ta.style.height = `${Math.min(ta.scrollHeight, 160)}px`;
   }, [input]);
 
+  const upsertDeterministicNextScaffold = useCallback(() => {
+    const existingByPath = new Map(
+      flattenTree(fileTree)
+        .filter((file) => file.type === 'file')
+        .map((file) => [file.path, file])
+    );
+    const scaffoldFiles = createNextScaffoldFiles();
+    const created: string[] = [];
+    const updated: string[] = [];
+
+    for (const template of scaffoldFiles) {
+      const existing = existingByPath.get(template.path);
+      if (existing) {
+        if (existing.content !== template.content || existing.language !== template.language) {
+          onUpdateFile({
+            ...existing,
+            content: template.content,
+            language: template.language,
+            size: template.content?.length ?? 0,
+            lastModified: new Date().toISOString(),
+            isNew: false,
+          });
+          updated.push(template.path);
+        }
+        continue;
+      }
+
+      onAddFile({
+        ...template,
+        id: `file-${safeUUID()}`,
+        lastModified: new Date().toISOString(),
+      });
+      created.push(template.path);
+    }
+
+    pushTerminalLog({
+      level: 'info',
+      text:
+        `[scaffold-template] deterministic Next.js scaffold applied ` +
+        `created=${created.length} updated=${updated.length} ` +
+        `paths=${[...created, ...updated].join(', ') || 'already-current'}\n`,
+      timestamp: Date.now(),
+    });
+
+    if (created.length || updated.length) {
+      onAddMessage({
+        id: prefixedId('msg'),
+        role: 'system',
+        content:
+          `**Deterministic Next.js scaffold applied** — Matrix Coder created/updated protected scaffold files from known-good templates: ` +
+          `${[...created, ...updated].map((path) => `\`${path}\``).join(', ')}.`,
+        timestamp: new Date().toISOString(),
+      });
+    }
+  }, [fileTree, onAddFile, onAddMessage, onUpdateFile]);
+
   const handleSend = useCallback(async () => {
     const text = input.trim();
 
@@ -1993,6 +2096,7 @@ export default function ChatComposer({
 
     const shouldBatch = shouldBatchGenerationRequest(text, agent, fileTree);
     if (shouldBatch) {
+      upsertDeterministicNextScaffold();
       batchGenerationRef.current = {
         active: true,
         baseRequest: text,
@@ -2006,7 +2110,7 @@ export default function ChatComposer({
         id: prefixedId('msg'),
         role: 'system',
         content:
-          `Large app request detected. Matrix Coder will generate this in ${LARGE_APP_BATCHES.length} automatic batches and keep validation paused until all batches are complete.`,
+          `Large app request detected. Matrix Coder will generate this in ${LARGE_APP_BATCHES.length} automatic batches and keep validation paused until all batches are complete. Core Next.js scaffold/config files are handled by deterministic templates, not the Coding Agent.`,
         timestamp: new Date().toISOString(),
       });
       continueBatchGeneration();
@@ -2035,6 +2139,7 @@ export default function ChatComposer({
     onSetActivityStatus,
     continueBatchGeneration,
     launchAgentRequest,
+    upsertDeterministicNextScaffold,
   ]);
 
   const handleKeyDown = (
