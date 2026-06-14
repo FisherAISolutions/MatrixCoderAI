@@ -41,6 +41,7 @@ import { runStyleAudit } from './styleAudit';
 import { runImportIntegrityAudit } from './importIntegrity';
 import { runGeneratedQualityAudit } from './generatedQuality';
 import { classifyInstallFailure, type InstallFailureInfo } from './installFailure';
+import { findCssSanityIssues } from '@/lib/repo/cssSanitizer';
 import { setSandboxStatus } from '@/lib/webcontainer/sandboxStatus';
 import {
   beginPreviewStage,
@@ -59,6 +60,7 @@ export type ValidationStep =
   | 'generated-quality'
   | 'install'
   | 'type-check'
+  | 'css-sanity'
   | 'build'
   | 'style-audit'
   | 'runtime-smoke';
@@ -430,6 +432,81 @@ function runGeneratedQualityStep(
     durationMs: performance.now() - start,
     errors: audit.errors,
     log: truncateLog(audit.log),
+  };
+}
+
+function runCssSanityStep(files: FileNode[]): StepResult {
+  const start = performance.now();
+  const issues = findCssSanityIssues(files);
+  if (issues.length === 0) {
+    return {
+      step: 'css-sanity',
+      status: 'ok',
+      durationMs: performance.now() - start,
+      errors: [],
+      log: '[css-sanity] CSS files are free of markdown fences, SEARCH/REPLACE markers, and leaked path comments.\n',
+    };
+  }
+
+  const errors: ParsedError[] = issues.map((issue) => ({
+    source: 'styling',
+    file: issue.path,
+    line: issue.line,
+    message: `${issue.reason} Replace the file with valid CSS only.`,
+    raw: `${issue.path}:${issue.line}\n${issue.snippet}`,
+  }));
+  return {
+    step: 'css-sanity',
+    status: 'failed',
+    durationMs: performance.now() - start,
+    errors,
+    log:
+      '[css-sanity] Invalid CSS content detected before build:\n' +
+      issues
+        .map(
+          (issue) =>
+            `${issue.path}:${issue.line} ${issue.reason}\n${issue.snippet}`
+        )
+        .join('\n\n') +
+      '\n',
+  };
+}
+
+function appendCssUnknownWordContext(files: FileNode[], result: StepResult): StepResult {
+  if (result.status !== 'failed' || !/Unknown word/i.test(result.log)) return result;
+  const match = result.log.match(/Syntax error:\s+([^\s]+\.css)\s+Unknown word/i);
+  if (!match) return result;
+  const cssPath = match[1].replace(/^\.\//, '');
+  const flat = flattenTree(files).filter(
+    (file) => file.type === 'file' && typeof file.content === 'string'
+  );
+  const file =
+    flat.find((item) => item.path === cssPath) ??
+    flat.find((item) => item.path.endsWith('/' + cssPath));
+  if (!file || typeof file.content !== 'string') return result;
+
+  const lines = file.content.split(/\r?\n/);
+  const sanityIssue = findCssSanityIssues([file])[0];
+  const center = Math.max(0, (sanityIssue?.line ?? lines.length) - 1);
+  const start = Math.max(0, center - 5);
+  const end = Math.min(lines.length, center + 6);
+  const snippet = lines
+    .slice(start, end)
+    .map((line, index) => `${String(start + index + 1).padStart(4, ' ')} | ${line}`)
+    .join('\n');
+  const context = `\n[css-error-context] ${file.path} around suspected Unknown word:\n${snippet}\n`;
+  const error: ParsedError = {
+    source: 'styling',
+    file: file.path,
+    line: sanityIssue?.line,
+    message:
+      'Next build reported CSS "Unknown word". The raw snippet is included; replace the file with valid CSS only if needed.',
+    raw: context.trim(),
+  };
+  return {
+    ...result,
+    errors: [...result.errors, error],
+    log: `${result.log}${context}`,
   };
 }
 
@@ -920,7 +997,22 @@ export async function runValidation(
       return finalize({ success: false, skipped: false });
     }
 
-    // 6. Build (optional)
+    // 6. CSS sanity. Catch leaked markdown / SEARCH/REPLACE markers before
+    // spending time in Next build; the log includes nearby source lines.
+    onStatus?.('Checking CSS syntax inputs...');
+    const cssSanityStep = runCssSanityStep(files);
+    steps.push(cssSanityStep);
+    logs.push(cssSanityStep.log);
+    if (cssSanityStep.status === 'failed') {
+      teeLog({
+        level: 'error',
+        text: cssSanityStep.log,
+        timestamp: Date.now(),
+      });
+      return finalize({ success: false, skipped: false });
+    }
+
+    // 7. Build (optional)
     if (typeCheckOnly) {
       // Style audit still runs in fast mode — it is static and free,
       // and "compiles but renders unstyled" is a quality failure.
@@ -937,13 +1029,13 @@ export async function runValidation(
     }
     onStatus?.('Running build…');
     beginStepDiagnostic('build', 'Running production build.');
-    const buildResult = await runStep(
+    const buildResult = appendCssUnknownWordContext(files, await runStep(
       'build',
       'npx',
       ['--yes', 'next', 'build'],
       teeLog,
       BUILD_TIMEOUT_MS
-    );
+    ));
     finishStepDiagnostic('build', buildResult);
     steps.push(buildResult);
     logs.push(buildResult.log);

@@ -180,3 +180,22 @@ describe('REGRESSION — failed edits must NOT pretend success', () => {
     expect(result.finalContent).toBe(`keep me\nchanged!`);
   });
 });
+
+describe('REGRESSION — CSS patches must not leak SEARCH/REPLACE markers', () => {
+  it('strips accidental patch separators from app/globals.css replacement content', () => {
+    const original = `@tailwind base;\n@tailwind components;\n@tailwind utilities;\n`;
+    const result = applyEditSequence(original, [
+      {
+        path: 'app/globals.css',
+        search: original,
+        replace: `@tailwind base;\n@tailwind components;\n@tailwind utilities;\n=======\n`,
+      },
+    ]);
+
+    expect(result.applied).toBe(1);
+    expect(result.finalContent).toBe(
+      `@tailwind base;\n@tailwind components;\n@tailwind utilities;\n`
+    );
+    expect(result.finalContent).not.toContain('=======');
+  });
+});

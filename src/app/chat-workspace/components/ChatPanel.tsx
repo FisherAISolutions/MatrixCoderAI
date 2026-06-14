@@ -24,6 +24,7 @@ interface Props {
   onSetActivityStatus: (status: string | null) => void;
   onAddFile: (file: FileNode) => void;
   onUpdateFile: (file: FileNode) => void;
+  onDeleteFile: (fileId: string) => void;
   onSelectFile: (file: FileNode) => void;
   onSaveFinalAssistantMessage: (msg: ChatMessage) => void;
 }
@@ -46,6 +47,7 @@ export default function ChatPanel({
   onSetActivityStatus,
   onAddFile,
   onUpdateFile,
+  onDeleteFile,
   onSelectFile,
   onSaveFinalAssistantMessage,
 }: Props) {
@@ -92,6 +94,7 @@ export default function ChatPanel({
         onSetActivityStatus={onSetActivityStatus}
         onAddFile={onAddFile}
         onUpdateFile={onUpdateFile}
+        onDeleteFile={onDeleteFile}
         onSaveFinalAssistantMessage={onSaveFinalAssistantMessage}
       />
     </div>

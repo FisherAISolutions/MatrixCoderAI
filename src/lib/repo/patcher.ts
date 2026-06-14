@@ -25,6 +25,7 @@
  */
 
 import type { ExtractedEdit } from './extractors';
+import { sanitizeCssContent } from './cssSanitizer';
 
 export interface PatchResult {
   success: boolean;
@@ -102,13 +103,14 @@ function reindentReplacement(replace: string, baseIndent: string): string {
 }
 
 export function applyEdit(original: string, edit: ExtractedEdit): PatchResult {
+  const replace = sanitizeCssContent(edit.path, edit.replace);
   if (!edit.search) {
     return { success: false, reason: 'SEARCH block was empty' };
   }
   // Trivial early-out: SEARCH equals REPLACE → no-op success.
   // Flag this clearly so callers can distinguish "AI re-emitted the
   // same code" from "AI made an actual change".
-  if (edit.search === edit.replace) {
+  if (edit.search === replace) {
     return { success: true, newContent: original, strategy: 'noop' };
   }
 
@@ -116,7 +118,7 @@ export function applyEdit(original: string, edit: ExtractedEdit): PatchResult {
   if (original.includes(edit.search)) {
     return {
       success: true,
-      newContent: literalReplaceFirst(original, edit.search, edit.replace),
+      newContent: literalReplaceFirst(original, edit.search, replace),
       strategy: 'exact',
     };
   }
@@ -125,7 +127,7 @@ export function applyEdit(original: string, edit: ExtractedEdit): PatchResult {
   const eolOriginal = normalizeEol(original);
   const eolSearch = normalizeEol(edit.search);
   if (eolOriginal.includes(eolSearch)) {
-    const eolReplace = normalizeEol(edit.replace);
+    const eolReplace = normalizeEol(replace);
     return {
       success: true,
       newContent: literalReplaceFirst(eolOriginal, eolSearch, eolReplace),
@@ -137,7 +139,7 @@ export function applyEdit(original: string, edit: ExtractedEdit): PatchResult {
   const tsOriginal = stripTrailingWs(eolOriginal);
   const tsSearch = stripTrailingWs(eolSearch);
   if (tsSearch && tsOriginal.includes(tsSearch)) {
-    const tsReplace = stripTrailingWs(normalizeEol(edit.replace));
+    const tsReplace = stripTrailingWs(normalizeEol(replace));
     return {
       success: true,
       newContent: literalReplaceFirst(tsOriginal, tsSearch, tsReplace),
@@ -149,7 +151,7 @@ export function applyEdit(original: string, edit: ExtractedEdit): PatchResult {
   const lt = indexOfTrimmedLines(eolOriginal, eolSearch);
   if (lt) {
     const hLines = eolOriginal.split('\n');
-    const newReplace = reindentReplacement(normalizeEol(edit.replace), lt.baseIndent);
+    const newReplace = reindentReplacement(normalizeEol(replace), lt.baseIndent);
     const before = hLines.slice(0, lt.startLine).join('\n');
     const after = hLines.slice(lt.endLine + 1).join('\n');
     const out = [before, newReplace, after].filter((s, i) => i !== 1 || s.length > 0).join('\n');

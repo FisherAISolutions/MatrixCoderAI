@@ -34,6 +34,7 @@ import {
 } from '@/lib/repo/extractors';
 import { applyEditSequence } from '@/lib/repo/patcher';
 import { flattenTree } from '@/lib/repo/heuristics';
+import { planAppRouterRootNormalization } from '@/lib/repo/appRouterRoot';
 import type { FileNode } from '@/app/chat-workspace/components/types';
 import { runValidation, type ValidationResult, type ParsedError } from './engine';
 import { extractFailureExcerpt } from './errorParser';
@@ -75,6 +76,8 @@ export interface AutoFixLoopOptions {
   onUpdateFile: (file: FileNode) => void;
   /** Add a brand new file (used when the AI fixes "missing local file"). */
   onAddFile: (file: FileNode) => void;
+  /** Delete obsolete files, used for App Router root normalization. */
+  onDeleteFile?: (fileId: string) => void;
   /** Per-call disable toggle (defaults to AUTO_FIX_ENABLED). */
   enabled?: boolean;
   /** Override max retries (for tests). */
@@ -317,6 +320,7 @@ export async function runAutoFixLoop(
     onChatMessage,
     onUpdateFile,
     onAddFile,
+    onDeleteFile,
     enabled = AUTO_FIX_ENABLED,
     maxAttempts = AUTO_FIX_MAX_ATTEMPTS,
     typeCheckOnly = false,
@@ -348,6 +352,35 @@ export async function runAutoFixLoop(
     fileMap.set(f.path, f);
     onAddFile(f);
   };
+  const deleteFile = (f: FileNode) => {
+    fileMap.delete(f.path);
+    onDeleteFile?.(f.id);
+  };
+
+  const rootPlan = planAppRouterRootNormalization(rebuildFiles(fileMap));
+  if (rootPlan.mixed) {
+    for (const item of rootPlan.upserts) {
+      const existing = fileMap.get(item.file.path);
+      if (existing) {
+        updateFile({
+          ...existing,
+          content: item.file.content,
+          size: item.file.content?.length,
+          lastModified: item.file.lastModified,
+        });
+      } else {
+        addFile(item.file);
+      }
+    }
+    for (const rootFile of rootPlan.rootAppFiles) {
+      deleteFile(rootFile);
+    }
+    onChatMessage(
+      sysMsg(
+        `**App Router root normalized** — moved duplicate \`app/\` files into \`src/app/\` and removed the old root before validation. Next.js apps must use exactly one App Router root.`
+      )
+    );
+  }
 
   try {
     onChatMessage(

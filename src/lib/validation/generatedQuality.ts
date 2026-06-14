@@ -1,5 +1,6 @@
 import type { FileNode } from '@/app/chat-workspace/components/types';
 import { extractImports, flattenTree } from '@/lib/repo/heuristics';
+import { getAppRouterRootFiles } from '@/lib/repo/appRouterRoot';
 import type { ParsedError } from './errorParser';
 
 const CODE_EXTENSIONS = new Set(['ts', 'tsx', 'js', 'jsx', 'mjs', 'cjs']);
@@ -217,6 +218,14 @@ export function runGeneratedQualityAudit(
     );
   } else {
     pass('package.json exists');
+  }
+
+  const { rootAppFiles, srcAppFiles } = getAppRouterRootFiles(files);
+  if (rootAppFiles.length > 0 && srcAppFiles.length > 0) {
+    fail(
+      'src/app',
+      `Mixed App Router roots detected: ${rootAppFiles.length} file(s) under app/ and ${srcAppFiles.length} file(s) under src/app/. Generated Next.js apps must use exactly one App Router root. Normalize to src/app by moving app/layout.tsx, app/page.tsx, and app/globals.css into src/app and deleting the old app/ files before install/build.`
+    );
   }
 
   const tsconfig = byPath.get('tsconfig.json');

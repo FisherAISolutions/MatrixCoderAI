@@ -26,6 +26,8 @@
  *  duplicate filenames within a single CREATE pass are de-duplicated.
  */
 
+import { sanitizeCssContent } from './cssSanitizer';
+
 export interface ExtractedCreate {
   path: string;
   name: string;
@@ -370,7 +372,7 @@ function extractCreates(content: string): ExtractedCreate[] {
     out.push({
       path: cleanPath,
       name,
-      content: code.trim(),
+      content: sanitizeCssContent(cleanPath, code.trim()),
       language: language || 'typescript',
     });
     seen.add(cleanPath);
@@ -420,7 +422,7 @@ function extractCreates(content: string): ExtractedCreate[] {
     out.push({
       path: cleanPath,
       name,
-      content: code.trim(),
+      content: sanitizeCssContent(cleanPath, code.trim()),
       language: language || 'typescript',
     });
     seen.add(cleanPath);

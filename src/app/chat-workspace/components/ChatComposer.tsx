@@ -147,6 +147,7 @@ interface Props {
   onSetActivityStatus: (status: string | null) => void;
   onAddFile: (file: FileNode) => void;
   onUpdateFile: (file: FileNode) => void;
+  onDeleteFile: (fileId: string) => void;
   onSaveFinalAssistantMessage: (msg: ChatMessage) => void;
 }
 
@@ -321,9 +322,9 @@ For **Next.js 15 (App Router) apps**, the minimum complete scaffold is:
   - \`tsconfig.json\`            — with \`"@/*": ["./src/*"]\` path alias if using \`src/\`
   - \`tailwind.config.ts\` or \`tailwind.config.js\`
   - \`postcss.config.js\`
-  - \`app/layout.tsx\` (or \`src/app/layout.tsx\`)
-  - \`app/page.tsx\`   (or \`src/app/page.tsx\`)
-  - \`app/globals.css\` (with \`@tailwind base/components/utilities\`)
+  - \`src/app/layout.tsx\`
+  - \`src/app/page.tsx\`
+  - \`src/app/globals.css\` (with \`@tailwind base/components/utilities\`)
   - \`components/*\`, \`lib/*\`, \`types/*\` — only when the feature requires them
   - \`README.md\` — a short usage block when it would actually help
 
@@ -359,7 +360,7 @@ failure and triggers auto-fix):
      Globs that miss the real source root purge EVERY utility class.
   4. \`globals.css\` MUST start with:
      \`@tailwind base;\` \`@tailwind components;\` \`@tailwind utilities;\`
-  5. The ROOT LAYOUT (\`app/layout.tsx\` / \`src/app/layout.tsx\`) MUST
+  5. The ROOT LAYOUT (\`src/app/layout.tsx\`) MUST
      import it: \`import './globals.css';\` — forgetting this single
      line ships a fully unstyled app even though everything compiles.
 
@@ -400,7 +401,7 @@ Rules:
   - BAD : \`/package.json\`, \`./src/app/page.tsx\`, \`C:/foo/bar.ts\`
 - Root config files (\`package.json\`, \`tsconfig.json\`, \`tailwind.config.ts\`,
   \`postcss.config.js\`, \`next.config.mjs\`, \`vite.config.ts\`,
-  \`app/globals.css\`, \`README.md\`) are FIRST-CLASS files — emit them with
+  \`src/app/globals.css\`, \`README.md\`) are FIRST-CLASS files — emit them with
   the same \`\`\`<lang>\\n// path: <path>\\n…\\n\`\`\` pattern as any other file.
 - Pin a recent stable major for each dep when writing package.json
   (e.g. \`"next": "^15.0.0"\`, \`"react": "^19.0.0"\`, \`"tailwindcss": "^3.4.0"\`).
@@ -482,18 +483,22 @@ workspace ships with):
      The fix is always to add \`'use client'\` to the component that
      receives or defines the handler.
 
-4. Use ONE App Router root, never both.
+4. Use ONE App Router root, never both. For new Next.js apps, ALWAYS use
+   \`src/app/\`.
+   - Create \`src/app/layout.tsx\`, \`src/app/page.tsx\`, and
+     \`src/app/globals.css\` in Batch 1.
    - If the project already has \`src/app/\` → put all new pages,
-     layouts, route handlers, components under \`src/app/\` and
-     \`src/components/\` (or \`src/lib/\`).
-   - If the project already has \`app/\` (no \`src/\`) → put everything
-     under \`app/\`, \`components/\`, \`lib/\`.
-   - NEVER create \`app/\` files in a project that already uses
-     \`src/app/\` (or vice-versa). The Next.js compiler will pick one,
-     silently ignore the other, and your "fixed" page will not load.
+     layouts, route handlers, and route components under \`src/app/\`.
+   - If both \`app/\` and \`src/app/\` appear, normalize to \`src/app/\`
+     before validation: move root \`app/*\` files to \`src/app/*\`, ensure
+     \`src/app/layout.tsx\` imports \`./globals.css\`, then delete root
+     \`app/\` files.
+   - NEVER split routes between \`app/\` and \`src/app/\`. Preview/build
+     can fail with Next.js prerender invariants such as
+     \`Expected workUnitAsyncStorage to have a store\`.
 
-5. API routes live under \`app/api/<route>/route.ts\` — NEVER
-   \`pages/api/\`.
+5. API routes live under \`src/app/api/<route>/route.ts\` — NEVER
+   root \`app/api/\` or \`pages/api/\` in generated projects.
    - CORRECT  : \`src/app/api/todos/route.ts\` exporting \`GET\`,
                 \`POST\`, \`PUT\`, \`DELETE\` named handlers.
    - WRONG    : \`src/pages/api/todos.ts\` with a default export.
@@ -568,7 +573,7 @@ export default function Page() { return <main>…</main>; }
 \`\`\`
 
 \`\`\`css
-/* path: app/globals.css  →  use a /* ... */ comment for CSS */
+/* path: src/app/globals.css  →  use a /* ... */ comment for CSS */
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
@@ -876,7 +881,7 @@ const LARGE_APP_BATCHES: GenerationBatch[] = [
     id: 1,
     title: 'package/config/layout/globals',
     scope:
-      'Create only package/config/layout/global stylesheet/root homepage shell files. Include package.json, next config, tsconfig, Tailwind/PostCSS config, root layout, globals.css, and a simple root page if needed.',
+      'Create only package/config/layout/global stylesheet/root homepage shell files. Use the src/app App Router root only: include package.json, next config, tsconfig, Tailwind/PostCSS config, src/app/layout.tsx, src/app/globals.css, and src/app/page.tsx if needed. Never create root app/ files.',
   },
   {
     id: 2,
@@ -967,6 +972,7 @@ export default function ChatComposer({
   onSetActivityStatus,
   onAddFile,
   onUpdateFile,
+  onDeleteFile,
   onSaveFinalAssistantMessage,
 }: Props) {
   const [input, setInput] = useState('');
@@ -998,6 +1004,14 @@ export default function ChatComposer({
         batchLabel?: string;
       }
     ) => {
+      if (isLoading || streamMsgIdRef.current) {
+        pushTerminalLog({
+          level: 'warn',
+          text: `[generation-batch] skipped overlapping send while another AI request is active\n`,
+          timestamp: Date.now(),
+        });
+        return;
+      }
       const streamMsgId = generateId('msg');
 
       agentRef.current = agent;
@@ -1051,6 +1065,7 @@ export default function ChatComposer({
       onSetActiveAgent,
       onSetActivityStatus,
       onSetIsStreaming,
+      isLoading,
       sendMessage,
     ]
   );
@@ -1753,6 +1768,7 @@ export default function ChatComposer({
               }),
             onUpdateFile,
             onAddFile,
+            onDeleteFile,
             // 2026-01 runtime-smoke pass — turn ON the GET / smoke
             // test after a successful build. This catches the
             // "builds but crashes at runtime" class of bugs (legacy
@@ -1781,6 +1797,7 @@ export default function ChatComposer({
     onSetActivityStatus,
     onAddFile,
     onUpdateFile,
+    onDeleteFile,
     onAddMessage,
     continueBatchGeneration,
   ]);

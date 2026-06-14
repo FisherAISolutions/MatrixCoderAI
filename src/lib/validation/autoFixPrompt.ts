@@ -110,10 +110,18 @@ STRICT RULES (violations make the auto-fix loop misfire):
    range(s) (e.g. aligning \`@types/react\`'s major with \`react\`).
    Never add unrelated packages or rewrite the whole file.
 
-7. Do NOT emit explanatory prose between fences. A short final
+7. Before diagnosing a Next.js prerender failure as a generic
+   Client/Server Component boundary issue, check whether both \`app/\`
+   and \`src/app/\` exist. Generated Next.js apps must use exactly ONE App
+   Router root. Prefer \`src/app\`. If both roots exist, normalize first:
+   move root \`app/layout.tsx\`, \`app/page.tsx\`, and \`app/globals.css\`
+   into \`src/app/\`, ensure \`src/app/layout.tsx\` imports
+   \`./globals.css\`, and delete the old root \`app/\` files.
+
+8. Do NOT emit explanatory prose between fences. A short final
    bulleted summary (max 5 bullets) is allowed.
 
-8. Never invent symbols. If you cannot determine the correct fix from
+9. Never invent symbols. If you cannot determine the correct fix from
    the provided file contents, emit a SHORT \`SKIP:\` comment with the
    reason instead of guessing.
 
@@ -408,6 +416,25 @@ Rules for this repair:
   - If \`globals.css\` is missing Tailwind, patch or create it with all
     three directives: \`@tailwind base;\`, \`@tailwind components;\`,
     and \`@tailwind utilities;\`.
+  - If \`globals.css\` fails with \`Unknown word\`, leaked markdown fences,
+    or leaked SEARCH/REPLACE markers, replace the entire file body with
+    valid CSS only. The replacement body must NOT contain \`\`\`css\`,
+    \`\`\`\`, \`// path:\`, \`<<<<<<< SEARCH\`, \`=======\`, or
+    \`>>>>>>> REPLACE\` except for the required outer edit markers.
+    Safe fallback content:
+
+    @tailwind base;
+    @tailwind components;
+    @tailwind utilities;
+
+    html,
+    body {
+      min-height: 100%;
+    }
+
+    body {
+      margin: 0;
+    }
   - Do NOT create tiny placeholders. Required generated components must
     contain state, handlers, rendering, and persistence needed by the
     request.
@@ -426,6 +453,8 @@ wiring and/or the markup with minimal patches:
     this single line ZERO CSS loads.
   - \`globals.css\` (Tailwind v3) MUST start with the three directives:
     \`@tailwind base;\` \`@tailwind components;\` \`@tailwind utilities;\`
+    and must contain CSS only. Never put markdown fences, path comments,
+    prose, or SEARCH/REPLACE separators inside the CSS replacement body.
   - \`postcss.config.js\` MUST exist with
     \`plugins: { tailwindcss: {}, autoprefixer: {} }\`.
   - \`tailwind.config.*\` \`content\` globs MUST cover every source root,

@@ -1150,6 +1150,7 @@ export default function ChatWorkspacePage() {
   onSetActivityStatus={setActivityStatus}
   onAddFile={addFile}
   onUpdateFile={updateFile}
+  onDeleteFile={deleteFile}
   onSelectFile={setActiveFile}
   onSaveFinalAssistantMessage={persistAssistantMessage}
 />
