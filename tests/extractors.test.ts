@@ -310,4 +310,25 @@ Files written:
     expect(audit.blocking).toBe(true);
     expect(audit.issues.some((issue) => issue.path === 'src/app/history/page.tsx')).toBe(true);
   });
+
+  it('keeps complete files extracted before a later unclosed fence', () => {
+    const input = `
+\`\`\`json
+// path: package.json
+{"name":"demo"}
+\`\`\`
+
+\`\`\`tsx
+// path: src/app/page.tsx
+export default function Page() {
+  return <main>
+`;
+    const extracted = extractFromAssistantResponse(input);
+    const audit = analyzeResponseCompleteness(input, extracted);
+
+    expect(extracted.creates.map((file) => file.path)).toEqual(['package.json']);
+    expect(audit.blocking).toBe(true);
+    expect(audit.lastCompletePath).toBe('package.json');
+    expect(audit.issues.some((issue) => issue.path === 'src/app/page.tsx')).toBe(true);
+  });
 });

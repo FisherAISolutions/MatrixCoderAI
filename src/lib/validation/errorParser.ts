@@ -78,6 +78,8 @@ const CANNOT_FIND_MODULE_REGEX = /Cannot find module\s+'([^']+)'/g;
 const PRERENDER_PAGE_REGEX = /Error occurred prerendering page "([^"]+)"/g;
 const EXPORT_PAGE_ERROR_REGEX = /Export encountered (?:an error|errors) on ([^\s,:]+)/g;
 const WORKSTORE_INVARIANT_REGEX = /Invariant: Missing workStore in (\w+)/g;
+const WORK_UNIT_ASYNC_STORAGE_REGEX = /Invariant:\s*Expected workUnitAsyncStorage to have a store/i;
+const CLIENT_REFERENCE_MANIFEST_REGEX = /Invariant:\s*Expected clientReferenceManifest to be defined/i;
 
 /**
  * Parse the combined output of one validation step.
@@ -193,6 +195,24 @@ export function parseValidationOutput(
       raw: m[0],
     });
   }
+  if (WORK_UNIT_ASYNC_STORAGE_REGEX.test(clean)) {
+    push({
+      source: 'nextjs',
+      message:
+        'Next.js invariant "Expected workUnitAsyncStorage to have a store" — usually triggered when a route is prerendered with an invalid App Router boundary or Next 15 page props. Check duplicate route aliases first, then ensure route pages stay Server Components and await params/searchParams before reading them.',
+      raw:
+        clean.match(/Invariant:\s*Expected workUnitAsyncStorage to have a store[^\n]*/i)?.[0] ??
+        'Expected workUnitAsyncStorage to have a store',
+    });
+  }
+  if (CLIENT_REFERENCE_MANIFEST_REGEX.test(clean)) {
+    push({
+      source: 'nextjs',
+      message:
+        'Next.js invariant "Expected clientReferenceManifest to be defined" — often caused by duplicate effective App Router pages, especially a root page plus a route-group page such as src/app/page.tsx and src/app/(dashboard)/page.tsx both resolving to "/". Check duplicate routes before patching client/server boundaries.',
+      raw: clean.match(/Invariant:\s*Expected clientReferenceManifest to be defined[^\n]*/i)?.[0] ?? 'Expected clientReferenceManifest to be defined',
+    });
+  }
 
   // ---- Next.js build errors that don't match the TS regex above ----
   // We split on blank lines and look for blocks that start with a file
@@ -255,6 +275,8 @@ export function looksLikeFailure(output: string): boolean {
     clean.includes('error occurred prerendering') ||
     clean.includes('export encountered an error') ||
     clean.includes('missing workstore') ||
+    clean.includes('expected workunitasyncstorage to have a store') ||
+    clean.includes('expected clientreferencemanifest to be defined') ||
     /\b\d+\s+errors?\b/.test(clean)
   );
 }

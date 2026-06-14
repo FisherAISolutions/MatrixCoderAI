@@ -46,6 +46,16 @@ function routeToPageCandidates(route: string): string[] {
   return out;
 }
 
+function generatedNextTypeToSourceCandidates(path: string): string[] {
+  const normalized = path.replace(/\\/g, '/').replace(/^\.\//, '');
+  if (normalized === '.next/types/app/page.ts') {
+    return ['src/app/page.tsx', 'app/page.tsx'];
+  }
+  const match = normalized.match(/^\.next\/types\/app\/(.+)\/page\.ts$/);
+  if (!match) return [];
+  return [`src/app/${match[1]}/page.tsx`, `app/${match[1]}/page.tsx`];
+}
+
 export const AUTO_FIX_SYSTEM_PROMPT = `You are the Auto-Fix Coding Agent for CodePilot.
 
 A build/type-check just FAILED inside a sandboxed WebContainer runtime.
@@ -118,10 +128,24 @@ STRICT RULES (violations make the auto-fix loop misfire):
    into \`src/app/\`, ensure \`src/app/layout.tsx\` imports
    \`./globals.css\`, and delete the old root \`app/\` files.
 
-8. Do NOT emit explanatory prose between fences. A short final
+8. Preserve requested route names exactly. If the request or validation
+   names \`add-task\`, do not create \`add\`; if both aliases exist, merge
+   links/imports into the requested route and remove the duplicate route
+   file. The same applies to \`edit-task\` vs \`edit\` and
+   \`task-history\` vs \`history\`.
+
+9. For Next.js 15 App Router page props, \`params\` and
+   \`searchParams\` are Promise-like in generated type checks. If a
+   type-check error references \`.next/types/app/<route>/page.ts\`, patch
+   the real source page \`src/app/<route>/page.tsx\`. Use
+   \`params?: Promise<...>\` / \`searchParams?: Promise<...>\`, make the
+   page \`async\`, and \`await\` the prop before reading it. Do NOT patch
+   files under \`.next/\`.
+
+10. Do NOT emit explanatory prose between fences. A short final
    bulleted summary (max 5 bullets) is allowed.
 
-9. Never invent symbols. If you cannot determine the correct fix from
+11. Never invent symbols. If you cannot determine the correct fix from
    the provided file contents, emit a SHORT \`SKIP:\` comment with the
    reason instead of guessing.
 
@@ -186,6 +210,9 @@ function selectRelevantFiles(
     if (byPath.has(stripped)) {
       pick.add(stripped);
       continue;
+    }
+    for (const candidate of generatedNextTypeToSourceCandidates(stripped)) {
+      if (byPath.has(candidate)) pick.add(candidate);
     }
     const suffixMatch = flat.find((f) => f.path.endsWith('/' + stripped));
     if (suffixMatch) pick.add(suffixMatch.path);
@@ -400,6 +427,11 @@ Do not delete the route or remove meaningful UI just to make the import
 disappear. If a route imports a missing component such as
 \`@/components/HistoryPage\`, prefer creating that component unless an
 equivalent component already exists under a different path.
+
+If missing files were caused by a truncated or rejected generation batch,
+regenerate the intended file from the original request and nearby
+generated files. Do NOT satisfy import integrity with a tiny placeholder
+component or empty stylesheet.
 
 ` : ''}${failedStep === 'generated-quality' ? `## Generated quality audit failed
 

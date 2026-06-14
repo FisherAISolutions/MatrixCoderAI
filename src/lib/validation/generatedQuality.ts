@@ -1,6 +1,7 @@
 import type { FileNode } from '@/app/chat-workspace/components/types';
 import { extractImports, flattenTree } from '@/lib/repo/heuristics';
 import { getAppRouterRootFiles } from '@/lib/repo/appRouterRoot';
+import { findDuplicateEffectiveAppRoutes } from '@/lib/repo/appRoutes';
 import type { ParsedError } from './errorParser';
 
 const CODE_EXTENSIONS = new Set(['ts', 'tsx', 'js', 'jsx', 'mjs', 'cjs']);
@@ -142,13 +143,15 @@ function requirementTerms(requirements: string): string[] {
 function requiredRoutes(requirements: string): Array<{ label: string; candidates: string[] }> {
   const lower = requirements.toLowerCase();
   const routes: Array<{ label: string; candidates: string[] }> = [];
+  const explicitSlugs = requestedRouteSlugs(requirements);
+  const hasExplicitAddRoute = explicitSlugs.some((slug) => slug.startsWith('add-'));
   if (/\bdashboard\b/.test(lower)) {
     routes.push({
       label: 'dashboard page',
       candidates: ['src/app/dashboard/page.tsx', 'app/dashboard/page.tsx'],
     });
   }
-  if (/\badd\b|\bentry\b|\bentries\b/.test(lower)) {
+  if (!hasExplicitAddRoute && (/\badd\b|\bentry\b|\bentries\b/.test(lower))) {
     routes.push({
       label: 'add entry page',
       candidates: ['src/app/add/page.tsx', 'app/add/page.tsx', 'src/app/add-entry/page.tsx', 'app/add-entry/page.tsx'],
@@ -175,10 +178,48 @@ function requiredRoutes(requirements: string): Array<{ label: string; candidates
         candidates: ['src/app/history/page.tsx', 'app/history/page.tsx'],
       },
     ]) {
+      if (route.label === 'add entry page' && hasExplicitAddRoute) continue;
       if (!routes.some((existing) => existing.label === route.label)) routes.push(route);
     }
   }
   return routes;
+}
+
+function requestedRouteSlugs(requirements: string): string[] {
+  const lower = requirements.toLowerCase();
+  const out: string[] = [];
+  const quotedRoute = /(?:route|page|path)\s+["'`]?\/([a-z0-9-]+)["'`]?/g;
+  let match: RegExpExecArray | null;
+  while ((match = quotedRoute.exec(lower)) !== null) {
+    if (match[1].includes('-') && !out.includes(match[1])) out.push(match[1]);
+  }
+  const hyphenRoute = /\b([a-z][a-z0-9]+-[a-z0-9-]+)\b/g;
+  while ((match = hyphenRoute.exec(lower)) !== null) {
+    if (!out.includes(match[1])) out.push(match[1]);
+  }
+  return out;
+}
+
+function routePagePath(slug: string): string {
+  return `src/app/${slug}/page.tsx`;
+}
+
+const DUPLICATE_ROUTE_PAIRS: Array<[string, string]> = [
+  ['add', 'add-note'],
+  ['add', 'add-entry'],
+  ['add', 'add-task'],
+  ['edit', 'edit-note'],
+  ['edit', 'edit-task'],
+  ['history', 'task-history'],
+];
+
+function appRouteSlugs(paths: Set<string>): string[] {
+  const slugs: string[] = [];
+  for (const path of paths) {
+    const match = path.match(/^src\/app\/([^/()]+)\/page\.(?:tsx|jsx|ts|js)$/);
+    if (match) slugs.push(match[1]);
+  }
+  return slugs;
 }
 
 function hasTerm(content: string, term: string): boolean {
@@ -225,6 +266,54 @@ export function runGeneratedQualityAudit(
     fail(
       'src/app',
       `Mixed App Router roots detected: ${rootAppFiles.length} file(s) under app/ and ${srcAppFiles.length} file(s) under src/app/. Generated Next.js apps must use exactly one App Router root. Normalize to src/app by moving app/layout.tsx, app/page.tsx, and app/globals.css into src/app and deleting the old app/ files before install/build.`
+    );
+  }
+
+  for (const slug of requestedRouteSlugs(requirements)) {
+    const exactPath = routePagePath(slug);
+    if (!byPath.has(exactPath)) {
+      fail(
+        exactPath,
+        `The request names route "${slug}", but ${exactPath} does not exist. Preserve requested route names exactly instead of creating a different alias.`
+      );
+    }
+    const firstSegment = slug.split('-')[0];
+    const shortAlias = routePagePath(firstSegment);
+    if (firstSegment !== slug && byPath.has(shortAlias)) {
+      fail(
+        shortAlias,
+        `Route consistency failure: request uses "${slug}" but duplicate alias ${shortAlias} also exists. Keep one route name and update links/imports to match.`
+      );
+    }
+  }
+
+  for (const [a, b] of DUPLICATE_ROUTE_PAIRS) {
+    const aPath = routePagePath(a);
+    const bPath = routePagePath(b);
+    if (byPath.has(aPath) && byPath.has(bPath)) {
+      fail(
+        bPath,
+        `Duplicate semantic routes detected: ${aPath} and ${bPath}. Merge them into one requested route before build.`
+      );
+    }
+  }
+
+  for (const slug of appRouteSlugs(allPaths)) {
+    if (!slug.includes('-')) continue;
+    const shortAlias = slug.split('-')[0];
+    const shortAliasPath = routePagePath(shortAlias);
+    if (byPath.has(shortAliasPath)) {
+      fail(
+        shortAliasPath,
+        `Route consistency failure: hyphenated route "${slug}" exists but duplicate short alias ${shortAliasPath} also exists. Keep one route name and update links/imports to match.`
+      );
+    }
+  }
+
+  for (const duplicate of findDuplicateEffectiveAppRoutes(files)) {
+    fail(
+      duplicate.paths[0],
+      `Duplicate App Router pages resolve to "${duplicate.route}": ${duplicate.paths.join(', ')}. Route group folders like "(dashboard)" do not change the URL, so merge these pages before build.`
     );
   }
 

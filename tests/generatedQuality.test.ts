@@ -178,4 +178,63 @@ export default function HistoryPage() {
 
     expect(result.ok).toBe(true);
   });
+
+  it('fails when an explicitly requested route slug is replaced by a different alias', () => {
+    const result = runGeneratedQualityAudit(
+      [
+        pkg,
+        tsconfig,
+        file('src/app/add/page.tsx', 'export default function Add(){ return <main />; }'),
+      ],
+      'Build a task manager with add-task page'
+    );
+
+    expect(result.ok).toBe(false);
+    expect(result.errors.some((error) => error.file === 'src/app/add-task/page.tsx')).toBe(true);
+    expect(result.errors.some((error) => error.file === 'src/app/add/page.tsx')).toBe(true);
+  });
+
+  it('does not demand generic add route when explicit add-note route exists', () => {
+    const result = runGeneratedQualityAudit(
+      [
+        pkg,
+        tsconfig,
+        file('src/app/add-note/page.tsx', 'export default function AddNote(){ return <main />; }'),
+      ],
+      'Build a notes app with dashboard, add-note page, history page, Tailwind, TypeScript, and localStorage.'
+    );
+
+    expect(result.errors.some((error) => error.file === 'src/app/add/page.tsx')).toBe(false);
+  });
+
+  it('fails duplicate semantic route aliases before build', () => {
+    const result = runGeneratedQualityAudit(
+      [
+        pkg,
+        tsconfig,
+        file('src/app/add/page.tsx', 'export default function Add(){ return <main />; }'),
+        file('src/app/add-task/page.tsx', 'export default function AddTask(){ return <main />; }'),
+      ],
+      'Build a task manager with add-task page'
+    );
+
+    expect(result.ok).toBe(false);
+    expect(result.errors.some((error) => /Duplicate semantic routes/.test(error.message))).toBe(true);
+  });
+
+  it('fails add plus add-note as duplicate route aliases before build', () => {
+    const result = runGeneratedQualityAudit(
+      [
+        pkg,
+        tsconfig,
+        file('src/app/add/page.tsx', 'export default function Add(){ return <main />; }'),
+        file('src/app/add-note/page.tsx', 'export default function AddNote(){ return <main />; }'),
+      ],
+      'Build a notes app with add-note page'
+    );
+
+    expect(result.ok).toBe(false);
+    expect(result.errors.some((error) => error.file === 'src/app/add/page.tsx')).toBe(true);
+    expect(result.errors.some((error) => /add-note|duplicate/i.test(error.message))).toBe(true);
+  });
 });

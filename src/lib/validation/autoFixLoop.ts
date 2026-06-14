@@ -38,6 +38,7 @@ import { planAppRouterRootNormalization } from '@/lib/repo/appRouterRoot';
 import type { FileNode } from '@/app/chat-workspace/components/types';
 import { runValidation, type ValidationResult, type ParsedError } from './engine';
 import { extractFailureExcerpt } from './errorParser';
+import { applyDeterministicFixes } from './deterministicFixes';
 import {
   AUTO_FIX_SYSTEM_PROMPT,
   buildAutoFixUserPrompt,
@@ -301,6 +302,47 @@ function rebuildFiles(map: Map<string, FileNode>): FileNode[] {
   return Array.from(map.values());
 }
 
+async function applyDeterministicAndRevalidate(
+  lastValidation: ValidationResult,
+  fileMap: Map<string, FileNode>,
+  updateFile: (f: FileNode) => void,
+  deleteFile: (f: FileNode) => void,
+  onChatMessage: (msg: ChatSystemMessage) => void,
+  onStatus: (label: string | null) => void,
+  options: {
+    typeCheckOnly: boolean;
+    runtimeSmoke: boolean;
+    requirements: string;
+  }
+): Promise<{ validation: ValidationResult; applied: boolean }> {
+  const report = applyDeterministicFixes(rebuildFiles(fileMap), lastValidation);
+  if (!report.mutated) return { validation: lastValidation, applied: false };
+
+  for (const update of report.updates) {
+    updateFile(update.file);
+  }
+  for (const removal of report.deletes) {
+    deleteFile(removal.file);
+  }
+  onChatMessage(
+    sysMsg(
+      `**Deterministic auto-fix applied** — ${[
+        ...report.updates.map((update) => `${update.reason} in \`${update.file.path}\``),
+        ...report.deletes.map((removal) => removal.reason),
+      ]
+        .join('; ')}. Re-running validation before using an AI repair attempt.`
+    )
+  );
+  onStatus('Re-validating deterministic fixes...');
+  const validation = await runValidation(rebuildFiles(fileMap), {
+    onStatus,
+    typeCheckOnly: options.typeCheckOnly,
+    runtimeSmoke: options.runtimeSmoke,
+    requirements: options.requirements,
+  });
+  return { validation, applied: true };
+}
+
 // ---------- Public API ----------
 
 /**
@@ -432,6 +474,34 @@ export async function runAutoFixLoop(
       return { ran: true, succeeded: true, attempts: 0, finalValidation: lastValidation };
     }
 
+    const deterministicInitial = await applyDeterministicAndRevalidate(
+      lastValidation,
+      fileMap,
+      updateFile,
+      deleteFile,
+      onChatMessage,
+      onStatus,
+      { typeCheckOnly, runtimeSmoke, requirements }
+    );
+    if (deterministicInitial.applied) {
+      lastValidation = deterministicInitial.validation;
+      if (lastValidation.skipped) {
+        onStatus(null);
+        return {
+          ran: true,
+          succeeded: false,
+          attempts: 0,
+          finalValidation: lastValidation,
+          skippedReason: lastValidation.skipReason,
+        };
+      }
+      if (lastValidation.success) {
+        onChatMessage(sysMsg('**Validation passed ✓** — deterministic fixes resolved the issue before an AI repair attempt was needed.'));
+        onStatus(null);
+        return { ran: true, succeeded: true, attempts: 0, finalValidation: lastValidation };
+      }
+    }
+
     // -------- Initial failure report --------
     const firstFailedStep = lastValidation.steps.find((s) => s.status === 'failed');
     const stepLabel =
@@ -459,6 +529,37 @@ export async function runAutoFixLoop(
     let attempt = 0;
     let consecutiveNoPatchAttempts = 0;
     while (attempt < maxAttempts && lastValidation && !lastValidation.success) {
+      const deterministic = await applyDeterministicAndRevalidate(
+        lastValidation,
+        fileMap,
+        updateFile,
+        deleteFile,
+        onChatMessage,
+        onStatus,
+        { typeCheckOnly, runtimeSmoke, requirements }
+      );
+      if (deterministic.applied) {
+        lastValidation = deterministic.validation;
+        if (lastValidation.skipped) {
+          onStatus(null);
+          return {
+            ran: true,
+            succeeded: false,
+            attempts: attempt,
+            finalValidation: lastValidation,
+            skippedReason: lastValidation.skipReason,
+          };
+        }
+        if (lastValidation.success) {
+          onChatMessage(
+            sysMsg(
+              `**Validation passed ✓** — deterministic fixes resolved the issue before auto-fix attempt ${attempt + 1}.`
+            )
+          );
+          onStatus(null);
+          return { ran: true, succeeded: true, attempts: attempt, finalValidation: lastValidation };
+        }
+      }
       attempt += 1;
       // Recompute the failing step against the LATEST validation (the
       // first iteration uses `firstFailedStep` above, subsequent

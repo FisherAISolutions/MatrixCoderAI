@@ -95,6 +95,17 @@ describe('parseValidationOutput — module not found', () => {
   });
 });
 
+describe('parseValidationOutput — Next.js invariants', () => {
+  it('parses workUnitAsyncStorage prerender invariant', () => {
+    const log = `Error occurred prerendering page "/".
+[Error [InvariantError]: Invariant: Expected workUnitAsyncStorage to have a store.]`;
+    const errs = parseValidationOutput(log, 'nextjs');
+
+    expect(errs.some((error) => error.message.includes('workUnitAsyncStorage'))).toBe(true);
+    expect(looksLikeFailure(log)).toBe(true);
+  });
+});
+
 describe('looksLikeFailure', () => {
   it('returns true for common failure indicators', () => {
     expect(looksLikeFailure('Failed to compile.\n\n./src/page.tsx:1:1')).toBe(true);

@@ -35,6 +35,7 @@ import {
   looksLikeFailure,
   parseValidationOutput,
   stripAnsi,
+  extractFailureExcerpt,
   type ParsedError,
 } from './errorParser';
 import { runStyleAudit } from './styleAudit';
@@ -47,6 +48,7 @@ import {
   beginPreviewStage,
   completePreviewStage,
   failPreviewStage,
+  resetPreviewStages,
   skipRunningPreviewStages,
   skipPreviewStage,
   type PreviewDiagnosticStage,
@@ -664,11 +666,20 @@ async function runStep(
 
   const source =
     step === 'type-check' ? 'typescript' : step === 'build' ? 'nextjs' : 'unknown';
-  const errors = parseValidationOutput(result.combined, source);
+  let errors = parseValidationOutput(result.combined, source);
   const failed =
     result.exitCode !== 0 ||
     errors.length > 0 ||
     looksLikeFailure(result.combined);
+  if (failed && errors.length === 0) {
+    errors = [
+      {
+        source,
+        message: extractFailureExcerpt(result.combined, 1200),
+        raw: truncateLog(result.combined),
+      },
+    ];
+  }
 
   return {
     step,
@@ -722,6 +733,15 @@ export async function runValidation(
   const overallStart = performance.now();
   const steps: StepResult[] = [];
   const logs: string[] = [];
+  resetPreviewStages([
+    'import-integrity',
+    'generated-quality',
+    'install',
+    'type-check',
+    'build',
+    'dev-server',
+    'preview-connected',
+  ]);
 
   const logChunks: LogEntry[] = [];
   let lastActivityAt = performance.now();

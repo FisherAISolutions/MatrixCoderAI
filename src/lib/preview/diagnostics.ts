@@ -114,6 +114,18 @@ export function resetPreviewDiagnostics() {
   notify();
 }
 
+export function resetPreviewStages(stages: PreviewDiagnosticStage[]) {
+  for (const stage of stages) {
+    const meta = STAGES.find((item) => item.stage === stage);
+    records.set(stage, {
+      stage,
+      label: meta?.label ?? stage,
+      status: 'pending',
+    });
+  }
+  notify();
+}
+
 export function beginPreviewStage(stage: PreviewDiagnosticStage, reason?: string) {
   const current = getBaseRecord(stage);
   const next: PreviewDiagnosticRecord = {

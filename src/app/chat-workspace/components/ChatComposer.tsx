@@ -926,7 +926,7 @@ function buildBatchPrompt(
   batch: GenerationBatch,
   index: number,
   total: number,
-  continuation?: { lastCompletePath?: string | null; reason: string }
+  continuation?: { lastCompletePath?: string | null; reason: string; missingPaths?: string[] }
 ): string {
   return [
     `Original user request:\n${baseRequest}`,
@@ -945,7 +945,7 @@ function buildBatchPrompt(
     '- Do not emit files outside this batch scope.',
     '- If a needed file belongs to a later batch, list it under NEXT BATCH NOTES instead of creating it now.',
     continuation
-      ? `Continuation repair: the previous response was incomplete (${continuation.reason}). Continue from the last complete file${continuation.lastCompletePath ? ` (${continuation.lastCompletePath})` : ''}. Re-emit only complete files for the current batch.`
+      ? `Continuation repair: the previous response was incomplete (${continuation.reason}). Files successfully parsed before the truncation have already been saved. Regenerate ONLY the missing or truncated file(s)${continuation.missingPaths?.length ? `: ${continuation.missingPaths.join(', ')}` : continuation.lastCompletePath ? ` after ${continuation.lastCompletePath}` : ''}. Do not re-emit files that were already completed.`
       : '',
     '',
     index < total - 1
@@ -1071,7 +1071,7 @@ export default function ChatComposer({
   );
 
   const continueBatchGeneration = useCallback(
-    (continuation?: { lastCompletePath?: string | null; reason: string }) => {
+    (continuation?: { lastCompletePath?: string | null; reason: string; missingPaths?: string[] }) => {
       const state = batchGenerationRef.current;
       if (!state?.active) return;
       const batch = state.batches[state.index];
@@ -1258,6 +1258,9 @@ export default function ChatComposer({
       let createsCount = 0;
       let extractedPathsForDiagnostics: string[] = [];
       let persistedScheduledPathsForDiagnostics: string[] = [];
+      let incompleteBatchContinuation:
+        | { lastCompletePath?: string | null; reason: string; missingPaths?: string[] }
+        | null = null;
 
       if (shouldExtractFiles) {
         const activeBatch = activeBatchGeneration;
@@ -1278,12 +1281,41 @@ export default function ChatComposer({
         const completeness = analyzeResponseCompleteness(finalContent, extracted);
 
         if (completeness.blocking) {
-          failPreviewStage(
-            'generation',
-            completeness.issues.map((issue) => issue.message).join(' ')
-          );
-          if (activeBatch) {
-            const reason = completeness.issues.map((issue) => issue.message).join(' ');
+          const reason = completeness.issues.map((issue) => issue.message).join(' ');
+          const missingPaths = completeness.issues
+            .map((issue) => issue.path)
+            .filter((path): path is string => Boolean(path));
+
+          if (activeBatch && (creates.length > 0 || edits.length > 0)) {
+            incompleteBatchContinuation = {
+              lastCompletePath: completeness.lastCompletePath,
+              reason,
+              missingPaths,
+            };
+            pushTerminalLog({
+              level: 'warn',
+              text:
+                `[generation-batch] partial batch=${activeBatch.index + 1}/${activeBatch.batches.length} ` +
+                `preserving=${creates.length + edits.length} missing=${missingPaths.join(', ') || 'unknown'} ` +
+                `reason="${reason.replace(/\s+/g, ' ').slice(0, 400)}"\n`,
+              timestamp: Date.now(),
+            });
+            onAddMessage({
+              id: prefixedId('msg'),
+              role: 'system',
+              content:
+                `**Generation batch incomplete - preserving completed files**\n\n` +
+                `Batch ${activeBatch.index + 1}/${activeBatch.batches.length} was truncated or internally inconsistent. ` +
+                `Matrix Coder will save the ${creates.length + edits.length} complete file action(s) already parsed, keep validation paused, and request only the missing/truncated file(s)${missingPaths.length ? `: ${missingPaths.map((path) => `\`${path}\``).join(', ')}` : ''}.`,
+              timestamp: new Date().toISOString(),
+            });
+            toast.error('Batch response was incomplete; saving complete files and continuing.');
+          } else {
+            failPreviewStage(
+              'generation',
+              completeness.issues.map((issue) => issue.message).join(' ')
+            );
+            if (activeBatch) {
             onAddMessage({
               id: prefixedId('msg'),
               role: 'system',
@@ -1306,12 +1338,13 @@ export default function ChatComposer({
               continueBatchGeneration({
                 lastCompletePath: completeness.lastCompletePath,
                 reason,
+                missingPaths,
               });
             }, 600);
             accumulatedRef.current = '';
             streamingMessageShownRef.current = false;
             return;
-          }
+            }
           const issueLines = completeness.issues
             .slice(0, 12)
             .map((issue) => `- ${issue.path ? `\`${issue.path}\` — ` : ''}${issue.message}`)
@@ -1333,6 +1366,7 @@ export default function ChatComposer({
           accumulatedRef.current = '';
           streamingMessageShownRef.current = false;
           return;
+          }
         }
 
         // ----- Malformed edit fences (missing SEARCH/REPLACE markers) -----
@@ -1592,6 +1626,24 @@ export default function ChatComposer({
           setTimeout(() => onSetActivityStatus(null), creates.length * 200 + 300);
         } else {
           onSetActivityStatus(null);
+        }
+
+        if (incompleteBatchContinuation && activeBatchGeneration) {
+          const launchDelay = createdAny ? createsCount * 200 + 600 : 600;
+          pushTerminalLog({
+            level: 'warn',
+            text:
+              `[generation-batch] validation paused for incomplete batch; ` +
+              `continuing missing=${incompleteBatchContinuation.missingPaths?.join(', ') || 'unknown'}\n`,
+            timestamp: Date.now(),
+          });
+          setTimeout(() => {
+            continueBatchGeneration(incompleteBatchContinuation ?? undefined);
+          }, launchDelay);
+          streamMsgIdRef.current = '';
+          accumulatedRef.current = '';
+          streamingMessageShownRef.current = false;
+          return;
         }
       } else {
         onSetActivityStatus(null);
