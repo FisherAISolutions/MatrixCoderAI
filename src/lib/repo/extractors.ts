@@ -279,7 +279,7 @@ function sanitizeCreatePath(raw: string): string | null {
   let p = raw.trim();
   if (!p) return null;
   // Strip surrounding quotes/backticks the model sometimes emits
-  p = p.replace(/^["'`]+|["'`]+$/g, '');
+  p = p.replace(/^["'`]+|["'`,.;:]+$/g, '');
   // Reject URLs
   if (/^[a-z][a-z0-9+.-]*:\/\//i.test(p)) return null;
   // Reject absolute Windows paths (drive letter + separator)

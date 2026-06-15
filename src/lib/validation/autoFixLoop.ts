@@ -44,6 +44,7 @@ import {
   buildAutoFixUserPrompt,
 } from './autoFixPrompt';
 import { prefixedId } from '@/lib/uuid';
+import { pushTerminalLog } from '@/lib/terminal/store';
 
 /** Master kill switch — flip to false to disable the loop project-wide. */
 export const AUTO_FIX_ENABLED = true;
@@ -57,7 +58,7 @@ export const AUTO_FIX_MAX_ATTEMPTS = 3;
 import { AI_PROVIDER as AUTO_FIX_PROVIDER, AUTO_FIX_MODEL } from '@/lib/ai/modelConfig';
 
 /** Hard ceiling on tokens we allow the auto-fix LLM call to spend. */
-const AUTO_FIX_MAX_TOKENS = 4096;
+const AUTO_FIX_MAX_TOKENS = 8192;
 
 export interface ChatSystemMessage {
   id: string;
@@ -162,6 +163,32 @@ function renderRawExcerpt(label: string, log: string | undefined): string {
  * Required user-facing message when the sandbox (NOT the code) killed
  * the install — WebContainer abort, OOM, network, COOP/COEP, etc.
  */
+function renderAiResultDiagnostics(aiResult: unknown): string {
+  const result = aiResult as {
+    choices?: Array<{ finish_reason?: string | null; message?: { content?: string | null } }>;
+    usage?: {
+      prompt_tokens?: number;
+      completion_tokens?: number;
+      total_tokens?: number;
+    };
+  };
+  const choice = result?.choices?.[0];
+  const usage = result?.usage;
+  const parts = [
+    `model=${AUTO_FIX_MODEL}`,
+    `finish_reason=${choice?.finish_reason ?? 'unknown'}`,
+    `content_length=${choice?.message?.content?.length ?? 0}`,
+  ];
+  if (usage) {
+    parts.push(
+      `prompt_tokens=${usage.prompt_tokens ?? 'unknown'}`,
+      `completion_tokens=${usage.completion_tokens ?? 'unknown'}`,
+      `total_tokens=${usage.total_tokens ?? 'unknown'}`
+    );
+  }
+  return parts.join(' ');
+}
+
 function sandboxInstallFailureMessage(f: { kind: string; reason: string }): string {
   return (
     `**Browser sandbox install failed.** This may be a WebContainer limitation, not an app code failure. Download the project and run \`npm install\` locally.\n\n` +
@@ -591,6 +618,7 @@ export async function runAutoFixLoop(
       });
 
       let aiResponseText = '';
+      let aiDiagnostics = `model=${AUTO_FIX_MODEL} finish_reason=unknown content_length=0`;
       try {
         const aiResult = await getChatCompletion(
           AUTO_FIX_PROVIDER,
@@ -601,6 +629,7 @@ export async function runAutoFixLoop(
           ],
           { max_completion_tokens: AUTO_FIX_MAX_TOKENS }
         );
+        aiDiagnostics = renderAiResultDiagnostics(aiResult);
         aiResponseText =
           (aiResult as any)?.choices?.[0]?.message?.content ?? '';
       } catch (err) {
@@ -620,6 +649,14 @@ export async function runAutoFixLoop(
       }
 
       if (!aiResponseText.trim()) {
+        pushTerminalLog({
+          level: 'error',
+          text: `[auto-fix-ai] empty response attempt=${attempt}/${maxAttempts} ${aiDiagnostics}\n`,
+          timestamp: Date.now(),
+        });
+        onChatMessage(
+          sysMsg(`**Auto-fix AI diagnostics** - ${aiDiagnostics}`)
+        );
         onChatMessage(
           sysMsg(
             `**Auto-fix attempt ${attempt}/${maxAttempts}** — the AI returned an empty response. Stopping the loop.`

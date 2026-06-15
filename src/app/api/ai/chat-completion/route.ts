@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import OpenAI from 'openai';
+import { normalizeChatCompletionParameters } from '@/lib/ai/parameterNormalization';
 
 /**
  * Chat-completion proxy.
@@ -63,24 +64,6 @@ function formatErrorResponse(error: unknown, provider?: string) {
   };
 }
 
-/**
- * Build the parameter set we pass through to `openai.chat.completions.create`.
- *
- * Callers used the rocket-flavoured `max_completion_tokens` field; the
- * OpenAI SDK calls this `max_tokens` (the o1/o3-only `max_completion_tokens`
- * alias is rejected by some chat-completions models). We translate it transparently so the
- * existing front-end and auto-fix loop keep working unchanged.
- */
-function normalizeParameters(parameters: Record<string, unknown>): Record<string, unknown> {
-  if (!parameters || typeof parameters !== 'object') return {};
-  const out: Record<string, unknown> = { ...parameters };
-  if (out.max_completion_tokens != null && out.max_tokens == null) {
-    out.max_tokens = out.max_completion_tokens;
-  }
-  delete out.max_completion_tokens;
-  return out;
-}
-
 export async function POST(request: NextRequest) {
   let body: any = {};
 
@@ -139,7 +122,7 @@ export async function POST(request: NextRequest) {
     }
 
     const openai = new OpenAI({ apiKey });
-    const params = normalizeParameters(parameters);
+    const params = normalizeChatCompletionParameters(model, parameters);
 
     if (stream) {
       const encoder = new TextEncoder();

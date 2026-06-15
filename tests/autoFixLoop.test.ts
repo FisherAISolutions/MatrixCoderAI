@@ -205,8 +205,14 @@ ${replace}
 - Replaced the bad code.`;
 }
 
-function aiCompletion(content: string) {
-  return { choices: [{ message: { content } }] };
+function aiCompletion(
+  content: string,
+  extra: { finish_reason?: string; usage?: Record<string, number> } = {}
+) {
+  return {
+    choices: [{ message: { content }, finish_reason: extra.finish_reason }],
+    usage: extra.usage,
+  };
 }
 
 // --- Tests -----------------------------------------------------------------
@@ -341,6 +347,38 @@ export default function HistoryPage() {
     expect(
       contents.some((c) => c.includes('did not emit any usable patches'))
     ).toBe(true);
+  });
+
+  it('surfaces finish reason and token usage when auto-fix returns empty content', async () => {
+    mockRunValidation.mockResolvedValueOnce(
+      validationFail('Some error', 'raw log')
+    );
+    mockGetChatCompletion.mockResolvedValue(
+      aiCompletion('', {
+        finish_reason: 'length',
+        usage: {
+          prompt_tokens: 100,
+          completion_tokens: 8192,
+          total_tokens: 8292,
+        },
+      })
+    );
+
+    const r = makeRecorder();
+    const result = await runAutoFixLoop({
+      files: [file('src/app/page.tsx', 'broken')],
+      onStatus: r.onStatus,
+      onChatMessage: r.onChatMessage,
+      onUpdateFile: r.onUpdateFile,
+      onAddFile: r.onAddFile,
+    });
+
+    expect(result.ran).toBe(true);
+    expect(result.succeeded).toBe(false);
+    expect(result.attempts).toBe(1);
+    const contents = r.chatMessages.map((m) => m.content).join('\n');
+    expect(contents).toContain('finish_reason=length');
+    expect(contents).toContain('completion_tokens=8192');
   });
 
   it('exhausts max attempts when AI patches don\'t fix the error', async () => {

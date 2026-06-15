@@ -311,6 +311,27 @@ Files written:
     expect(audit.issues.some((issue) => issue.path === 'src/app/history/page.tsx')).toBe(true);
   });
 
+  it('deduplicates files listed with a stray trailing markdown backtick', () => {
+    const input = `
+\`\`\`tsx
+// path: src/components/notes/AddNoteForm.tsx
+export default function AddNoteForm() {
+  return <form />;
+}
+\`\`\`
+
+Files written:
+- src/components/notes/AddNoteForm.tsx\`
+`;
+    const extracted = extractFromAssistantResponse(input);
+    const audit = analyzeResponseCompleteness(input, extracted);
+
+    expect(extracted.creates.map((file) => file.path)).toEqual([
+      'src/components/notes/AddNoteForm.tsx',
+    ]);
+    expect(audit.blocking).toBe(false);
+  });
+
   it('keeps complete files extracted before a later unclosed fence', () => {
     const input = `
 \`\`\`json

@@ -884,6 +884,9 @@ interface ActiveBatchGeneration {
   index: number;
 }
 
+const GENERATION_MAX_COMPLETION_TOKENS = 8192;
+const BATCH_MAX_FILES = 3;
+
 const LARGE_APP_BATCHES: GenerationBatch[] = [
   {
     id: 1,
@@ -907,7 +910,7 @@ const LARGE_APP_BATCHES: GenerationBatch[] = [
     id: 4,
     title: 'add/edit/history pages',
     scope:
-      'Create only add, edit, history route pages and their immediate form/table components. Include search, filter, edit, delete, and localStorage wiring when requested.',
+      'Create only add, edit, history route pages and their immediate form/table components. If the request uses add-note, add-task, or add-entry, preserve that exact route name. Include search, filter, edit, delete, and localStorage wiring when requested.',
   },
   {
     id: 5,
@@ -918,6 +921,82 @@ const LARGE_APP_BATCHES: GenerationBatch[] = [
 ];
 
 const NEXT_SCAFFOLD_PATH_SET = new Set<string>(NEXT_SCAFFOLD_PATHS);
+
+function dedupeGeneratedPaths(paths: Array<string | null | undefined>): string[] {
+  const out: string[] = [];
+  for (const raw of paths) {
+    if (!raw) continue;
+    const clean = raw
+      .trim()
+      .replace(/^["'`]+|["'`,.;:]+$/g, '')
+      .replace(/\\/g, '/')
+      .replace(/^\.\/+/, '')
+      .replace(/\/{2,}/g, '/');
+    if (!clean || out.includes(clean)) continue;
+    out.push(clean);
+  }
+  return out;
+}
+
+function inferAddRoutePath(baseRequest: string): string | null {
+  const lower = baseRequest.toLowerCase();
+  if (!/\badd\b/.test(lower)) return null;
+  if (/\badd-note\b|\badd note\b|\bnotes?\b/.test(lower)) {
+    return 'src/app/add-note/page.tsx';
+  }
+  if (/\badd-task\b|\badd task\b|\btasks?\b/.test(lower)) {
+    return 'src/app/add-task/page.tsx';
+  }
+  if (/\badd-entry\b|\badd entry\b|\bentries?\b/.test(lower)) {
+    return 'src/app/add-entry/page.tsx';
+  }
+  return 'src/app/add/page.tsx';
+}
+
+function inferRequiredPathsForBatch(baseRequest: string, batch: GenerationBatch): string[] {
+  const lower = baseRequest.toLowerCase();
+  const required: string[] = [];
+
+  if (batch.title === 'root page shell') {
+    required.push('src/app/page.tsx');
+  }
+
+  if (batch.title === 'dashboard and shared components' && /\bdashboard\b/.test(lower)) {
+    required.push('src/app/dashboard/page.tsx');
+  }
+
+  if (batch.title === 'add/edit/history pages') {
+    const addRoutePath = inferAddRoutePath(baseRequest);
+    if (addRoutePath) required.push(addRoutePath);
+    if (/\bhistory\b|\barchive\b|\blog\b/.test(lower)) {
+      required.push('src/app/history/page.tsx');
+    }
+  }
+
+  return dedupeGeneratedPaths(required);
+}
+
+function missingRequiredPathsForBatch(
+  state: ActiveBatchGeneration,
+  fileTree: FileNode[],
+  mutatedFilesByPath: Map<string, FileNode>
+): string[] {
+  const batch = state.batches[state.index];
+  if (!batch || batch.title === 'validation') return [];
+  const required = inferRequiredPathsForBatch(state.baseRequest, batch);
+  if (required.length === 0) return [];
+
+  const currentPaths = new Set(
+    flattenTree(fileTree)
+      .filter((file) => file.type === 'file')
+      .map((file) => file.path)
+  );
+  for (const path of mutatedFilesByPath.keys()) {
+    currentPaths.add(path);
+  }
+
+  return required.filter((path) => !currentPaths.has(path));
+}
 
 function shouldBatchGenerationRequest(text: string, agent: AgentType, files: FileNode[]): boolean {
   if (agent !== 'coding') return false;
@@ -938,15 +1017,20 @@ function buildBatchPrompt(
   total: number,
   continuation?: { lastCompletePath?: string | null; reason: string; missingPaths?: string[] }
 ): string {
+  const requiredPaths = inferRequiredPathsForBatch(baseRequest, batch);
+  const missingPaths = dedupeGeneratedPaths(continuation?.missingPaths ?? []);
   return [
     `Original user request:\n${baseRequest}`,
     '',
     `AUTOMATIC BATCHED GENERATION - Batch ${index + 1} of ${total}: ${batch.title}`,
     '',
     `Scope for this response:\n${batch.scope}`,
+    requiredPaths.length
+      ? `Required file(s) before this batch can be marked complete:\n${requiredPaths.map((path) => `- ${path}`).join('\n')}`
+      : '',
     '',
     'Hard limits for this response:',
-    '- Emit at most 6 files.',
+    `- Emit at most ${BATCH_MAX_FILES} files.`,
     '- Emit only complete, closed code fences.',
     '- Stop before the response becomes long enough to risk truncation.',
     '- Do not start a file unless you can finish it in this same response.',
@@ -956,7 +1040,7 @@ function buildBatchPrompt(
     `- Do not emit deterministic scaffold files: ${NEXT_SCAFFOLD_PATHS.join(', ')}. Matrix Coder creates these from templates before generation.`,
     '- If a needed file belongs to a later batch, list it under NEXT BATCH NOTES instead of creating it now.',
     continuation
-      ? `Continuation repair: the previous response was incomplete (${continuation.reason}). Files successfully parsed before the truncation have already been saved. Regenerate ONLY the missing or truncated file(s)${continuation.missingPaths?.length ? `: ${continuation.missingPaths.join(', ')}` : continuation.lastCompletePath ? ` after ${continuation.lastCompletePath}` : ''}. Do not re-emit files that were already completed.`
+      ? `Continuation repair: the previous response was incomplete (${continuation.reason}). Files successfully parsed before the truncation have already been saved. Continue the same batch plan and emit only the missing, truncated, or still-required file(s)${missingPaths.length ? `: ${missingPaths.join(', ')}` : continuation.lastCompletePath ? ` after ${continuation.lastCompletePath}` : ''}. Do not re-emit files that were already completed.`
       : '',
     '',
     index < total - 1
@@ -1076,7 +1160,7 @@ export default function ChatComposer({
       }
 
       sendMessage(apiMessages, {
-        max_completion_tokens: 3072,
+        max_completion_tokens: GENERATION_MAX_COMPLETION_TOKENS,
       });
     },
     [
@@ -1324,9 +1408,9 @@ export default function ChatComposer({
 
         if (completeness.blocking) {
           const reason = completeness.issues.map((issue) => issue.message).join(' ');
-          const missingPaths = completeness.issues
-            .map((issue) => issue.path)
-            .filter((path): path is string => Boolean(path));
+          const missingPaths = dedupeGeneratedPaths(
+            completeness.issues.map((issue) => issue.path)
+          );
 
           if (activeBatch && (creates.length > 0 || edits.length > 0)) {
             incompleteBatchContinuation = {
@@ -1675,13 +1759,49 @@ export default function ChatComposer({
           onSetActivityStatus(null);
         }
 
+        if (activeBatchGeneration && !incompleteBatchContinuation) {
+          const missingRequiredPaths = missingRequiredPathsForBatch(
+            activeBatchGeneration,
+            fileTree,
+            mutatedFilesByPath
+          );
+          if (missingRequiredPaths.length > 0) {
+            const writtenPaths = Array.from(mutatedFilesByPath.keys());
+            incompleteBatchContinuation = {
+              lastCompletePath: writtenPaths[writtenPaths.length - 1] ?? null,
+              reason:
+                `Batch ${activeBatchGeneration.index + 1} cannot complete until required file(s) exist: ` +
+                missingRequiredPaths.join(', '),
+              missingPaths: missingRequiredPaths,
+            };
+            pushTerminalLog({
+              level: 'warn',
+              text:
+                `[generation-batch] required file gate batch=${activeBatchGeneration.index + 1}/${activeBatchGeneration.batches.length} ` +
+                `missing=${missingRequiredPaths.join(', ')}; validation remains paused\n`,
+              timestamp: Date.now(),
+            });
+            onAddMessage({
+              id: prefixedId('msg'),
+              role: 'system',
+              content:
+                `**Generation batch still needs required files**\n\n` +
+                `Batch ${activeBatchGeneration.index + 1}/${activeBatchGeneration.batches.length} cannot be marked complete yet. ` +
+                `Matrix Coder will continue the same batch and generate: ${missingRequiredPaths
+                  .map((path) => `\`${path}\``)
+                  .join(', ')}.`,
+              timestamp: new Date().toISOString(),
+            });
+          }
+        }
+
         if (incompleteBatchContinuation && activeBatchGeneration) {
           const launchDelay = createdAny ? createsCount * 200 + 600 : 600;
           pushTerminalLog({
             level: 'warn',
             text:
               `[generation-batch] validation paused for incomplete batch; ` +
-              `continuing missing=${incompleteBatchContinuation.missingPaths?.join(', ') || 'unknown'}\n`,
+              `continuing missing=${dedupeGeneratedPaths(incompleteBatchContinuation.missingPaths ?? []).join(', ') || 'unknown'}\n`,
             timestamp: Date.now(),
           });
           setTimeout(() => {
@@ -2226,7 +2346,7 @@ export default function ChatComposer({
             </div>
 
             <span className="text-xs font-mono text-matrix-green-muted border border-matrix-border px-2 py-1 rounded-sm">
-              GPT-4o
+              {PRIMARY_MODEL}
             </span>
           </div>
 
@@ -2245,7 +2365,7 @@ export default function ChatComposer({
       </div>
 
       <p className="mt-1.5 text-xs font-mono text-matrix-green-muted opacity-60">
-        Enter to send · Shift+Enter for newline · Powered by GPT-4o
+        Enter to send · Shift+Enter for newline · Powered by {PRIMARY_MODEL}
       </p>
     </div>
   );
