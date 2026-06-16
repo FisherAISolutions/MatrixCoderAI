@@ -320,6 +320,75 @@ export default function HistoryPage() {
     expect(r.chatMessages.some((m) => m.content.includes('1 new file'))).toBe(true);
   });
 
+  it('REGRESSION: auto-fix can clean all leaked SEARCH/REPLACE markers from a file', async () => {
+    const dirty = `import Link from 'next/link';\n<<<<<<< SEARCH\nexport default function Page() {\n=======\nexport default function Page() {\n  return <main />;\n}\n>>>>>>> REPLACE\n`;
+    const clean = `import Link from 'next/link';\nexport default function Page() {\n  return <main />;\n}\n`;
+    const files = [file('src/app/page.tsx', dirty)];
+
+    mockRunValidation
+      .mockResolvedValueOnce(
+        validationFail(
+          'TS1185: Merge conflict marker encountered.',
+          'src/app/page.tsx:122:1 - error TS1185: Merge conflict marker encountered.'
+        )
+      )
+      .mockResolvedValueOnce(validationPass());
+
+    mockGetChatCompletion.mockResolvedValue(
+      aiCompletion(`Replacing the contaminated file with clean content:
+
+\`\`\`tsx
+// path: src/app/page.tsx
+${clean}\`\`\``)
+    );
+
+    const r = makeRecorder();
+    const result = await runAutoFixLoop({
+      files,
+      onStatus: r.onStatus,
+      onChatMessage: r.onChatMessage,
+      onUpdateFile: r.onUpdateFile,
+      onAddFile: r.onAddFile,
+    });
+
+    expect(result.succeeded).toBe(true);
+    expect(r.fileUpdates).toHaveLength(1);
+    expect(r.fileUpdates[0].content).toBe(clean.trim());
+    expect(r.fileUpdates[0].content).not.toMatch(/<<<<<<<|=======|>>>>>>>/);
+  });
+
+  it('REGRESSION: auto-fix refuses a patch result that would leave an orphan marker', async () => {
+    const original = `const a = 1;\n`;
+    const files = [file('src/app/page.tsx', original)];
+
+    mockRunValidation.mockResolvedValue(
+      validationFail(
+        'TS1185: Merge conflict marker encountered.',
+        'src/app/page.tsx:1:1 - error TS1185: Merge conflict marker encountered.'
+      )
+    );
+    mockGetChatCompletion.mockResolvedValue(
+      aiCompletion(aiPatch('src/app/page.tsx', 'const a = 1;', 'const a = 2;\n======='))
+    );
+
+    const r = makeRecorder();
+    const result = await runAutoFixLoop({
+      files,
+      onStatus: r.onStatus,
+      onChatMessage: r.onChatMessage,
+      onUpdateFile: r.onUpdateFile,
+      onAddFile: r.onAddFile,
+      maxAttempts: 1,
+    });
+
+    expect(result.succeeded).toBe(false);
+    expect(r.fileUpdates).toHaveLength(0);
+    expect(r.fileAdds).toHaveLength(0);
+    expect(r.chatMessages.map((m) => m.content).join('\n')).toContain(
+      'SEARCH/REPLACE marker leaked'
+    );
+  });
+
   it('AI returns NO patches → loop stops gracefully on attempt 1', async () => {
     mockRunValidation.mockResolvedValue(
       validationFail('Some error', 'raw log')

@@ -2,6 +2,7 @@ import type { FileNode } from '@/app/chat-workspace/components/types';
 import { extractImports, flattenTree } from '@/lib/repo/heuristics';
 import { getAppRouterRootFiles } from '@/lib/repo/appRouterRoot';
 import { findDuplicateEffectiveAppRoutes } from '@/lib/repo/appRoutes';
+import { describePatchMarkerLeak } from '@/lib/repo/patchMarkers';
 import type { ParsedError } from './errorParser';
 
 const CODE_EXTENSIONS = new Set(['ts', 'tsx', 'js', 'jsx', 'mjs', 'cjs']);
@@ -379,6 +380,16 @@ export function runGeneratedQualityAudit(
       duplicate.paths[0],
       `Duplicate App Router pages resolve to "${duplicate.route}": ${duplicate.paths.join(', ')}. Route group folders like "(dashboard)" do not change the URL, so merge these pages before build.`
     );
+  }
+
+  for (const file of flat) {
+    const markerLeak = describePatchMarkerLeak(file.content ?? '');
+    if (markerLeak) {
+      fail(
+        file.path,
+        `${file.path} contains leaked SEARCH/REPLACE markers (${markerLeak}). Regenerate or patch the file cleanly before type-check/build.`
+      );
+    }
   }
 
   for (const file of flat) {

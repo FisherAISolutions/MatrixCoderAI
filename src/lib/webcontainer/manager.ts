@@ -196,6 +196,16 @@ function filePaths(files: FileNode[]): string[] {
     .sort();
 }
 
+function isGeneratedRuntimePath(path: string): boolean {
+  return (
+    path === 'node_modules' ||
+    path.startsWith('node_modules/') ||
+    path === '.next' ||
+    path.startsWith('.next/') ||
+    path === 'next-env.d.ts'
+  );
+}
+
 async function readMountedFilePathsFromFs(
   wc: WebContainer,
   dir = ''
@@ -214,6 +224,7 @@ async function readMountedFilePathsFromFs(
   const out: string[] = [];
   for (const entry of entries) {
     const path = dir ? `${dir}/${entry.name}` : entry.name;
+    if (isGeneratedRuntimePath(path)) continue;
     if (entry.isDirectory()) {
       out.push(...(await readMountedFilePathsFromFs(wc, path)));
     } else if (entry.isFile()) {

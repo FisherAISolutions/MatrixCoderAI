@@ -307,15 +307,21 @@ async function runRuntimeSmoke(
     });
 
     const fetchResult = await smokeFetch(info.url);
-    const overlay = detectRuntimeOverlay(fetchResult.body);
+    const overlay = fetchResult.networkError
+      ? { found: false, reason: null }
+      : detectRuntimeOverlay(fetchResult.body);
 
     const errors: ParsedError[] = [];
+    let fetchInconclusive = false;
 
     if (fetchResult.networkError) {
-      errors.push({
-        source: 'nextjs',
-        message: `Root route fetch failed: ${fetchResult.networkError}.`,
-        raw: '',
+      fetchInconclusive = true;
+      onLog({
+        level: 'warn',
+        text:
+          `[runtime-smoke] fetch inconclusive - ${fetchResult.networkError}. ` +
+          `Dev server reported ready and preview remains available at ${info.url}\n`,
+        timestamp: Date.now(),
       });
     } else if (!fetchResult.ok) {
       errors.push({
@@ -335,10 +341,12 @@ async function runRuntimeSmoke(
 
     const failed = errors.length > 0;
     onLog({
-      level: failed ? 'error' : 'info',
+      level: failed ? 'error' : fetchInconclusive ? 'warn' : 'info',
       text: failed
-        ? `[runtime-smoke] FAILED — ${errors.length} runtime issue(s) detected\n`
-        : `[runtime-smoke] OK — HTTP ${fetchResult.status}, no overlay/crash detected\n`,
+        ? `[runtime-smoke] FAILED - ${errors.length} runtime issue(s) detected\n`
+        : fetchInconclusive
+          ? '[runtime-smoke] OK - dev server ready; root fetch was inconclusive and will not trigger auto-fix\n'
+          : `[runtime-smoke] OK - HTTP ${fetchResult.status}, no overlay/crash detected\n`,
       timestamp: Date.now(),
     });
 

@@ -181,6 +181,82 @@ describe('REGRESSION — failed edits must NOT pretend success', () => {
   });
 });
 
+describe('REGRESSION — patch markers must never be saved into files', () => {
+  it('applies multiple SEARCH/REPLACE edits cleanly without marker leakage', () => {
+    const original = `const a = 1;\nconst b = 2;\n`;
+    const result = applyEditSequence(original, [
+      { path: 'src/app/page.tsx', search: `const a = 1;`, replace: `const a = 10;` },
+      { path: 'src/app/page.tsx', search: `const b = 2;`, replace: `const b = 20;` },
+    ]);
+
+    expect(result.applied).toBe(2);
+    expect(result.rejected).toBeUndefined();
+    expect(result.finalContent).toBe(`const a = 10;\nconst b = 20;\n`);
+    expect(result.finalContent).not.toMatch(/<<<<<<<|=======|>>>>>>>/);
+  });
+
+  it('rejects a replacement that would leave an orphan marker in TSX', () => {
+    const original = `export default function Page() {\n  return <main />;\n}\n`;
+    const result = applyEditSequence(original, [
+      {
+        path: 'src/app/page.tsx',
+        search: `  return <main />;`,
+        replace: `  return <section />;\n=======`,
+      },
+    ]);
+
+    expect(result.rejected).toMatch(/SEARCH\/REPLACE marker leaked/);
+    expect(result.applied).toBe(0);
+    expect(result.unchanged).toBe(true);
+    expect(result.finalContent).toBe(original);
+  });
+
+  it('does not mutate content when patch application fails', () => {
+    const original = `const ok = true;\n`;
+    const result = applyEditSequence(original, [
+      {
+        path: 'src/app/page.tsx',
+        search: `const missing = true;`,
+        replace: `const missing = false;\n>>>>>>> REPLACE`,
+      },
+    ]);
+
+    expect(result.applied).toBe(0);
+    expect(result.finalContent).toBe(original);
+    expect(result.unchanged).toBe(true);
+  });
+
+  it('allows auto-fix style patches that remove all existing leaked markers', () => {
+    const original = `import Link from 'next/link';\n<<<<<<< SEARCH\nexport default function Page() {\n=======\nexport default function Page() {\n  return <main />;\n}\n>>>>>>> REPLACE\n`;
+    const clean = `import Link from 'next/link';\nexport default function Page() {\n  return <main />;\n}\n`;
+    const result = applyEditSequence(original, [
+      {
+        path: 'src/app/page.tsx',
+        search: original,
+        replace: clean,
+      },
+    ]);
+
+    expect(result.applied).toBe(1);
+    expect(result.rejected).toBeUndefined();
+    expect(result.finalContent).toBe(clean);
+  });
+
+  it('rejects partial cleanup that leaves any marker behind', () => {
+    const original = `<<<<<<< SEARCH\nconst a = 1;\n=======\nconst a = 2;\n>>>>>>> REPLACE\n`;
+    const result = applyEditSequence(original, [
+      {
+        path: 'src/app/page.tsx',
+        search: `<<<<<<< SEARCH\n`,
+        replace: '',
+      },
+    ]);
+
+    expect(result.rejected).toMatch(/SEARCH\/REPLACE marker leaked/);
+    expect(result.finalContent).toBe(original);
+  });
+});
+
 describe('REGRESSION — CSS patches must not leak SEARCH/REPLACE markers', () => {
   it('strips accidental patch separators from app/globals.css replacement content', () => {
     const original = `@tailwind base;\n@tailwind components;\n@tailwind utilities;\n`;

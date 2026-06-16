@@ -26,6 +26,7 @@
 
 import type { ExtractedEdit } from './extractors';
 import { sanitizeCssContent } from './cssSanitizer';
+import { describePatchMarkerLeak } from './patchMarkers';
 
 export interface PatchResult {
   success: boolean;
@@ -181,6 +182,8 @@ export function applyEditSequence(
   strategies: string[];
   /** True if the returned `finalContent` is byte-identical to `original`. */
   unchanged: boolean;
+  /** Present when a patch result was rejected before saving. */
+  rejected?: string;
 } {
   let current = original;
   let applied = 0;
@@ -202,6 +205,27 @@ export function applyEditSequence(
       });
     }
   }
+
+  const markerLeak = describePatchMarkerLeak(current);
+  if (markerLeak) {
+    const edit = edits[edits.length - 1] ?? { path: '', search: '', replace: '' };
+    return {
+      finalContent: original,
+      applied: 0,
+      noopCount,
+      failed: [
+        ...failed,
+        {
+          edit,
+          reason: `${markerLeak}. The file was not modified.`,
+        },
+      ],
+      strategies,
+      unchanged: true,
+      rejected: markerLeak,
+    };
+  }
+
   return {
     finalContent: current,
     applied,

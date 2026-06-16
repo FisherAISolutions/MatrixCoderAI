@@ -33,6 +33,7 @@ import {
   normalizeEditPath,
 } from '@/lib/repo/extractors';
 import { applyEditSequence } from '@/lib/repo/patcher';
+import { describePatchMarkerLeak } from '@/lib/repo/patchMarkers';
 import { flattenTree } from '@/lib/repo/heuristics';
 import { planAppRouterRootNormalization } from '@/lib/repo/appRouterRoot';
 import type { FileNode } from '@/app/chat-workspace/components/types';
@@ -265,13 +266,13 @@ function applyAutoFixResponse(
       failed += fileEdits.length;
       return;
     }
-    const { finalContent, applied: a, failed: f } = applyEditSequence(
+    const { finalContent, applied: a, failed: f, rejected } = applyEditSequence(
       target.content,
       fileEdits
     );
-    if (a === 0) {
+    if (rejected || a === 0) {
       report.push(
-        `[fail] \`${path}\` — ${fileEdits.length} block(s) did not match`
+        `[fail] \`${path}\` — ${rejected ?? `${fileEdits.length} block(s) did not match`}`
       );
       failed += fileEdits.length;
       return;
@@ -297,7 +298,30 @@ function applyAutoFixResponse(
   // a missing local file referenced by a broken import).
   let createdCount = 0;
   for (const c of creates) {
-    if (byPath.has(c.path)) continue; // refuse to overwrite via CREATE
+    const markerLeak = describePatchMarkerLeak(c.content);
+    if (markerLeak) {
+      report.push(`[reject] \`${c.path}\` — ${markerLeak}`);
+      failed++;
+      continue;
+    }
+    const existing = byPath.get(c.path);
+    if (existing) {
+      const existingMarkerLeak = describePatchMarkerLeak(existing.content ?? '');
+      if (!existingMarkerLeak) continue; // refuse normal overwrites via CREATE
+      const updated: FileNode = {
+        ...existing,
+        content: c.content,
+        size: c.content.length,
+        lastModified: nowIso(),
+        isNew: false,
+      };
+      onUpdateFile(updated);
+      byPath.set(c.path, updated);
+      applied++;
+      mutated = true;
+      report.push(`[replace] \`${c.path}\` — replaced marker-contaminated file with clean content`);
+      continue;
+    }
     onAddFile({
       id: prefixedId('file'),
       name: c.name,
@@ -680,6 +704,14 @@ export async function runAutoFixLoop(
       );
 
       if (!patchReport.mutated) {
+        if (patchReport.report.length > 0) {
+          const patchLines = patchReport.report.slice(0, 12).join('\n');
+          onChatMessage(
+            sysMsg(
+              `**Auto-fix attempt ${attempt}/${maxAttempts} rejected patches**\n\n\`\`\`\n${patchLines}\n\`\`\``
+            )
+          );
+        }
         consecutiveNoPatchAttempts += 1;
         // A no-patch response wastes an attempt but is often recoverable:
         // re-prompt once with the raw log front-and-centre and a hard

@@ -27,6 +27,7 @@
  */
 
 import { sanitizeCssContent } from './cssSanitizer';
+import { describePatchMarkerLeak } from './patchMarkers';
 
 export interface ExtractedCreate {
   path: string;
@@ -346,6 +347,18 @@ function extractCreates(content: string): ExtractedCreate[] {
   const out: ExtractedCreate[] = [];
   const seen = new Set<string>();
 
+  const sanitizeCreateContent = (path: string, code: string): string | null => {
+    const sanitized = sanitizeCssContent(path, code.trim());
+    const markerLeak = describePatchMarkerLeak(sanitized);
+    if (markerLeak) {
+      console.warn(
+        `[extractor] rejecting create for "${path}" (${markerLeak})`
+      );
+      return null;
+    }
+    return sanitized;
+  };
+
   // Pass 1: explicit `// path:` annotations.
   //
   // PROBLEM_STATEMENT #4/#5 fix — the previous gate required either
@@ -368,11 +381,13 @@ function extractCreates(content: string): ExtractedCreate[] {
     if (seen.has(cleanPath)) continue;
     const name = cleanPath.split('/').pop() ?? cleanPath;
     if (!name) continue;
+    const safeContent = sanitizeCreateContent(cleanPath, code);
+    if (safeContent === null) continue;
     console.info(`[extractor] create file "${cleanPath}" (lang=${language || 'unknown'})`);
     out.push({
       path: cleanPath,
       name,
-      content: sanitizeCssContent(cleanPath, code.trim()),
+      content: safeContent,
       language: language || 'typescript',
     });
     seen.add(cleanPath);
@@ -419,10 +434,12 @@ function extractCreates(content: string): ExtractedCreate[] {
     if (seen.has(cleanPath)) continue;
     const name = cleanPath.split('/').pop() ?? cleanPath;
     if (!name) continue;
+    const safeContent = sanitizeCreateContent(cleanPath, code);
+    if (safeContent === null) continue;
     out.push({
       path: cleanPath,
       name,
-      content: sanitizeCssContent(cleanPath, code.trim()),
+      content: safeContent,
       language: language || 'typescript',
     });
     seen.add(cleanPath);

@@ -125,6 +125,7 @@ export default function PreviewPanel({ open, onClose, files, projectName }: Prop
   const [sandbox, setSandbox] = useState<SandboxStatus>({ kind: 'ok' });
   const iframeRef = useRef<HTMLIFrameElement>(null);
   const previewConnectionTimerRef = useRef<number | null>(null);
+  const loadedPreviewUrlRef = useRef<string | null>(null);
   const diagnostics = usePreviewDiagnostics();
 
   // 2026-01 quality-upgrade pass — only accept absolute http(s) URLs
@@ -152,6 +153,15 @@ export default function PreviewPanel({ open, onClose, files, projectName }: Prop
         failPreviewStage(
           'preview-connected',
           `Preview received a non-http server URL: ${next.url || '(empty)'}`
+        );
+        return;
+      }
+      if (next.url === loadedPreviewUrlRef.current) {
+        setInfo(next);
+        setIframeLoading(false);
+        completePreviewStage(
+          'preview-connected',
+          `Preview iframe already loaded ${next.url}.`
         );
         return;
       }
@@ -456,6 +466,7 @@ export default function PreviewPanel({ open, onClose, files, projectName }: Prop
               className="w-full h-full bg-white"
               sandbox="allow-scripts allow-same-origin allow-forms allow-popups allow-modals allow-downloads"
               onLoad={() => {
+                loadedPreviewUrlRef.current = info.url;
                 setIframeLoading(false);
                 if (previewConnectionTimerRef.current !== null) {
                   window.clearTimeout(previewConnectionTimerRef.current);

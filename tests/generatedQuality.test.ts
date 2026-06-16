@@ -57,6 +57,24 @@ describe('runGeneratedQualityAudit', () => {
     expect(result.log).toMatch(/baseUrl|paths/);
   });
 
+  it('fails before type-check when a generated file contains leaked patch markers', () => {
+    const result = runGeneratedQualityAudit([
+      pkg,
+      tsconfig,
+      file(
+        'src/app/page.tsx',
+        `export default function Page() {\n<<<<<<< SEARCH\n  return <main />;\n=======\n  return <section />;\n>>>>>>> REPLACE\n}`
+      ),
+    ]);
+
+    expect(result.ok).toBe(false);
+    expect(result.errors[0]).toMatchObject({
+      source: 'quality',
+      file: 'src/app/page.tsx',
+    });
+    expect(result.errors[0].message).toMatch(/SEARCH\/REPLACE markers/);
+  });
+
   it('fails imported files with explicit stub markers', () => {
     const result = runGeneratedQualityAudit([
       pkg,

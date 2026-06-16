@@ -171,6 +171,63 @@ const b = 99;
   });
 });
 
+describe('REGRESSION — leaked patch markers must not become generated files', () => {
+  it('rejects a CREATE fence whose file body contains SEARCH/REPLACE markers', () => {
+    const input = `
+\`\`\`tsx
+// path: src/app/page.tsx
+import Link from 'next/link';
+<<<<<<< SEARCH
+export default function Page() {
+=======
+export default function Page() {
+  return <main />;
+}
+>>>>>>> REPLACE
+\`\`\`
+`;
+    const extracted = extractFromAssistantResponse(input);
+    const audit = analyzeResponseCompleteness(input, extracted);
+
+    expect(extracted.creates).toEqual([]);
+    expect(audit.blocking).toBe(true);
+    expect(audit.issues).toContainEqual(
+      expect.objectContaining({
+        kind: 'unextracted-path',
+        path: 'src/app/page.tsx',
+      })
+    );
+  });
+
+  it('does not parse a malformed continuation edit block as a CREATE file', () => {
+    const input = `
+\`\`\`tsx
+// path: src/components/Complete.tsx
+export function Complete() {
+  return <div>done</div>;
+}
+\`\`\`
+
+\`\`\`tsx
+// path: src/app/page.tsx
+=======
+export default function Page() {
+  return <Complete />;
+}
+>>>>>>> REPLACE
+\`\`\`
+`;
+    const extracted = extractFromAssistantResponse(input);
+    const audit = analyzeResponseCompleteness(input, extracted);
+
+    expect(extracted.creates.map((file) => file.path)).toEqual([
+      'src/components/Complete.tsx',
+    ]);
+    expect(audit.blocking).toBe(true);
+    expect(audit.lastCompletePath).toBe('src/components/Complete.tsx');
+  });
+});
+
 describe('extractFromAssistantResponse — empty / no-fence inputs', () => {
   it('returns empty arrays for plain prose with no fences', () => {
     const r = extractFromAssistantResponse(

@@ -18,6 +18,7 @@ import {
   normalizeEditPath,
 } from '@/lib/repo/extractors';
 import { applyEditSequence } from '@/lib/repo/patcher';
+import { describePatchMarkerLeak } from '@/lib/repo/patchMarkers';
 import { flattenTree } from '@/lib/repo/heuristics';
 import {
   createNextScaffoldFiles,
@@ -1602,15 +1603,17 @@ export default function ChatComposer({
               );
               return;
             }
-            const { finalContent: patched, applied, noopCount, failed, strategies, unchanged } =
+            const { finalContent: patched, applied, noopCount, failed, strategies, unchanged, rejected } =
               applyEditSequence(targetFile.content, fileEdits);
-            if (applied === 0 || unchanged) {
+            if (rejected || applied === 0 || unchanged) {
               // CRITICAL: do NOT mutate the file when no edit produced a
               // real change. This is both the "every block failed to
               // match" case AND the "all blocks were no-op SEARCH===REPLACE"
               // case — both of which used to silently claim success.
               const reasonBits: string[] = [];
-              if (applied === 0) {
+              if (rejected) {
+                reasonBits.push(rejected);
+              } else if (applied === 0) {
                 reasonBits.push(
                   `none of the ${fileEdits.length} SEARCH/REPLACE block${fileEdits.length === 1 ? '' : 's'} matched the current file content`
                 );
@@ -1687,6 +1690,18 @@ export default function ChatComposer({
         }
         creates.forEach((file, idx) => {
           setTimeout(() => {
+            const markerLeak = describePatchMarkerLeak(file.content);
+            if (markerLeak) {
+              console.warn(`[Files] rejected create for ${file.path}: ${markerLeak}`);
+              toast.error(`Rejected ${file.path} because patch markers leaked into the file`);
+              onAddMessage({
+                id: prefixedId('msg'),
+                role: 'system',
+                content: `**File rejected**\n\n\`${file.path}\` was not saved because ${markerLeak}. Ask the agent to continue with a clean full-file block.`,
+                timestamp: new Date().toISOString(),
+              });
+              return;
+            }
             onAddFile({
               id: `file-${safeUUID()}`,
               name: file.name,
@@ -1701,10 +1716,11 @@ export default function ChatComposer({
           }, idx * 200);
         });
         if (creates.length > 0) {
-          createdAny = true;
-          createsCount = creates.length;
-          persistedScheduledPathsForDiagnostics.push(...creates.map((file) => file.path));
-          for (const c of creates) {
+          const safeCreates = creates.filter((file) => !describePatchMarkerLeak(file.content));
+          createdAny = safeCreates.length > 0;
+          createsCount = safeCreates.length;
+          persistedScheduledPathsForDiagnostics.push(...safeCreates.map((file) => file.path));
+          for (const c of safeCreates) {
             mutatedFilesByPath.set(c.path, {
               id: `file-${safeUUID()}`,
               name: c.name,
@@ -1724,7 +1740,7 @@ export default function ChatComposer({
         if (appliedAnyEdit || createdAny) {
           completePreviewStage(
             'generation',
-            `Applied ${edits.length} edit block(s) and ${creates.length} created file(s).`
+            `Applied ${edits.length} edit block(s) and ${createsCount} created file(s).`
           );
         } else if (malformedEdits.length > 0) {
           failPreviewStage(
