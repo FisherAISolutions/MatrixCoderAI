@@ -129,4 +129,38 @@ export default function AddNotePage({ searchParams }: AddNotePageProps) {
     expect(report.updates[0].file.content).toContain('::-webkit-scrollbar');
     expect(report.updates[0].file.content).not.toContain('@apply');
   });
+
+  it('moves pasted client directives and imports before executable code', () => {
+    const report = applyDeterministicFixes(
+      [
+        file(
+          'src/components/notes-workspace.tsx',
+          `export function helper() {
+  return 'notes';
+}
+
+'use client';
+import { useMemo, useState } from 'react';
+import type { Note } from '@/types/note';
+
+export default function NotesWorkspace({ notes }: { notes: Note[] }) {
+  const [query, setQuery] = useState('');
+  const visible = useMemo(() => notes.filter((note) => note.title.includes(query)), [notes, query]);
+  return <input value={query} onChange={(event) => setQuery(event.target.value)} />;
+}
+`
+        ),
+      ],
+      validation(
+        'src/components/notes-workspace.tsx',
+        "src/components/notes-workspace.tsx contains an import statement after executable code. ES imports must stay at the top of the module."
+      )
+    );
+
+    expect(report.mutated).toBe(true);
+    expect(report.updates[0].file.content).toMatch(
+      /^'use client';\nimport \{ useMemo, useState \} from 'react';\nimport type \{ Note \} from '@\/types\/note';/
+    );
+    expect(report.updates[0].file.content).toContain('export function helper()');
+  });
 });

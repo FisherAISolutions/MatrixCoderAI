@@ -19,6 +19,7 @@ import {
   detectWebContainerSupport,
   ensureDependenciesInstalled,
   getMountedFileAudit,
+  getServerReadySequence,
   isBooted,
   mountFiles,
   runCommand,
@@ -231,6 +232,7 @@ async function runRuntimeSmoke(
   const stepStart = performance.now();
   const readyTimeoutMs = Math.max(5000, totalTimeoutMs - SMOKE_FETCH_TIMEOUT_MS - SMOKE_POST_READY_DELAY_MS - 2000);
   beginPreviewStage('dev-server', 'Starting npm run dev for runtime smoke.');
+  const serverReadyBaseline = getServerReadySequence();
 
   // Start the dev server in the background.
   let bg;
@@ -255,7 +257,9 @@ async function runRuntimeSmoke(
   try {
     // Wait for server-ready (fired by manager.ts when the WC process
     // binds to any port).
-    const info = await waitForNextServerReady(readyTimeoutMs);
+    const info = await waitForNextServerReady(readyTimeoutMs, {
+      afterSequence: serverReadyBaseline,
+    });
     if (!info) {
       failPreviewStage(
         'dev-server',

@@ -799,18 +799,27 @@ export function isBooted(): boolean {
 export interface PreviewServerInfo {
   port: number;
   url: string;
+  sequence: number;
+  emittedAt: number;
 }
 
 let lastPreviewInfo: PreviewServerInfo | null = null;
 const previewSubscribers = new Set<(info: PreviewServerInfo) => void>();
 let serverReadyRegistered = false;
+let serverReadySequence = 0;
 
 function registerServerReadyOnce(wc: WebContainer) {
   if (serverReadyRegistered) return;
   serverReadyRegistered = true;
   try {
     wc.on('server-ready', (port: number, url: string) => {
-      lastPreviewInfo = { port, url };
+      serverReadySequence += 1;
+      lastPreviewInfo = {
+        port,
+        url,
+        sequence: serverReadySequence,
+        emittedAt: Date.now(),
+      };
       completePreviewStage('dev-server', `Server ready on port ${port}: ${url}`);
       for (const cb of previewSubscribers) {
         try {
@@ -848,6 +857,10 @@ export function getLastPreviewInfo(): PreviewServerInfo | null {
   return lastPreviewInfo;
 }
 
+export function getServerReadySequence(): number {
+  return serverReadySequence;
+}
+
 export function clearPreviewInfo() {
   lastPreviewInfo = null;
 }
@@ -856,15 +869,19 @@ export function clearPreviewInfo() {
  * Wait for the NEXT `server-ready` event after this call.
  *
  * 2026-01 runtime-smoke pass — the validation engine needs to start a
- * dev server, wait for its URL, then fetch it. We deliberately ignore
- * `lastPreviewInfo` (any previously-cached URL belongs to a stale
- * process from a prior run) and only resolve on a fresh emit.
+ * dev server, wait for its URL, then fetch it. Callers may pass the
+ * server-ready sequence captured before they spawned the dev server;
+ * the waiter accepts cached URLs only when they were emitted after
+ * that baseline, which avoids stale URLs without missing fast starts.
  *
  * Resolves with the {port, url} pair, or `null` if the timeout elapses
  * before any server reports ready. Never rejects — callers don't have
  * to wrap in try/catch.
  */
-export function waitForNextServerReady(timeoutMs: number): Promise<PreviewServerInfo | null> {
+export function waitForNextServerReady(
+  timeoutMs: number,
+  options: { afterSequence?: number } = {}
+): Promise<PreviewServerInfo | null> {
   return new Promise((resolve) => {
     let settled = false;
     // 2026-01 BUG FIX — cache snapshot MUST be captured BEFORE we
@@ -877,11 +894,15 @@ export function waitForNextServerReady(timeoutMs: number): Promise<PreviewServer
     // promise then hung until the timeout fired. Net effect: every
     // smoke run AFTER the first one falsely reported "Dev server
     // did not bind to a port within 60s".
-    const cachedAtSubscribeTime = lastPreviewInfo;
+    const afterSequence = options.afterSequence ?? serverReadySequence;
+    if (lastPreviewInfo && lastPreviewInfo.sequence > afterSequence) {
+      resolve(lastPreviewInfo);
+      return;
+    }
     const unsub = subscribeToServerReady((info) => {
       if (settled) return;
       // Skip the cached-replay tick — only honor freshly fired events.
-      if (cachedAtSubscribeTime && info.url === cachedAtSubscribeTime.url) {
+      if (info.sequence <= afterSequence) {
         return;
       }
       settled = true;

@@ -298,4 +298,46 @@ function AddNoteClient() {
     expect(result.errors.some((error) => error.file === 'src/app/add-note/page.tsx')).toBe(true);
     expect(result.errors.some((error) => /misplaced 'use client'|import statement after executable code/i.test(error.message))).toBe(true);
   });
+
+  it('does not flag valid multi-line import blocks as late imports', () => {
+    const result = runGeneratedQualityAudit([
+      pkg,
+      tsconfig,
+      file(
+        'src/components/notes-workflows.tsx',
+        `'use client';
+
+import Link from 'next/link';
+import { useRouter } from 'next/navigation';
+import type { ChangeEvent, FormEvent } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
+
+import { formatNoteTimestamp, searchNotes, sortNotesByDate, validateNoteDraft } from '@/lib/note-utils';
+import {
+  addStoredNote,
+  deleteStoredNote,
+  readStoredNotes,
+  seedNotesIfEmpty,
+  updateStoredNote,
+} from '@/lib/notes-storage';
+import type { Note, NoteDraft, NoteSortDirection, StorageResult } from '@/types/note';
+
+type HistoryFilter = 'all' | 'recent' | 'long-form';
+
+export function NotesWorkflows() {
+  const [filter, setFilter] = useState<HistoryFilter>('all');
+  useEffect(() => {
+    seedNotesIfEmpty();
+  }, []);
+  return <button onClick={() => setFilter('recent')}>{filter}</button>;
+}
+`
+      ),
+      file('src/lib/note-utils.ts', 'export function formatNoteTimestamp(){ return ""; }\nexport function searchNotes(){ return []; }\nexport function sortNotesByDate(){ return []; }\nexport function validateNoteDraft(){ return true; }'),
+      file('src/lib/notes-storage.ts', 'export function addStoredNote(){}\nexport function deleteStoredNote(){}\nexport function readStoredNotes(){ return []; }\nexport function seedNotesIfEmpty(){}\nexport function updateStoredNote(){}'),
+      file('src/types/note.ts', 'export interface Note { id: string }\nexport interface NoteDraft { title: string }\nexport type NoteSortDirection = "asc" | "desc";\nexport interface StorageResult { ok: boolean }'),
+    ]);
+
+    expect(result.ok).toBe(true);
+  });
 });

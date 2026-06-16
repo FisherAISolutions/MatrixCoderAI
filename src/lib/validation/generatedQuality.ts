@@ -245,10 +245,16 @@ function hasLateImportDeclaration(content: string): boolean {
   const lines = content.split(/\r?\n/);
   let seenCode = false;
   let inBlockComment = false;
+  let inImportDeclaration = false;
 
   for (const line of lines) {
     let trimmed = line.trim();
     if (!trimmed) continue;
+
+    if (inImportDeclaration) {
+      if (trimmed.includes(';')) inImportDeclaration = false;
+      continue;
+    }
 
     if (inBlockComment) {
       if (trimmed.includes('*/')) {
@@ -276,6 +282,7 @@ function hasLateImportDeclaration(content: string): boolean {
     }
     if (/^import(?:\s|{|\*)/.test(trimmed)) {
       if (seenCode) return true;
+      if (!trimmed.includes(';')) inImportDeclaration = true;
       continue;
     }
     seenCode = true;

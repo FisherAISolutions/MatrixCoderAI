@@ -175,6 +175,57 @@ function fixNext15PageProps(
   };
 }
 
+function isDirectiveLine(line: string): boolean {
+  return /^['"]use (?:client|server)['"];?$/.test(line.trim());
+}
+
+function isStaticImportStart(line: string): boolean {
+  return /^import(?:\s|['"{*])/.test(line.trim());
+}
+
+function normalizeModulePreamble(content: string): { content: string; reason?: string } {
+  const lines = content.split(/\r?\n/);
+  const directives: string[] = [];
+  const imports: string[] = [];
+  const body: string[] = [];
+
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    const trimmed = line.trim();
+
+    if (isDirectiveLine(line)) {
+      if (!directives.includes(trimmed)) directives.push(trimmed.endsWith(';') ? trimmed : `${trimmed};`);
+      continue;
+    }
+
+    if (isStaticImportStart(line)) {
+      const block = [line];
+      while (!/;\s*$/.test(lines[i]) && i + 1 < lines.length) {
+        i += 1;
+        block.push(lines[i]);
+      }
+      const importBlock = block.join('\n').trimEnd();
+      if (!imports.includes(importBlock)) imports.push(importBlock);
+      continue;
+    }
+
+    body.push(line);
+  }
+
+  while (body.length > 0 && body[0].trim() === '') body.shift();
+
+  const preamble = [...directives, ...imports];
+  if (preamble.length === 0) return { content };
+
+  const next = `${preamble.join('\n')}${body.length > 0 ? `\n\n${body.join('\n')}` : '\n'}`;
+  if (next === content) return { content };
+
+  return {
+    content: next,
+    reason: 'moved client directive and ES imports to the top of the module',
+  };
+}
+
 function isGlobalsCssPath(path: string): boolean {
   return /(?:^|\/)globals\.css$/i.test(path);
 }
@@ -261,6 +312,17 @@ export function applyDeterministicFixes(
     }
 
     if (!file?.content) continue;
+
+    if (/misplaced 'use client' directive|import statement after executable code/i.test(error.message)) {
+      const normalized = normalizeModulePreamble(file.content);
+      if (normalized.reason && normalized.content !== file.content) {
+        updates.set(file.path, {
+          file: updateFile(file, normalized.content),
+          reason: normalized.reason,
+        });
+        continue;
+      }
+    }
 
     const next15PageProps = fixNext15PageProps(file.content, error.message);
     if (next15PageProps.reason && next15PageProps.content !== file.content) {
