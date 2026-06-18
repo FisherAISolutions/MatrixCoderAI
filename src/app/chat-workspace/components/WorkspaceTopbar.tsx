@@ -20,6 +20,7 @@ import {
   Pencil,
   Search,
   Trash2,
+  Palette,
 } from 'lucide-react';
 import AppLogo from '@/components/ui/AppLogo';
 import { AgentType, MemoryStage } from './types';
@@ -216,6 +217,16 @@ export default function WorkspaceTopbar({
           >
             <Home size={10} />
             Home
+          </Link>
+          <Link
+            href="/style-inspiration"
+            className="hidden md:inline-flex items-center gap-1 px-2 py-1 border border-matrix-border text-matrix-green-muted hover:text-matrix-green hover:border-matrix-green text-[10px] uppercase tracking-[0.32em] transition-colors"
+            data-testid="workspace-inspiration-btn"
+            aria-label="Use any app as visual inspiration"
+            title="Use any app as visual inspiration"
+          >
+            <Palette size={10} />
+            Inspiration
           </Link>
         </div>
 

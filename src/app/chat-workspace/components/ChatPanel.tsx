@@ -27,6 +27,7 @@ interface Props {
   onDeleteFile: (fileId: string) => void;
   onSelectFile: (file: FileNode) => void;
   onSaveFinalAssistantMessage: (msg: ChatMessage) => void;
+  initialPrompt?: string | null;
 }
 
 export default function ChatPanel({
@@ -50,6 +51,7 @@ export default function ChatPanel({
   onDeleteFile,
   onSelectFile,
   onSaveFinalAssistantMessage,
+  initialPrompt,
 }: Props) {
   const bottomRef = useRef<HTMLDivElement>(null);
 
@@ -96,6 +98,7 @@ export default function ChatPanel({
         onUpdateFile={onUpdateFile}
         onDeleteFile={onDeleteFile}
         onSaveFinalAssistantMessage={onSaveFinalAssistantMessage}
+        initialPrompt={initialPrompt}
       />
     </div>
   );

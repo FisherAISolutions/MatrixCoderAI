@@ -1,5 +1,12 @@
 import { createClient } from '@supabase/supabase-js';
 import type { Database } from '@/types/supabase';
+import {
+  STYLE_INSPIRATION_BUCKET,
+  buildTemporaryStyleImagePath,
+  type StyleBrief,
+  type StyleProfile,
+  type StyleProfileDraft,
+} from '@/lib/styleInspiration';
 
 const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL || '';
 const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || '';
@@ -515,4 +522,98 @@ export async function bulkSaveFiles(
   }
 
   return { saved, failed };
+}
+
+type StyleProfileRow = Database['public']['Tables']['style_profiles']['Row'];
+type StyleProfileInsert = Database['public']['Tables']['style_profiles']['Insert'];
+
+function mapStyleProfile(row: StyleProfileRow): StyleProfile {
+  return {
+    id: row.id,
+    userId: row.user_id,
+    title: row.title,
+    appName: row.app_name,
+    feedback: row.feedback,
+    styleBrief: row.style_brief as unknown as StyleBrief,
+    promptBlock: row.prompt_block,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  };
+}
+
+export async function uploadTemporaryStyleImage(userId: string, file: File) {
+  if (!supabase) throw new Error('Supabase not configured');
+  const path = buildTemporaryStyleImagePath(userId, file.name);
+  const { error } = await supabase.storage
+    .from(STYLE_INSPIRATION_BUCKET)
+    .upload(path, file, {
+      cacheControl: '60',
+      contentType: file.type,
+      upsert: false,
+    });
+
+  if (error) throw error;
+  return { path };
+}
+
+export async function deleteTemporaryStyleImages(paths: string[]) {
+  if (!supabase || paths.length === 0) return;
+  const { error } = await supabase.storage
+    .from(STYLE_INSPIRATION_BUCKET)
+    .remove(paths);
+
+  if (error) {
+    console.warn('deleteTemporaryStyleImages error:', error.message);
+  }
+}
+
+export async function saveStyleProfile(userId: string, draft: StyleProfileDraft) {
+  if (!supabase) throw new Error('Supabase not configured');
+
+  const row: StyleProfileInsert = {
+    user_id: userId,
+    title: draft.title,
+    app_name: draft.appName,
+    feedback: draft.feedback,
+    style_brief: draft.styleBrief as unknown as StyleProfileInsert['style_brief'],
+    prompt_block: draft.promptBlock,
+  };
+
+  const { data, error } = await supabase
+    .from('style_profiles')
+    .insert(row)
+    .select()
+    .single();
+
+  if (error) throw error;
+  return mapStyleProfile(data);
+}
+
+export async function loadStyleProfiles(userId: string) {
+  if (!supabase) return [];
+
+  const { data, error } = await supabase
+    .from('style_profiles')
+    .select('*')
+    .eq('user_id', userId)
+    .order('updated_at', { ascending: false });
+
+  if (error) {
+    console.error('loadStyleProfiles error:', error.message);
+    return [];
+  }
+
+  return (data ?? []).map(mapStyleProfile);
+}
+
+export async function deleteStyleProfile(profileId: string, userId: string) {
+  if (!supabase) return;
+
+  const { error } = await supabase
+    .from('style_profiles')
+    .delete()
+    .eq('id', profileId)
+    .eq('user_id', userId);
+
+  if (error) throw error;
 }

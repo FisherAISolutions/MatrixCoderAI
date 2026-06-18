@@ -154,6 +154,7 @@ interface Props {
   onUpdateFile: (file: FileNode) => void;
   onDeleteFile: (fileId: string) => void;
   onSaveFinalAssistantMessage: (msg: ChatMessage) => void;
+  initialPrompt?: string | null;
 }
 
 const AGENT_OPTIONS: { type: AgentType | 'auto'; label: string; icon: React.ReactNode; description: string }[] = [
@@ -1070,6 +1071,7 @@ export default function ChatComposer({
   onUpdateFile,
   onDeleteFile,
   onSaveFinalAssistantMessage,
+  initialPrompt,
 }: Props) {
   const [input, setInput] = useState('');
   const [selectedAgent, setSelectedAgent] = useState<AgentType | 'auto'>('auto');
@@ -1085,8 +1087,15 @@ export default function ChatComposer({
   // activity message from "Sending request to AI…" → "Streaming response…".
   const streamingMessageShownRef = useRef<boolean>(false);
   const batchGenerationRef = useRef<ActiveBatchGeneration | null>(null);
+  const consumedInitialPromptRef = useRef(false);
 
   const { response, isLoading, error, sendMessage } = useChat(AI_PROVIDER, PRIMARY_MODEL, true);
+
+  useEffect(() => {
+    if (consumedInitialPromptRef.current || !initialPrompt?.trim()) return;
+    consumedInitialPromptRef.current = true;
+    setInput((current) => (current.trim() ? current : initialPrompt.trim()));
+  }, [initialPrompt]);
 
   useEffect(() => {
     pushTerminalLog({

@@ -24,6 +24,7 @@ import {
   clearStoredActiveFilePath,
 } from '@/lib/storage/persistence';
 import { clearTerminalLogs, pushTerminalLog } from '@/lib/terminal/store';
+import { consumeStylePromptForWorkspace } from '@/lib/styleInspiration';
 
 // Helper function to build file tree from flat file list
 function buildFileTree(files: any[]): FileNode[] {
@@ -147,6 +148,7 @@ export default function ChatWorkspacePage() {
   // "Searching embeddings…", "Streaming response…"). Owned here; passed
   // down to ChatPanel → AgentStatusBar for display. Cleared on finish/error.
   const [activityStatus, setActivityStatus] = useState<string | null>(null);
+  const [initialStylePrompt, setInitialStylePrompt] = useState<string | null>(null);
 
   // --- Zip import state (Phase 1) ---
   const [importPhase, setImportPhase] = useState<ImportPhase>('done');
@@ -169,6 +171,13 @@ export default function ChatWorkspacePage() {
       initMemoryManager(effectiveSessionId);
     }
   }, [effectiveSessionId]);
+
+  useEffect(() => {
+    const prompt = consumeStylePromptForWorkspace();
+    if (!prompt) return;
+    setInitialStylePrompt(prompt);
+    toast.success('Style inspiration prompt loaded');
+  }, []);
 
   // Load initial data from Supabase
   useEffect(() => {
@@ -1153,6 +1162,7 @@ export default function ChatWorkspacePage() {
   onDeleteFile={deleteFile}
   onSelectFile={setActiveFile}
   onSaveFinalAssistantMessage={persistAssistantMessage}
+  initialPrompt={initialStylePrompt}
 />
           {/* 2026-01 regression fix — workspace-level <FileViewer/>
            *  removed. It was wrapped in `<div className="relative">` with
