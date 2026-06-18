@@ -23,6 +23,7 @@ import {
   Palette,
 } from 'lucide-react';
 import AppLogo from '@/components/ui/AppLogo';
+import ThemeSwitcher from '@/components/theme/ThemeSwitcher';
 import { AgentType, MemoryStage } from './types';
 
 interface WorkspaceSession {
@@ -405,6 +406,8 @@ export default function WorkspaceTopbar({
             </span>
           </button>
         )}
+
+        <ThemeSwitcher />
 
         <button
           className="text-matrix-green-muted hover:text-matrix-green transition-colors p-1"

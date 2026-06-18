@@ -6,6 +6,63 @@
 
 @layer base {
   :root {
+    --theme-background: #0a0a0a;
+    --theme-surface: #111111;
+    --theme-surface-secondary: #0d1a0d;
+    --theme-border: #0a5c25;
+    --theme-text-primary: #00ff66;
+    --theme-text-secondary: #3fd07a;
+    --theme-success: #00ff66;
+    --theme-warning: #ffc857;
+    --theme-error: #ff6b6b;
+    --theme-accent-primary: #39ff88;
+    --theme-accent-secondary: #7cc4ff;
+    --theme-glow-primary: rgba(0, 255, 102, 0.45);
+    --theme-glow-secondary: rgba(0, 255, 102, 0.18);
+    --theme-panel-background: #111111;
+    --theme-panel-border: #0a5c25;
+    --theme-panel-shadow: none;
+    --theme-panel-filter: none;
+    --theme-active-state: #001a00;
+    --theme-hover-state: #0d1a0d;
+    --theme-muted-text: #3fd07a;
+    --theme-strong-text: #39ff88;
+    --theme-ai-accent: #d27bff;
+    --theme-success-accent: #00ff66;
+    --theme-preview-accent: #7cc4ff;
+    --theme-terminal-accent: #00ff66;
+    --theme-background-pattern: none;
+    --theme-panel-background-rgb: 17, 17, 17;
+    --theme-active-state-rgb: 0, 26, 0;
+    --theme-hover-state-rgb: 13, 26, 13;
+    --theme-success-accent-rgb: 0, 255, 102;
+    --theme-preview-accent-rgb: 124, 196, 255;
+    --theme-terminal-accent-rgb: 0, 255, 102;
+    --matrix-bg: #0a0a0a;
+    --matrix-card: #111111;
+    --matrix-surface: #0d1a0d;
+    --matrix-green: #00ff66;
+    --matrix-green-bright: #39ff88;
+    --matrix-green-dim: #39ff88;
+    --matrix-green-muted: #3fd07a;
+    --matrix-green-faint: #0a4e1f;
+    --matrix-green-ghost: #001a00;
+    --matrix-border: #0a5c25;
+    --matrix-border-bright: #00ff66;
+    --matrix-blue: #7cc4ff;
+    --matrix-amber: #ffc857;
+    --matrix-purple: #d27bff;
+    --matrix-red: #ff6b6b;
+    --matrix-bg-rgb: 10, 10, 10;
+    --matrix-card-rgb: 17, 17, 17;
+    --matrix-surface-rgb: 13, 26, 13;
+    --matrix-green-rgb: 0, 255, 102;
+    --matrix-green-muted-rgb: 63, 208, 122;
+    --matrix-border-rgb: 10, 92, 37;
+    --matrix-blue-rgb: 124, 196, 255;
+    --matrix-amber-rgb: 255, 200, 87;
+    --matrix-purple-rgb: 210, 123, 255;
+    --matrix-red-rgb: 255, 107, 107;
     --background: 0 0% 4%;
     --foreground: 120 100% 50%;
     --card: 0 0% 8%;
@@ -27,8 +84,10 @@
   }
 
   body {
-    background-color: #0a0a0a;
-    color: #00ff66;
+    background-color: var(--matrix-bg);
+    background-image: var(--theme-background-pattern);
+    background-attachment: fixed;
+    color: var(--matrix-green);
     font-family: 'JetBrains Mono', monospace;
     -webkit-font-smoothing: antialiased;
     overflow: hidden;
@@ -55,8 +114,8 @@
   }
 
   ::selection {
-    background-color: #00ff6644;
-    color: #d6ffe5;
+    background-color: rgba(var(--matrix-green-rgb), 0.27);
+    color: var(--matrix-green-bright);
   }
 
   ::-webkit-scrollbar {
@@ -65,23 +124,23 @@
   }
 
   ::-webkit-scrollbar-track {
-    background: #0a0a0a;
+    background: var(--matrix-bg);
   }
 
   ::-webkit-scrollbar-thumb {
-    background: #0a5c25;
+    background: var(--matrix-border);
     border-radius: 2px;
   }
 
   ::-webkit-scrollbar-thumb:hover {
-    background: #00ff66;
+    background: var(--matrix-green);
   }
 
   input:-webkit-autofill,
   input:-webkit-autofill:hover,
   input:-webkit-autofill:focus {
-    -webkit-text-fill-color: #00ff66;
-    -webkit-box-shadow: 0 0 0px 1000px #0d1a0d inset;
+    -webkit-text-fill-color: var(--matrix-green);
+    -webkit-box-shadow: 0 0 0px 1000px var(--matrix-surface) inset;
     transition: background-color 5000s ease-in-out 0s;
   }
 }
@@ -99,47 +158,47 @@
       0deg,
       transparent,
       transparent 2px,
-      rgba(0, 255, 102, 0.02) 2px,
-      rgba(0, 255, 102, 0.02) 4px
+      rgba(var(--matrix-green-rgb), 0.02) 2px,
+      rgba(var(--matrix-green-rgb), 0.02) 4px
     );
   }
 
   .neon-border {
-    border: 1px solid #00ff66;
-    box-shadow: 0 0 8px rgba(0, 255, 102, 0.25), inset 0 0 8px rgba(0, 255, 102, 0.06);
+    border: 1px solid var(--matrix-green);
+    box-shadow: 0 0 8px var(--theme-glow-secondary), inset 0 0 8px rgba(var(--matrix-green-rgb), 0.06);
   }
 
   .neon-border-muted {
-    border: 1px solid #0a5c25;
+    border: 1px solid var(--matrix-border);
   }
 
   .neon-glow {
-    box-shadow: 0 0 16px rgba(0, 255, 102, 0.45), 0 0 32px rgba(0, 255, 102, 0.18);
+    box-shadow: 0 0 16px var(--theme-glow-primary), 0 0 32px var(--theme-glow-secondary);
   }
 
   /* Readability pass — subtle, not blurry */
   .neon-text-glow {
     text-shadow:
-      0 0 4px rgba(0, 255, 100, 0.75),
-      0 0 10px rgba(0, 255, 100, 0.35);
+      0 0 4px var(--theme-glow-primary),
+      0 0 10px var(--theme-glow-secondary);
   }
 
   /* Lighter variant for body copy / headings without the heavy glow */
   .matrix-readable {
-    color: #d6ffe5;
+    color: var(--matrix-green-bright);
   }
 
   .terminal-cursor::after {
     content: '▋';
     animation: cursor-blink 1s step-end infinite;
-    color: #00ff66;
+    color: var(--matrix-green);
     margin-left: 1px;
   }
 
   .streaming-cursor::after {
     content: '█';
     animation: cursor-blink 0.7s step-end infinite;
-    color: #00ff66;
+    color: var(--matrix-green);
     font-size: 0.9em;
   }
 
@@ -163,8 +222,8 @@
   }
 
   @keyframes pulse-green {
-    0%, 100% { box-shadow: 0 0 4px rgba(0,255,102,0.45); }
-    50% { box-shadow: 0 0 16px rgba(0,255,102,0.8), 0 0 32px rgba(0,255,102,0.35); }
+    0%, 100% { box-shadow: 0 0 4px var(--theme-glow-secondary); }
+    50% { box-shadow: 0 0 16px var(--theme-glow-primary), 0 0 32px var(--theme-glow-secondary); }
   }
 
   @keyframes slide-up {
@@ -201,67 +260,91 @@
   }
 
   .agent-planning {
-    background: rgba(124, 196, 255, 0.15);
-    border: 1px solid rgba(124, 196, 255, 0.5);
-    color: #b8dcff;
+    background: rgba(var(--matrix-blue-rgb), 0.15);
+    border: 1px solid rgba(var(--matrix-blue-rgb), 0.5);
+    color: var(--matrix-blue);
   }
 
   .agent-coding {
-    background: rgba(0, 255, 102, 0.12);
-    border: 1px solid rgba(0, 255, 102, 0.45);
-    color: #00ff66;
+    background: rgba(var(--matrix-green-rgb), 0.12);
+    border: 1px solid rgba(var(--matrix-green-rgb), 0.45);
+    color: var(--matrix-green);
   }
 
   .agent-reviewing {
-    background: rgba(255, 200, 87, 0.12);
-    border: 1px solid rgba(255, 200, 87, 0.45);
-    color: #ffd17a;
+    background: rgba(var(--matrix-amber-rgb), 0.12);
+    border: 1px solid rgba(var(--matrix-amber-rgb), 0.45);
+    color: var(--matrix-amber);
   }
 
   .agent-orchestrator {
-    background: rgba(210, 123, 255, 0.12);
-    border: 1px solid rgba(210, 123, 255, 0.45);
-    color: #e6b8ff;
+    background: rgba(var(--matrix-purple-rgb), 0.12);
+    border: 1px solid rgba(var(--matrix-purple-rgb), 0.45);
+    color: var(--matrix-purple);
   }
 
   .file-tree-item:hover {
-    background: rgba(0, 255, 102, 0.08);
+    background: var(--theme-hover-state);
   }
 
   .file-tree-item.active {
-    background: rgba(0, 255, 102, 0.16);
-    border-left: 2px solid #00ff66;
+    background: var(--theme-active-state);
+    border-left: 2px solid var(--matrix-green);
   }
 
   .code-block {
-    background: #050f05;
-    border: 1px solid #0a5c25;
+    background: var(--matrix-bg);
+    border: 1px solid var(--matrix-border);
     border-radius: 4px;
     font-family: 'JetBrains Mono', monospace;
     font-size: 13px;
     line-height: 1.6;
-    color: #d6ffe5;
+    color: var(--matrix-green-bright);
     overflow-x: auto;
   }
 
   .message-user {
-    background: rgba(10, 92, 37, 0.25);
-    border: 1px solid #0a5c25;
+    background: rgba(var(--matrix-border-rgb), 0.25);
+    border: 1px solid var(--matrix-border);
   }
 
   .message-assistant {
-    background: rgba(10, 10, 10, 0.8);
-    border: 1px solid #0a4e1f;
+    background: rgba(var(--matrix-bg-rgb), 0.8);
+    border: 1px solid var(--matrix-green-faint);
   }
 
   .resize-handle {
     width: 3px;
-    background: #0a4e1f;
+    background: var(--matrix-green-faint);
     cursor: col-resize;
     transition: background 0.15s;
   }
 
   .resize-handle:hover {
-    background: #00ff66;
+    background: var(--matrix-green);
+  }
+
+  .bg-matrix-card,
+  .bg-matrix-surface {
+    box-shadow: var(--theme-panel-shadow);
+    backdrop-filter: var(--theme-panel-filter);
+    -webkit-backdrop-filter: var(--theme-panel-filter);
+  }
+
+  .hover\:bg-matrix-green-ghost:hover {
+    background-color: var(--theme-hover-state);
+  }
+
+  .bg-matrix-green-ghost {
+    background-color: var(--theme-active-state);
+  }
+
+  .text-matrix-green-muted {
+    color: var(--theme-muted-text);
+  }
+
+  .text-matrix-green-bright,
+  .matrix-readable {
+    color: var(--theme-strong-text);
   }
 }
