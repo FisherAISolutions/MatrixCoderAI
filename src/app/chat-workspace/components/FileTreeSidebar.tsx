@@ -337,14 +337,14 @@ export default function FileTreeSidebar({ fileTree, activeFile, onSelectFile, on
   };
 
   return (
-    <div className="flex flex-col h-full bg-matrix-bg" style={{ width }}>
+    <div className="workspace-file-tree flex flex-col h-full bg-matrix-bg" style={{ width }}>
       {/* Header */}
-      <div className="flex items-center justify-between px-3 py-2 border-b border-matrix-border flex-shrink-0">
+      <div className="workspace-zone-header flex items-center justify-between px-3 py-2 border-b border-matrix-border flex-shrink-0">
         <div className="flex items-center gap-1.5">
           <span className="text-xs font-mono text-matrix-green-muted tracking-widest uppercase">
             Files
           </span>
-          <span className="text-xs font-mono text-matrix-green bg-matrix-green-ghost px-1.5 py-0.5 rounded-sm">
+          <span className="workspace-status-badge text-xs font-mono px-1.5 py-0.5 rounded-sm">
             {totalFiles}
           </span>
         </div>
@@ -396,7 +396,7 @@ export default function FileTreeSidebar({ fileTree, activeFile, onSelectFile, on
       {/* Inline new-file mini-input (toggled by the + button above). */}
       {isCreatingFile && (
         <div
-          className="flex items-center gap-1.5 px-3 py-1.5 border-b border-matrix-border bg-matrix-surface flex-shrink-0"
+          className="workspace-zone-header flex items-center gap-1.5 px-3 py-1.5 border-b border-matrix-border bg-matrix-surface flex-shrink-0"
           data-testid="new-file-row"
         >
           <FileCode size={11} className="text-matrix-green-muted flex-shrink-0" />

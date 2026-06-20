@@ -57,7 +57,7 @@ export default function AgentStatusBar({
 }: Props) {
   return (
     <div
-      className="flex items-center gap-2 px-4 py-2 border-b border-matrix-border flex-shrink-0 overflow-x-auto"
+      className="workspace-agent-tabs flex items-center gap-2 px-4 py-2 border-b border-matrix-border flex-shrink-0 overflow-x-auto"
       data-testid="agent-status-bar"
     >
       {AGENTS.map((agent) => {
@@ -65,7 +65,7 @@ export default function AgentStatusBar({
         return (
           <div
             key={`agent-status-${agent.type}`}
-            className={`flex items-center gap-1.5 px-2.5 py-1 rounded-sm text-xs font-mono transition-all duration-200 flex-shrink-0 ${
+          className={`flex items-center gap-1.5 px-2.5 py-1 rounded-sm text-xs font-mono transition-all duration-200 flex-shrink-0 ${
               isActive
                 ? `${AGENT_CLASSES[agent.type]} ${isStreaming ? 'animate-pulse-green' : ''}`
                 : 'text-matrix-green-muted border border-transparent'
@@ -83,7 +83,7 @@ export default function AgentStatusBar({
 
       {activityStatus ? (
         <div
-          className="flex items-center gap-1.5 px-2 py-1 rounded-sm text-xs font-mono text-matrix-green border border-matrix-border bg-matrix-green-ghost flex-shrink-0 max-w-[60%] truncate"
+          className="workspace-status-badge flex items-center gap-1.5 px-2 py-1 rounded-sm text-xs font-mono flex-shrink-0 max-w-[60%] truncate"
           title={activityStatus}
           data-testid="agent-activity-status"
         >

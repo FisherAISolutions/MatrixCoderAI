@@ -14,16 +14,24 @@ import type { ParsedError } from './errorParser';
 import type { FileNode } from '@/app/chat-workspace/components/types';
 import { flattenTree } from '@/lib/repo/heuristics';
 
-const MAX_FILE_CONTENT_CHARS = 6000;
-const MAX_ATTACHED_FILES = 8;
-const MAX_ERRORS_IN_PROMPT = 25;
-const MAX_RAW_LOG_CHARS = 6000;
+const MAX_FILE_CONTENT_CHARS = 3000;
+const COMPACT_FILE_CONTENT_CHARS = 1400;
+const MAX_ATTACHED_FILES = 4;
+const COMPACT_ATTACHED_FILES = 2;
+const MAX_ERRORS_IN_PROMPT = 8;
+const COMPACT_ERRORS_IN_PROMPT = 4;
+const MAX_RAW_LOG_CHARS = 3000;
+const COMPACT_RAW_LOG_CHARS = 1400;
+const ESTIMATED_CHARS_PER_TOKEN = 4;
 
 // Matches prerender/export failures that name a ROUTE rather than a
 // file — e.g. `Error occurred prerendering page "/add"` and
 // `Export encountered an error on /add/page: /add, exiting the build.`
 const PRERENDER_ROUTE_REGEX =
   /(?:prerendering page "([^"]+)"|Export encountered (?:an error|errors) on ([^\s,:]+))/g;
+
+const RAW_LOG_FILE_PATH_REGEX =
+  /(?:^|[\s("'`>])(\.?\/?(?:src|app)\/[^\s:()"'`<>]+\.(?:tsx?|jsx?|css|mjs|cjs))(?:[:(]\d+(?::|,)\d+\)?)?/g;
 
 /**
  * Map an App Router route (e.g. `/add` or `/add/page`) to the file
@@ -129,10 +137,10 @@ STRICT RULES (violations make the auto-fix loop misfire):
    \`./globals.css\`, and delete the old root \`app/\` files.
 
 8. Preserve requested route names exactly. If the request or validation
-   names \`add-task\`, do not create \`add\`; if both aliases exist, merge
-   links/imports into the requested route and remove the duplicate route
-   file. The same applies to \`edit-task\` vs \`edit\` and
-   \`task-history\` vs \`history\`.
+   names \`add-task\`, \`workouts\`, \`progress\`, \`timer\`, \`settings\`,
+   or another domain route, do not replace it with generic \`add\`,
+   \`edit\`, or \`history\` routes. Only create notes-style routes such as
+   \`add-note\` or \`history\` when the user explicitly requested them.
 
 9. For Next.js 15 App Router page props, \`params\` and
    \`searchParams\` are Promise-like in generated type checks. If a
@@ -154,7 +162,7 @@ SEARCH blocks are silently rejected by the patcher, and edit fences
 missing \`<<<<<<< SEARCH\` are surfaced as "Patch rejected: missing
 \`<<<<<<< SEARCH\` marker." to the user. Be precise.`;
 
-interface BuildPromptOptions {
+export interface BuildPromptOptions {
   errors: ParsedError[];
   files: FileNode[];
   attempt: number;
@@ -177,6 +185,32 @@ interface BuildPromptOptions {
   infrastructureError?: string;
   /** Original user request, included for requirement-aware repairs. */
   requirements?: string;
+  /** Shrink context after a token-limit failure. */
+  compact?: boolean;
+}
+
+export interface AutoFixPromptDiagnostics {
+  attachedFileCount: number;
+  attachedFilePaths: string[];
+  promptChars: number;
+  estimatedTokens: number;
+  rawLogChars: number;
+  truncatedRawLogChars: number;
+  maxAttachedFiles: number;
+  maxFileContentChars: number;
+  maxRawLogChars: number;
+  compact: boolean;
+}
+
+function getPromptLimits(compact = false) {
+  return {
+    maxAttachedFiles: compact ? COMPACT_ATTACHED_FILES : MAX_ATTACHED_FILES,
+    maxFileContentChars: compact
+      ? COMPACT_FILE_CONTENT_CHARS
+      : MAX_FILE_CONTENT_CHARS,
+    maxRawLogChars: compact ? COMPACT_RAW_LOG_CHARS : MAX_RAW_LOG_CHARS,
+    maxErrors: compact ? COMPACT_ERRORS_IN_PROMPT : MAX_ERRORS_IN_PROMPT,
+  };
 }
 
 /**
@@ -190,7 +224,11 @@ interface BuildPromptOptions {
 function selectRelevantFiles(
   errors: ParsedError[],
   files: FileNode[],
-  extraLogText?: string
+  extraLogText?: string,
+  options: {
+    failedStep?: string;
+    maxAttachedFiles?: number;
+  } = {}
 ): FileNode[] {
   const flat = flattenTree(files).filter(
     (f) => f.type === 'file' && typeof f.content === 'string'
@@ -235,31 +273,76 @@ function selectRelevantFiles(
     }
   }
 
-  // Always include a couple of root configs (helps the AI when an error
-  // hints at a path-alias issue or a missing type definition).
-  for (const rootFile of [
+  RAW_LOG_FILE_PATH_REGEX.lastIndex = 0;
+  let fm: RegExpExecArray | null;
+  while ((fm = RAW_LOG_FILE_PATH_REGEX.exec(extraLogText ?? '')) !== null) {
+    const normalized = fm[1].replace(/\\/g, '/').replace(/^\.\//, '').replace(/^\//, '');
+    if (byPath.has(normalized)) {
+      pick.add(normalized);
+      continue;
+    }
+    const suffixMatch = flat.find((f) => f.path.endsWith('/' + normalized));
+    if (suffixMatch) pick.add(suffixMatch.path);
+  }
+
+  const rootFiles = [
     'tsconfig.json',
     'next.config.mjs',
     'next.config.ts',
     'package.json',
-  ]) {
-    if (byPath.has(rootFile)) pick.add(rootFile);
+  ];
+  const logText = extraLogText ?? '';
+
+  // Root configs are useful only when they are directly implicated. The
+  // previous "always attach package/tsconfig/next config" rule made
+  // auto-fix prompts balloon even when the error was a single component.
+  for (const rootFile of rootFiles) {
+    const namedByError = errors.some((err) => {
+      const file = err.file?.replace(/^\.\//, '').replace(/^\//, '');
+      return file === rootFile;
+    });
+    if (byPath.has(rootFile) && (namedByError || logText.includes(rootFile))) {
+      pick.add(rootFile);
+    }
+  }
+
+  // Install failures usually need package.json even when npm's output
+  // does not mention it by path.
+  if (
+    pick.size === 0 &&
+    options.failedStep === 'install' &&
+    byPath.has('package.json')
+  ) {
+    pick.add('package.json');
+  }
+
+  // If no structured errors parsed and the raw log points at missing
+  // project tooling, attach only the smallest relevant config set.
+  if (
+    pick.size === 0 &&
+    /\b(?:tsc|next|npm)\b[\s\S]{0,80}(?:not found|missing|cannot find|not recognized)/i.test(
+      logText
+    )
+  ) {
+    for (const rootFile of ['package.json', 'tsconfig.json']) {
+      if (byPath.has(rootFile)) pick.add(rootFile);
+    }
   }
 
   const ordered = Array.from(pick)
     .map((p) => byPath.get(p)!)
     .filter(Boolean)
-    .slice(0, MAX_ATTACHED_FILES);
+    .slice(0, options.maxAttachedFiles ?? MAX_ATTACHED_FILES);
 
   return ordered;
 }
 
-function renderFileBlock(file: FileNode): string {
+function renderFileBlock(file: FileNode, maxChars = MAX_FILE_CONTENT_CHARS): string {
   const content = file.content ?? '';
   const truncated =
-    content.length > MAX_FILE_CONTENT_CHARS
-      ? content.slice(0, MAX_FILE_CONTENT_CHARS) +
-        `\n\n/* [… ${content.length - MAX_FILE_CONTENT_CHARS} chars truncated …] */`
+    content.length > maxChars
+      ? content.slice(0, maxChars) +
+        `\n\n/* [... ${content.length - maxChars} chars truncated ...] */`
       : content;
   const ext = file.path.split('.').pop() ?? 'ts';
   return `\`\`\`${ext}
@@ -282,7 +365,10 @@ function renderError(err: ParsedError, idx: number): string {
  *
  * The system prompt (AUTO_FIX_SYSTEM_PROMPT) is sent separately.
  */
-export function buildAutoFixUserPrompt(opts: BuildPromptOptions): string {
+export function buildAutoFixPromptWithDiagnostics(opts: BuildPromptOptions): {
+  prompt: string;
+  diagnostics: AutoFixPromptDiagnostics;
+} {
   const {
     errors,
     files,
@@ -293,9 +379,14 @@ export function buildAutoFixUserPrompt(opts: BuildPromptOptions): string {
     rawLog,
     infrastructureError,
     requirements,
+    compact = false,
   } = opts;
-  const errorsToShow = errors.slice(0, MAX_ERRORS_IN_PROMPT);
-  const relevant = selectRelevantFiles(errors, files, rawLog);
+  const limits = getPromptLimits(compact);
+  const errorsToShow = errors.slice(0, limits.maxErrors);
+  const relevant = selectRelevantFiles(errors, files, rawLog, {
+    failedStep,
+    maxAttachedFiles: limits.maxAttachedFiles,
+  });
 
   const prerenderFailure =
     /prerendering page|Export encountered (?:an error|errors) on |Missing workStore|createPrerenderParams/i.test(
@@ -307,7 +398,9 @@ export function buildAutoFixUserPrompt(opts: BuildPromptOptions): string {
     : '_(No structured errors were extracted from the tool output — diagnose the failure directly from the raw log below.)_';
 
   const filesBlock = relevant.length
-    ? relevant.map(renderFileBlock).join('\n\n')
+    ? relevant
+        .map((file) => renderFileBlock(file, limits.maxFileContentChars))
+        .join('\n\n')
     : '(no relevant files available — emit a CREATE block if a file is missing)';
 
   const previousNote = previousAttemptSummary
@@ -322,8 +415,8 @@ export function buildAutoFixUserPrompt(opts: BuildPromptOptions): string {
   // Always include the raw log if available — this is what saved us
   // from the "0 errors, AI returns nothing" failure mode.
   const truncatedRaw =
-    rawLog && rawLog.length > MAX_RAW_LOG_CHARS
-      ? `${rawLog.slice(0, Math.floor(MAX_RAW_LOG_CHARS * 0.4))}\n\n[… ${rawLog.length - MAX_RAW_LOG_CHARS} chars elided …]\n\n${rawLog.slice(-Math.floor(MAX_RAW_LOG_CHARS * 0.6))}`
+    rawLog && rawLog.length > limits.maxRawLogChars
+      ? `${rawLog.slice(0, Math.floor(limits.maxRawLogChars * 0.4))}\n\n[... ${rawLog.length - limits.maxRawLogChars} chars elided ...]\n\n${rawLog.slice(-Math.floor(limits.maxRawLogChars * 0.6))}`
       : rawLog ?? '';
 
   const rawLogBlock = truncatedRaw
@@ -353,10 +446,10 @@ sandbox crash) that no source patch could possibly fix.`
     : '';
 
   const requirementsBlock = requirements?.trim()
-    ? `\n\n## Original user request / requirements\n\n\`\`\`\n${requirements.trim().slice(0, 3000)}\n\`\`\``
+    ? `\n\n## Original user request / requirements\n\n\`\`\`\n${requirements.trim().slice(0, compact ? 1500 : 3000)}\n\`\`\``
     : '';
 
-  return `# Auto-Fix Attempt ${attempt} / ${maxAttempts}
+  const prompt = `# Auto-Fix Attempt ${attempt} / ${maxAttempts}
 
 The ${failedStep ?? 'build'} step inside the sandbox FAILED. Emit
 SEARCH/REPLACE patches to fix the problem. Do not rewrite unrelated
@@ -485,9 +578,12 @@ Rules for this repair:
   - Do NOT create tiny placeholders. Required generated components must
     contain state, handlers, rendering, and persistence needed by the
     request.
-  - For \`HistoryPage\` in a calorie/entry tracker, implement search,
-    filter, edit, delete, and localStorage wiring. A tiny \`return null\`
-    or one-line \`<main>History</main>\` component is a failed repair.
+  - For requested collection/workflow pages, implement search, filter,
+    edit, delete, and localStorage wiring where those features are in
+    the user request. A tiny \`return null\` or one-line placeholder
+    component is a failed repair. Do not create a \`/history\` page just
+    because edit/delete/search is requested; use the route or component
+    that matches the app domain.
 
 ` : ''}${failedStep === 'style-audit' ? `## Style audit failed — the app compiles but renders UNSTYLED
 
@@ -553,4 +649,29 @@ genuinely missing files). Address every error you can with certainty
 from the raw output above. If you truly cannot determine the fix,
 emit a SHORT \`SKIP: <reason>\` line instead of guessing — the loop
 will gather more context and retry.`;
+
+  return {
+    prompt,
+    diagnostics: {
+      attachedFileCount: relevant.length,
+      attachedFilePaths: relevant.map((file) => file.path),
+      promptChars: prompt.length,
+      estimatedTokens: Math.ceil(prompt.length / ESTIMATED_CHARS_PER_TOKEN),
+      rawLogChars: rawLog?.length ?? 0,
+      truncatedRawLogChars: truncatedRaw.length,
+      maxAttachedFiles: limits.maxAttachedFiles,
+      maxFileContentChars: limits.maxFileContentChars,
+      maxRawLogChars: limits.maxRawLogChars,
+      compact,
+    },
+  };
+}
+
+/**
+ * Build the user-role prompt for one auto-fix attempt.
+ *
+ * The system prompt (AUTO_FIX_SYSTEM_PROMPT) is sent separately.
+ */
+export function buildAutoFixUserPrompt(opts: BuildPromptOptions): string {
+  return buildAutoFixPromptWithDiagnostics(opts).prompt;
 }

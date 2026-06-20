@@ -357,10 +357,12 @@ export default function ChatWorkspacePage() {
 
   const updateLastMessage = useCallback((updater: (prev: ChatMessage) => ChatMessage) => {
     setMessages((prev) => {
+      if (prev.length === 0) return prev;
+      const last = prev[prev.length - 1];
+      const updated = updater(last);
+      if (updated === last) return prev;
       const next = [...prev];
-      if (next.length > 0) {
-        next[next.length - 1] = updater(next[next.length - 1]);
-      }
+      next[next.length - 1] = updated;
       return next;
     });
   }, []);
@@ -997,7 +999,7 @@ export default function ChatWorkspacePage() {
 
   return (
     <div
-      className="flex flex-col h-screen w-screen bg-matrix-bg overflow-hidden"
+      className="workspace-shell flex flex-col h-screen w-screen bg-matrix-bg overflow-hidden"
       onDragEnter={handleDragEnter}
       onDragLeave={handleDragLeave}
       onDragOver={handleDragOver}
@@ -1098,7 +1100,7 @@ export default function ChatWorkspacePage() {
       <div className="flex flex-1 overflow-hidden">
         {/* File tree sidebar */}
         <div
-          className={`flex-shrink-0 transition-all duration-300 ease-in-out overflow-hidden border-r border-matrix-border`}
+          className={`workspace-zone workspace-zone-files workspace-zone-frame flex-shrink-0 transition-all duration-300 ease-in-out overflow-hidden border-r border-matrix-border`}
           style={{ width: sidebarCollapsed ? 0 : sidebarWidth }}
         >
           <FileTreeSidebar
@@ -1140,7 +1142,7 @@ export default function ChatWorkspacePage() {
         )}
 
         {/* Chat panel */}
-        <div className="flex-1 min-w-0 flex flex-col overflow-hidden">
+        <div className="workspace-zone workspace-zone-chat flex-1 min-w-0 flex flex-col overflow-hidden">
           <ChatPanel
   messages={messages}
   activeFile={activeFile}
@@ -1198,7 +1200,7 @@ export default function ChatWorkspacePage() {
               }}
             />
             <div
-              className="flex-shrink-0 overflow-hidden"
+              className="workspace-zone workspace-zone-preview workspace-zone-frame flex-shrink-0 overflow-hidden"
               style={{ width: previewWidth }}
             >
               <PreviewPanel

@@ -28,6 +28,28 @@ src/lib/foo.ts(3,10): error TS2304: Cannot find name 'window'.`;
     });
     expect(errs[1].code).toBe('TS2304');
   });
+
+  it('parses WebContainer colon/dash TypeScript errors with file:line:col', () => {
+    const log = `src/app/page.tsx:45:14 - error TS2304: Cannot find name 'Link'.
+
+45         <Link href="/" className="flex items-center gap-3">
+                ~~~~
+
+src/app/page.tsx:90:19 - error TS2304: Cannot find name 'Link'.`;
+
+    const errs = parseValidationOutput(log, 'typescript');
+
+    expect(errs).toHaveLength(2);
+    expect(errs[0]).toMatchObject({
+      file: 'src/app/page.tsx',
+      line: 45,
+      column: 14,
+      code: 'TS2304',
+      message: "Cannot find name 'Link'.",
+      source: 'typescript',
+    });
+    expect(errs[1].line).toBe(90);
+  });
 });
 
 describe('parseValidationOutput — bare TS errors (REGRESSION TEST)', () => {

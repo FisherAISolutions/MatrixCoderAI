@@ -307,13 +307,13 @@ export default function PreviewPanel({ open, onClose, files, projectName }: Prop
   if (!open) return null;
 
   const containerClass = fullscreen
-    ? 'fixed inset-0 z-50 flex flex-col bg-matrix-bg border border-matrix-border'
-    : 'flex flex-col h-full w-full bg-matrix-bg border-l border-matrix-border';
+    ? 'workspace-zone workspace-zone-preview workspace-preview-panel fixed inset-0 z-50 flex flex-col bg-matrix-bg border border-matrix-border'
+    : 'workspace-zone workspace-zone-preview workspace-preview-panel flex flex-col h-full w-full bg-matrix-bg border-l border-matrix-border';
 
   return (
     <div className={containerClass} data-testid="preview-panel">
       {/* Header */}
-      <div className="flex items-center justify-between h-9 px-3 border-b border-matrix-border bg-matrix-surface flex-shrink-0">
+      <div className="workspace-zone-header flex items-center justify-between h-9 px-3 border-b border-matrix-border bg-matrix-surface flex-shrink-0">
         <div className="flex items-center gap-2 min-w-0">
           <Eye size={13} className="text-matrix-green flex-shrink-0" />
           <span className="text-xs font-mono text-matrix-green tracking-widest uppercase neon-text-glow">
@@ -379,7 +379,7 @@ export default function PreviewPanel({ open, onClose, files, projectName }: Prop
       <PreviewDiagnosticsReport records={diagnostics} />
 
       {/* Body */}
-      <div className="flex-1 min-h-0 relative bg-black">
+      <div className="workspace-preview-body flex-1 min-h-0 relative bg-black">
         {!support.supported ? (
           <div className="absolute inset-0 flex items-center justify-center p-6">
             <div className="max-w-md text-center space-y-2">

@@ -242,6 +242,83 @@ export default function HistoryPage() {
     expect(result.errors.some((error) => error.file === 'src/app/add/page.tsx')).toBe(true);
   });
 
+  it('does not treat hyphenated quality adjectives as requested route names', () => {
+    const result = runGeneratedQualityAudit(
+      [
+        pkg,
+        tsconfig,
+        file('src/app/page.tsx', 'export default function Page(){ return <main />; }'),
+      ],
+      'Create a modern AI SaaS analytics dashboard with professional production-quality UI.'
+    );
+
+    expect(result.errors.some((error) => error.file === 'src/app/production-quality/page.tsx')).toBe(false);
+    expect(result.log).not.toMatch(/production-quality/);
+  });
+
+  it('keeps explicit notes routes required for the notes benchmark', () => {
+    const result = runGeneratedQualityAudit(
+      [
+        pkg,
+        tsconfig,
+        file('src/app/page.tsx', 'export default function Page(){ return <main />; }'),
+      ],
+      'Create a simple Next.js notes app with Home page, Add Note page at /add-note, and Notes History page at /history.'
+    );
+
+    expect(result.ok).toBe(false);
+    expect(result.errors.some((error) => error.file === 'src/app/add-note/page.tsx')).toBe(true);
+    expect(result.errors.some((error) => error.file === 'src/app/history/page.tsx')).toBe(true);
+    expect(result.errors.some((error) => error.file === 'src/app/note/page.tsx')).toBe(false);
+  });
+
+  it('does not force notes routes for a fitness tracker', () => {
+    const result = runGeneratedQualityAudit(
+      [
+        pkg,
+        tsconfig,
+        file('src/app/page.tsx', 'export default function Page(){ return <main />; }'),
+      ],
+      'Build a fitness tracker app with workouts, progress charts, personal plans, nutrition summaries, and a training timer.'
+    );
+
+    expect(result.errors.some((error) => error.file === 'src/app/add-note/page.tsx')).toBe(false);
+    expect(result.errors.some((error) => error.file === 'src/app/history/page.tsx')).toBe(false);
+    expect(result.errors.some((error) => error.file === 'src/app/add/page.tsx')).toBe(false);
+    expect(result.errors.some((error) => error.file === 'src/app/edit/page.tsx')).toBe(false);
+  });
+
+  it('requires explicitly requested fitness domain routes without adding history', () => {
+    const result = runGeneratedQualityAudit(
+      [
+        pkg,
+        tsconfig,
+        file('src/app/page.tsx', 'export default function Page(){ return <main />; }'),
+      ],
+      'Build a fitness tracker with pages: workouts, progress, timer, calories.'
+    );
+
+    expect(result.errors.some((error) => error.file === 'src/app/workouts/page.tsx')).toBe(true);
+    expect(result.errors.some((error) => error.file === 'src/app/progress/page.tsx')).toBe(true);
+    expect(result.errors.some((error) => error.file === 'src/app/timer/page.tsx')).toBe(true);
+    expect(result.errors.some((error) => error.file === 'src/app/calories/page.tsx')).toBe(true);
+    expect(result.errors.some((error) => error.file === 'src/app/history/page.tsx')).toBe(false);
+  });
+
+  it('does not treat search edit delete and localStorage as a history route requirement', () => {
+    const result = runGeneratedQualityAudit(
+      [
+        pkg,
+        tsconfig,
+        file('src/app/page.tsx', 'export default function Page(){ return <main />; }'),
+      ],
+      'Build a CRM tool with search, edit, delete, and localStorage persistence for contacts.'
+    );
+
+    expect(result.errors.some((error) => error.file === 'src/app/history/page.tsx')).toBe(false);
+    expect(result.errors.some((error) => error.file === 'src/app/add-note/page.tsx')).toBe(false);
+  });
+
   it('does not demand generic add route when explicit add-note route exists', () => {
     const result = runGeneratedQualityAudit(
       [

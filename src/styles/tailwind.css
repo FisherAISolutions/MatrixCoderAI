@@ -35,9 +35,15 @@
     --theme-panel-background-rgb: 17, 17, 17;
     --theme-active-state-rgb: 0, 26, 0;
     --theme-hover-state-rgb: 13, 26, 13;
+    --theme-ai-accent-rgb: 210, 123, 255;
     --theme-success-accent-rgb: 0, 255, 102;
     --theme-preview-accent-rgb: 124, 196, 255;
     --theme-terminal-accent-rgb: 0, 255, 102;
+    --workspace-files-accent: var(--theme-success-accent);
+    --workspace-chat-accent: var(--theme-ai-accent);
+    --workspace-editor-accent: var(--theme-preview-accent);
+    --workspace-preview-accent: var(--theme-preview-accent);
+    --workspace-terminal-accent: var(--theme-terminal-accent);
     --matrix-bg: #0a0a0a;
     --matrix-card: #111111;
     --matrix-surface: #0d1a0d;
@@ -346,5 +352,195 @@
   .text-matrix-green-bright,
   .matrix-readable {
     color: var(--theme-strong-text);
+  }
+
+  .workspace-shell {
+    background:
+      var(--theme-background-pattern),
+      linear-gradient(180deg, var(--theme-background), var(--matrix-bg));
+  }
+
+  .workspace-zone {
+    --zone-accent: var(--matrix-green);
+    --zone-accent-rgb: var(--matrix-green-rgb);
+    isolation: isolate;
+  }
+
+  .workspace-zone:not(.fixed) {
+    position: relative;
+  }
+
+  .workspace-zone.fixed {
+    position: fixed;
+  }
+
+  .workspace-zone::before {
+    content: '';
+    position: absolute;
+    inset: 0;
+    z-index: 0;
+    pointer-events: none;
+    background:
+      linear-gradient(180deg, rgba(var(--theme-panel-background-rgb), 0.72), rgba(var(--matrix-bg-rgb), 0.78)),
+      radial-gradient(circle at 0% 0%, rgba(var(--zone-accent-rgb), 0.08), transparent 34%);
+  }
+
+  .workspace-zone > * {
+    position: relative;
+    z-index: 1;
+  }
+
+  .workspace-zone-frame {
+    border-color: var(--theme-panel-border);
+    box-shadow: var(--theme-panel-shadow);
+    backdrop-filter: var(--theme-panel-filter);
+    -webkit-backdrop-filter: var(--theme-panel-filter);
+  }
+
+  .workspace-zone-header {
+    background:
+      linear-gradient(90deg, rgba(var(--zone-accent-rgb), 0.11), transparent 46%),
+      rgba(var(--theme-panel-background-rgb), 0.84);
+    box-shadow:
+      inset 0 -1px 0 rgba(var(--zone-accent-rgb), 0.12),
+      inset 0 1px 0 rgba(var(--zone-accent-rgb), 0.05);
+  }
+
+  .workspace-zone-files {
+    --zone-accent: var(--workspace-files-accent);
+    --zone-accent-rgb: var(--theme-success-accent-rgb);
+  }
+
+  .workspace-zone-chat {
+    --zone-accent: var(--workspace-chat-accent);
+    --zone-accent-rgb: var(--theme-ai-accent-rgb);
+  }
+
+  .workspace-zone-editor {
+    --zone-accent: var(--workspace-editor-accent);
+    --zone-accent-rgb: var(--theme-preview-accent-rgb);
+  }
+
+  .workspace-zone-preview {
+    --zone-accent: var(--workspace-preview-accent);
+    --zone-accent-rgb: var(--theme-preview-accent-rgb);
+  }
+
+  .workspace-zone-terminal {
+    --zone-accent: var(--workspace-terminal-accent);
+    --zone-accent-rgb: var(--theme-terminal-accent-rgb);
+  }
+
+  .workspace-file-tree {
+    border-right-color: rgba(var(--zone-accent-rgb), 0.34);
+  }
+
+  .workspace-file-tree .file-tree-item {
+    border-radius: 4px;
+    margin: 1px 6px;
+    width: calc(100% - 12px);
+  }
+
+  .workspace-file-tree .file-tree-item:hover {
+    background:
+      linear-gradient(90deg, rgba(var(--zone-accent-rgb), 0.11), transparent 82%),
+      var(--theme-hover-state);
+  }
+
+  .workspace-file-tree .file-tree-item.active {
+    border-left-color: var(--zone-accent);
+    box-shadow:
+      inset 0 0 0 1px rgba(var(--zone-accent-rgb), 0.16),
+      0 0 14px rgba(var(--zone-accent-rgb), 0.08);
+  }
+
+  .workspace-chat-panel {
+    background:
+      radial-gradient(circle at 50% 0%, rgba(var(--theme-ai-accent-rgb), 0.06), transparent 34%),
+      linear-gradient(180deg, rgba(var(--matrix-bg-rgb), 0.94), rgba(var(--theme-panel-background-rgb), 0.72));
+  }
+
+  .workspace-agent-tabs {
+    background:
+      linear-gradient(90deg, rgba(var(--theme-ai-accent-rgb), 0.10), rgba(var(--theme-preview-accent-rgb), 0.04), transparent),
+      rgba(var(--theme-panel-background-rgb), 0.78);
+  }
+
+  .workspace-agent-tabs > div {
+    border-color: rgba(var(--zone-accent-rgb), 0.22);
+  }
+
+  .workspace-composer {
+    background:
+      linear-gradient(180deg, rgba(var(--matrix-bg-rgb), 0.72), rgba(var(--theme-panel-background-rgb), 0.94));
+    box-shadow: inset 0 1px 0 rgba(var(--zone-accent-rgb), 0.14);
+  }
+
+  .workspace-composer-frame {
+    border-color: rgba(var(--zone-accent-rgb), 0.38);
+    background:
+      linear-gradient(180deg, rgba(var(--theme-panel-background-rgb), 0.92), rgba(var(--matrix-bg-rgb), 0.78));
+    box-shadow:
+      inset 0 1px 0 rgba(var(--zone-accent-rgb), 0.08),
+      0 0 18px rgba(var(--zone-accent-rgb), 0.06);
+  }
+
+  .workspace-composer-frame:focus-within {
+    border-color: var(--zone-accent);
+    box-shadow:
+      inset 0 1px 0 rgba(var(--zone-accent-rgb), 0.12),
+      0 0 0 1px rgba(var(--zone-accent-rgb), 0.22),
+      0 0 20px rgba(var(--zone-accent-rgb), 0.15);
+  }
+
+  .workspace-preview-panel {
+    box-shadow:
+      inset 1px 0 0 rgba(var(--zone-accent-rgb), 0.18),
+      var(--theme-panel-shadow);
+  }
+
+  .workspace-preview-body {
+    background:
+      linear-gradient(180deg, rgba(var(--matrix-bg-rgb), 0.92), rgba(0, 0, 0, 0.96));
+  }
+
+  .workspace-terminal-shell {
+    background:
+      linear-gradient(180deg, rgba(var(--theme-panel-background-rgb), 0.96), rgba(var(--matrix-bg-rgb), 0.98));
+    box-shadow: inset 0 1px 0 rgba(var(--zone-accent-rgb), 0.16);
+  }
+
+  .workspace-terminal-body {
+    background:
+      linear-gradient(180deg, rgba(var(--matrix-bg-rgb), 0.98), rgba(var(--theme-panel-background-rgb), 0.72));
+  }
+
+  .workspace-terminal-command {
+    background:
+      linear-gradient(90deg, rgba(var(--zone-accent-rgb), 0.08), rgba(var(--theme-panel-background-rgb), 0.92));
+  }
+
+  .workspace-editor-shell {
+    box-shadow:
+      0 -8px 34px rgba(0, 0, 0, 0.34),
+      inset 0 1px 0 rgba(var(--zone-accent-rgb), 0.20);
+  }
+
+  .workspace-editor-header {
+    background:
+      linear-gradient(90deg, rgba(var(--zone-accent-rgb), 0.12), transparent 50%),
+      rgba(var(--theme-panel-background-rgb), 0.94);
+  }
+
+  .workspace-code-viewport {
+    background:
+      linear-gradient(180deg, rgba(var(--matrix-bg-rgb), 0.96), rgba(var(--theme-panel-background-rgb), 0.62));
+  }
+
+  .workspace-status-badge {
+    border: 1px solid rgba(var(--zone-accent-rgb), 0.38);
+    background: rgba(var(--zone-accent-rgb), 0.10);
+    color: var(--zone-accent);
+    box-shadow: 0 0 14px rgba(var(--zone-accent-rgb), 0.08);
   }
 }

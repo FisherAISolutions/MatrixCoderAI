@@ -1,5 +1,6 @@
 'use client';
-import { useState, useCallback, useEffect, useRef } from 'react';
+import { useState, useCallback, useEffect, useRef, type ReactElement } from 'react';
+import { createPortal } from 'react-dom';
 import { X, Copy, Check, Download, FileCode, Maximize2, Minimize2, ChevronDown, Save, Trash2, Edit3 } from 'lucide-react';
 import { FileNode } from './types';
 import { toast } from 'sonner';
@@ -28,6 +29,11 @@ function formatBytes(bytes: number): string {
 function formatDate(iso: string): string {
   const d = new Date(iso);
   return d.toLocaleString('en-US', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
+}
+
+function renderFileViewerPortal(content: ReactElement): ReactElement {
+  if (typeof document === 'undefined') return content;
+  return createPortal(content, document.body);
 }
 
 export default function FileViewer({ file, onClose, onUpdate, onDelete, onRename }: Props) {
@@ -215,9 +221,9 @@ export default function FileViewer({ file, onClose, onUpdate, onDelete, onRename
   // render only a slim 32px bottom bar — that way the active file is
   // not lost and a single click restores the previous height.
   if (minimized) {
-    return (
+    return renderFileViewerPortal(
       <div
-        className="fixed inset-x-0 bottom-0 z-40 h-8 bg-matrix-bg border-t border-matrix-border flex items-center justify-between px-3"
+        className="workspace-zone workspace-zone-editor workspace-editor-shell fixed inset-x-0 bottom-0 z-40 h-8 bg-matrix-bg border-t border-matrix-border flex items-center justify-between px-3"
         data-testid="file-viewer-minimized-bar"
       >
         <div className="flex items-center gap-2 min-w-0">
@@ -266,17 +272,17 @@ export default function FileViewer({ file, onClose, onUpdate, onDelete, onRename
             <X size={12} />
           </button>
         </div>
-      </div>
+      </div>,
     );
   }
 
-  return (
+  return renderFileViewerPortal(
     <div
       className={`${
         fullscreen
           ? 'fixed inset-0 z-50'
           : 'fixed inset-x-0 bottom-0 z-40'
-      } bg-matrix-bg border-t border-matrix-border flex flex-col`}
+      } workspace-zone workspace-zone-editor workspace-editor-shell bg-matrix-bg border-t border-matrix-border flex flex-col`}
       style={
         fullscreen
           ? undefined
@@ -310,7 +316,7 @@ export default function FileViewer({ file, onClose, onUpdate, onDelete, onRename
         />
       )}
       {/* Header */}
-      <div className="flex items-center justify-between px-3 py-2 border-b border-matrix-border flex-shrink-0">
+      <div className="workspace-editor-header flex items-center justify-between px-3 py-2 border-b border-matrix-border flex-shrink-0">
         <div className="flex items-center gap-2 min-w-0">
           <FileCode size={13} className="text-matrix-blue flex-shrink-0" />
           {isRenaming ? (
@@ -436,7 +442,7 @@ export default function FileViewer({ file, onClose, onUpdate, onDelete, onRename
       </div>
 
       {/* Code content or editor */}
-      <div className="flex-1 overflow-auto">
+      <div className="workspace-code-viewport flex-1 overflow-auto">
         {isEditing ? (
           <MatrixMonacoEditor
             value={editContent}
@@ -469,6 +475,6 @@ export default function FileViewer({ file, onClose, onUpdate, onDelete, onRename
           </div>
         )}
       </div>
-    </div>
+    </div>,
   );
 }

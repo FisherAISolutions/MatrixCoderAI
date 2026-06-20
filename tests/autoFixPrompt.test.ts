@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import {
+  buildAutoFixPromptWithDiagnostics,
   buildAutoFixUserPrompt,
   AUTO_FIX_SYSTEM_PROMPT,
 } from '@/lib/validation/autoFixPrompt';
@@ -96,6 +97,28 @@ describe('buildAutoFixUserPrompt', () => {
     expect(prompt).not.toMatch(/no relevant files available/);
   });
 
+  it('REGRESSION: raw compiler logs attach directly referenced source files', () => {
+    const { prompt, diagnostics } = buildAutoFixPromptWithDiagnostics({
+      errors: [
+        {
+          source: 'typescript',
+          code: 'TS2304',
+          message: "Cannot find name 'Link'.",
+          raw: "error TS2304: Cannot find name 'Link'.",
+        },
+      ],
+      files: sampleFiles,
+      attempt: 1,
+      maxAttempts: 3,
+      failedStep: 'type-check',
+      rawLog:
+        "src/app/page.tsx:45:14 - error TS2304: Cannot find name 'Link'.",
+    });
+
+    expect(prompt).toContain('// path: src/app/page.tsx');
+    expect(diagnostics.attachedFilePaths).toEqual(['src/app/page.tsx']);
+  });
+
   it('renders infrastructureError as a dedicated section', () => {
     const prompt = buildAutoFixUserPrompt({
       errors: [],
@@ -133,8 +156,75 @@ describe('buildAutoFixUserPrompt', () => {
       maxAttempts: 3,
       rawLog: hugeLog,
     });
-    expect(prompt.length).toBeLessThan(20_000);
+    expect(prompt.length).toBeLessThan(15_000);
     expect(prompt).toMatch(/elided/);
+  });
+
+  it('reports prompt diagnostics and attached file paths', () => {
+    const { prompt, diagnostics } = buildAutoFixPromptWithDiagnostics({
+      errors: [
+        {
+          source: 'typescript',
+          file: 'src/app/page.tsx',
+          line: 1,
+          column: 1,
+          code: 'TS1',
+          message: 'x',
+          raw: '',
+        },
+      ],
+      files: sampleFiles,
+      attempt: 1,
+      maxAttempts: 3,
+      rawLog: 'src/app/page.tsx:1:1 - error TS1',
+    });
+
+    expect(prompt).toContain('src/app/page.tsx');
+    expect(diagnostics.attachedFileCount).toBe(1);
+    expect(diagnostics.attachedFilePaths).toEqual(['src/app/page.tsx']);
+    expect(diagnostics.promptChars).toBe(prompt.length);
+    expect(diagnostics.estimatedTokens).toBeGreaterThan(0);
+    expect(diagnostics.maxAttachedFiles).toBe(4);
+  });
+
+  it('compact mode shrinks attached file content and raw logs', () => {
+    const largeFiles = [
+      file('src/app/page.tsx', 'a'.repeat(10_000)),
+      file('src/app/add/page.tsx', 'b'.repeat(10_000)),
+    ];
+    const errors: ParsedError[] = [
+      {
+        source: 'typescript',
+        file: 'src/app/page.tsx',
+        line: 1,
+        message: 'x',
+        raw: '',
+      },
+    ];
+    const normal = buildAutoFixPromptWithDiagnostics({
+      errors,
+      files: largeFiles,
+      attempt: 1,
+      maxAttempts: 3,
+      rawLog: 'x'.repeat(20_000),
+    });
+    const compact = buildAutoFixPromptWithDiagnostics({
+      errors,
+      files: largeFiles,
+      attempt: 2,
+      maxAttempts: 3,
+      rawLog: 'x'.repeat(20_000),
+      compact: true,
+    });
+
+    expect(compact.diagnostics.compact).toBe(true);
+    expect(compact.diagnostics.promptChars).toBeLessThan(
+      normal.diagnostics.promptChars
+    );
+    expect(compact.diagnostics.maxAttachedFiles).toBe(2);
+    expect(compact.diagnostics.maxRawLogChars).toBeLessThan(
+      normal.diagnostics.maxRawLogChars
+    );
   });
 
   it('truncates error list when there are too many errors', () => {

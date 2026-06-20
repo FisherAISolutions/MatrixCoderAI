@@ -44,6 +44,12 @@ export function stripAnsi(text: string): string {
 // Positional groups: 1=file, 2=line, 3=column, 4=code, 5=message
 const TSC_REGEX = /^([^\s:()][^\n:()]*?)\((\d+),(\d+)\):\s+error\s+(TS\d+):\s+(.+)$/gm;
 
+// ---------- TypeScript: `path/to/file.ts:LINE:COL - error TSxxxx: message` ----------
+// WebContainer/Next sometimes streams diagnostics in this VS Code-style
+// shape instead of the canonical parenthesized tsc format above.
+const TSC_COLON_REGEX =
+  /^\.?\/?([^\n:]+\.(?:tsx?|jsx?|css|mjs|cjs)):(\d+):(\d+)\s+-\s+error\s+(TS\d+):\s+(.+)$/gm;
+
 // ---------- Bare TS errors without a file prefix (TS5023, TS18003, etc.) ----------
 // Examples:
 //   error TS5023: Unknown compiler option 'foo'.
@@ -121,6 +127,20 @@ export function parseValidationOutput(
   }
 
   // ---- Bare TS errors (no file prefix) — TS5023, TS18003, TS6053, etc. ----
+  TSC_COLON_REGEX.lastIndex = 0;
+  while ((m = TSC_COLON_REGEX.exec(clean)) !== null) {
+    const [, file, line, column, code, message] = m;
+    push({
+      source: source === 'unknown' ? 'typescript' : source,
+      file,
+      line: Number(line),
+      column: Number(column),
+      code,
+      message: message.trim(),
+      raw: m[0],
+    });
+  }
+
   TSC_BARE_REGEX.lastIndex = 0;
   while ((m = TSC_BARE_REGEX.exec(clean)) !== null) {
     const [, code, message] = m;

@@ -29,6 +29,7 @@
 
 import { getChatCompletion } from '@/lib/ai/chatCompletion';
 import {
+  detectTruncatedEditPatch,
   extractFromAssistantResponse,
   normalizeEditPath,
 } from '@/lib/repo/extractors';
@@ -42,7 +43,8 @@ import { extractFailureExcerpt } from './errorParser';
 import { applyDeterministicFixes } from './deterministicFixes';
 import {
   AUTO_FIX_SYSTEM_PROMPT,
-  buildAutoFixUserPrompt,
+  buildAutoFixPromptWithDiagnostics,
+  type AutoFixPromptDiagnostics,
 } from './autoFixPrompt';
 import { prefixedId } from '@/lib/uuid';
 import { pushTerminalLog } from '@/lib/terminal/store';
@@ -56,7 +58,11 @@ export const AUTO_FIX_MAX_ATTEMPTS = 3;
 /** Provider + model for the auto-fix calls. Centralised in
  *  `src/lib/ai/modelConfig.ts` (2026-01 quality-upgrade pass) so the
  *  entire app upgrades in one place. */
-import { AI_PROVIDER as AUTO_FIX_PROVIDER, AUTO_FIX_MODEL } from '@/lib/ai/modelConfig';
+import {
+  AI_PROVIDER as AUTO_FIX_PROVIDER,
+  AUTO_FIX_MODEL,
+  PRIMARY_MODEL,
+} from '@/lib/ai/modelConfig';
 
 /** Hard ceiling on tokens we allow the auto-fix LLM call to spend. */
 const AUTO_FIX_MAX_TOKENS = 8192;
@@ -164,7 +170,17 @@ function renderRawExcerpt(label: string, log: string | undefined): string {
  * Required user-facing message when the sandbox (NOT the code) killed
  * the install — WebContainer abort, OOM, network, COOP/COEP, etc.
  */
-function renderAiResultDiagnostics(aiResult: unknown): string {
+interface AiResultDiagnostics {
+  text: string;
+  finishReason: string;
+  contentLength: number;
+  promptTokens?: number;
+  completionTokens?: number;
+  totalTokens?: number;
+  hitOutputLimit: boolean;
+}
+
+function inspectAiResult(aiResult: unknown): AiResultDiagnostics {
   const result = aiResult as {
     choices?: Array<{ finish_reason?: string | null; message?: { content?: string | null } }>;
     usage?: {
@@ -175,10 +191,12 @@ function renderAiResultDiagnostics(aiResult: unknown): string {
   };
   const choice = result?.choices?.[0];
   const usage = result?.usage;
+  const finishReason = choice?.finish_reason ?? 'unknown';
+  const contentLength = choice?.message?.content?.length ?? 0;
   const parts = [
     `model=${AUTO_FIX_MODEL}`,
-    `finish_reason=${choice?.finish_reason ?? 'unknown'}`,
-    `content_length=${choice?.message?.content?.length ?? 0}`,
+    `finish_reason=${finishReason}`,
+    `content_length=${contentLength}`,
   ];
   if (usage) {
     parts.push(
@@ -187,7 +205,39 @@ function renderAiResultDiagnostics(aiResult: unknown): string {
       `total_tokens=${usage.total_tokens ?? 'unknown'}`
     );
   }
-  return parts.join(' ');
+  return {
+    text: parts.join(' '),
+    finishReason,
+    contentLength,
+    promptTokens: usage?.prompt_tokens,
+    completionTokens: usage?.completion_tokens,
+    totalTokens: usage?.total_tokens,
+    hitOutputLimit: finishReason === 'length',
+  };
+}
+
+function renderPromptDiagnostics(
+  attempt: number,
+  maxAttempts: number,
+  diagnostics: AutoFixPromptDiagnostics
+): string {
+  const paths =
+    diagnostics.attachedFilePaths.length > 0
+      ? diagnostics.attachedFilePaths.join(', ')
+      : '(none)';
+  return [
+    `attempt=${attempt}/${maxAttempts}`,
+    `primary_model=${PRIMARY_MODEL}`,
+    `auto_fix_model=${AUTO_FIX_MODEL}`,
+    `max_completion_tokens=${AUTO_FIX_MAX_TOKENS}`,
+    `compact=${diagnostics.compact}`,
+    `prompt_chars=${diagnostics.promptChars}`,
+    `estimated_tokens=${diagnostics.estimatedTokens}`,
+    `raw_log_chars=${diagnostics.rawLogChars}`,
+    `truncated_raw_log_chars=${diagnostics.truncatedRawLogChars}`,
+    `attached_files=${diagnostics.attachedFileCount}/${diagnostics.maxAttachedFiles}`,
+    `attached_paths=${paths}`,
+  ].join(' ');
 }
 
 function sandboxInstallFailureMessage(f: { kind: string; reason: string }): string {
@@ -197,6 +247,14 @@ function sandboxInstallFailureMessage(f: { kind: string; reason: string }): stri
     `_Classification: \`${f.kind}\` — ${f.reason}_\n\n` +
     `Use the **Download ZIP** card in the Preview panel to grab the project. Local installs often succeed even when the browser sandbox cannot.`
   );
+}
+
+function errorsForFailedStep(
+  validation: ValidationResult,
+  step: ValidationResult['steps'][number] | undefined
+): ParsedError[] {
+  const stepErrors = (step as { errors?: ParsedError[] } | undefined)?.errors;
+  return stepErrors && stepErrors.length > 0 ? stepErrors : validation.errors;
 }
 
 /**
@@ -579,6 +637,7 @@ export async function runAutoFixLoop(
     // -------- Retry loop --------
     let attempt = 0;
     let consecutiveNoPatchAttempts = 0;
+    let useCompactPrompt = false;
     while (attempt < maxAttempts && lastValidation && !lastValidation.success) {
       const deterministic = await applyDeterministicAndRevalidate(
         lastValidation,
@@ -618,31 +677,44 @@ export async function runAutoFixLoop(
       const currentFailedStep = lastValidation.steps.find(
         (s) => s.status === 'failed'
       ) ?? firstFailedStep;
+      const promptErrors = errorsForFailedStep(lastValidation, currentFailedStep);
 
       onStatus(`Auto-fix attempt ${attempt}/${maxAttempts} — calling AI…`);
       onChatMessage(
         sysMsg(`**Auto-fix attempt ${attempt}/${maxAttempts} started.**`)
       );
 
-      const userPrompt = buildAutoFixUserPrompt({
-        errors: lastValidation.errors,
-        files: rebuildFiles(fileMap),
-        attempt,
-        maxAttempts,
-        previousAttemptSummary,
-        failedStep: currentFailedStep?.step,
-        requirements,
-        // Prefer the failing step's own log; fall back to the combined
-        // log if the step didn't capture one.
-        rawLog:
-          currentFailedStep?.log && currentFailedStep.log.length > 0
-            ? currentFailedStep.log
-            : lastValidation.combinedLog,
-        infrastructureError: currentFailedStep?.infrastructureError,
+      const { prompt: userPrompt, diagnostics: promptDiagnostics } =
+        buildAutoFixPromptWithDiagnostics({
+          errors: promptErrors,
+          files: rebuildFiles(fileMap),
+          attempt,
+          maxAttempts,
+          previousAttemptSummary,
+          failedStep: currentFailedStep?.step,
+          requirements,
+          // Prefer the failing step's own log; fall back to the combined
+          // log if the step didn't capture one.
+          rawLog:
+            currentFailedStep?.log && currentFailedStep.log.length > 0
+              ? currentFailedStep.log
+              : lastValidation.combinedLog,
+          infrastructureError: currentFailedStep?.infrastructureError,
+          compact: useCompactPrompt,
+        });
+      pushTerminalLog({
+        level: 'info',
+        text: `[auto-fix-prompt] ${renderPromptDiagnostics(attempt, maxAttempts, promptDiagnostics)}\n`,
+        timestamp: Date.now(),
       });
 
       let aiResponseText = '';
-      let aiDiagnostics = `model=${AUTO_FIX_MODEL} finish_reason=unknown content_length=0`;
+      let aiDiagnostics: AiResultDiagnostics = {
+        text: `model=${AUTO_FIX_MODEL} finish_reason=unknown content_length=0`,
+        finishReason: 'unknown',
+        contentLength: 0,
+        hitOutputLimit: false,
+      };
       try {
         const aiResult = await getChatCompletion(
           AUTO_FIX_PROVIDER,
@@ -653,7 +725,7 @@ export async function runAutoFixLoop(
           ],
           { max_completion_tokens: AUTO_FIX_MAX_TOKENS }
         );
-        aiDiagnostics = renderAiResultDiagnostics(aiResult);
+        aiDiagnostics = inspectAiResult(aiResult);
         aiResponseText =
           (aiResult as any)?.choices?.[0]?.message?.content ?? '';
       } catch (err) {
@@ -675,12 +747,37 @@ export async function runAutoFixLoop(
       if (!aiResponseText.trim()) {
         pushTerminalLog({
           level: 'error',
-          text: `[auto-fix-ai] empty response attempt=${attempt}/${maxAttempts} ${aiDiagnostics}\n`,
+          text: `[auto-fix-ai] empty response attempt=${attempt}/${maxAttempts} ${aiDiagnostics.text}\n`,
           timestamp: Date.now(),
         });
         onChatMessage(
-          sysMsg(`**Auto-fix AI diagnostics** - ${aiDiagnostics}`)
+          sysMsg(`**Auto-fix AI diagnostics** - ${aiDiagnostics.text}`)
         );
+        if (aiDiagnostics.hitOutputLimit && attempt < maxAttempts) {
+          if (!useCompactPrompt) {
+            useCompactPrompt = true;
+            previousAttemptSummary =
+              `Attempt ${attempt} hit the auto-fix model output limit before returning usable patches. Retry with compact context: include fewer files, shorter snippets, and emit ONE small SEARCH/REPLACE patch for the first failing error only.`;
+            onChatMessage(
+              sysMsg(
+                `**Auto-fix attempt ${attempt}/${maxAttempts} hit the output limit** — retrying once with compact context instead of repeating the same oversized prompt.`
+              )
+            );
+            continue;
+          }
+          onChatMessage(
+            sysMsg(
+              `**Auto-fix attempt ${attempt}/${maxAttempts} hit the output limit again** — compact context was already enabled, so the loop is stopping instead of spending more attempts on the same oversized response.`
+            )
+          );
+          onStatus(null);
+          return {
+            ran: true,
+            succeeded: false,
+            attempts: attempt,
+            finalValidation: lastValidation,
+          };
+        }
         onChatMessage(
           sysMsg(
             `**Auto-fix attempt ${attempt}/${maxAttempts}** — the AI returned an empty response. Stopping the loop.`
@@ -696,6 +793,7 @@ export async function runAutoFixLoop(
       }
 
       onStatus(`Auto-fix attempt ${attempt}/${maxAttempts} — applying patches…`);
+      const truncatedPatch = detectTruncatedEditPatch(aiResponseText);
       const patchReport = applyAutoFixResponse(
         rebuildFiles(fileMap),
         aiResponseText,
@@ -704,6 +802,25 @@ export async function runAutoFixLoop(
       );
 
       if (!patchReport.mutated) {
+        if (aiDiagnostics.hitOutputLimit || truncatedPatch.truncated) {
+          const reason = truncatedPatch.truncated
+            ? truncatedPatch.reason ?? 'A SEARCH/REPLACE edit block appears truncated.'
+            : 'The model hit the output limit before a usable patch could be extracted.';
+          const markerNote = truncatedPatch.missingMarkers.length
+            ? ` Missing markers: ${truncatedPatch.missingMarkers.join(', ')}.`
+            : '';
+          onChatMessage(
+            sysMsg(
+              `**Auto-fix attempt ${attempt}/${maxAttempts} produced a truncated patch** — ${reason}${markerNote}\n\n**Auto-fix AI diagnostics** - ${aiDiagnostics.text}`
+            )
+          );
+          if (attempt < maxAttempts && !useCompactPrompt) {
+            useCompactPrompt = true;
+            previousAttemptSummary =
+              `Attempt ${attempt} was truncated or hit the output limit. Retry with compact context and emit exactly one complete edit fence for the first failing file.`;
+            continue;
+          }
+        }
         if (patchReport.report.length > 0) {
           const patchLines = patchReport.report.slice(0, 12).join('\n');
           onChatMessage(

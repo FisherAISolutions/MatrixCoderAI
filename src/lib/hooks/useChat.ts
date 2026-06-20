@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useCallback } from 'react';
+import { useState, useCallback, useRef } from 'react';
 import { getChatCompletion, getStreamingChatCompletion } from '@/lib/ai/chatCompletion';
 
 export function useChat(provider: string, model: string, streaming: boolean = true) {
@@ -8,9 +8,35 @@ export function useChat(provider: string, model: string, streaming: boolean = tr
   const [fullResponse, setFullResponse] = useState<any>(null);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<Error | null>(null);
+  const responseBufferRef = useRef('');
+  const chunksRef = useRef<any[]>([]);
+  const flushTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const clearPendingFlush = useCallback(() => {
+    if (flushTimerRef.current) {
+      clearTimeout(flushTimerRef.current);
+      flushTimerRef.current = null;
+    }
+  }, []);
+
+  const flushResponse = useCallback(() => {
+    clearPendingFlush();
+    setResponse(responseBufferRef.current);
+  }, [clearPendingFlush]);
+
+  const scheduleFlush = useCallback(() => {
+    if (flushTimerRef.current) return;
+    flushTimerRef.current = setTimeout(() => {
+      flushTimerRef.current = null;
+      setResponse(responseBufferRef.current);
+    }, 50);
+  }, []);
 
   const sendMessage = useCallback(
     async (messages: object[], parameters: object = {}) => {
+      clearPendingFlush();
+      responseBufferRef.current = '';
+      chunksRef.current = [];
       setResponse('');
       setFullResponse(streaming ? [] : null);
       setIsLoading(true);
@@ -23,12 +49,21 @@ export function useChat(provider: string, model: string, streaming: boolean = tr
             model,
             messages,
             (chunk) => {
-              setFullResponse((prev: any[]) => [...prev, chunk]);
+              chunksRef.current.push(chunk);
               const content = chunk?.choices?.[0]?.delta?.content;
-              if (content) setResponse((prev) => prev + content);
+              if (content) {
+                responseBufferRef.current += content;
+                scheduleFlush();
+              }
             },
-            () => setIsLoading(false),
+            () => {
+              flushResponse();
+              setFullResponse(chunksRef.current);
+              setIsLoading(false);
+            },
             (err) => {
+              flushResponse();
+              setFullResponse(chunksRef.current);
               setError(err);
               setIsLoading(false);
             },
@@ -41,11 +76,13 @@ export function useChat(provider: string, model: string, streaming: boolean = tr
           setIsLoading(false);
         }
       } catch (err) {
+        flushResponse();
+        if (streaming) setFullResponse(chunksRef.current);
         setError(err instanceof Error ? err : new Error('Unknown error'));
         setIsLoading(false);
       }
     },
-    [provider, model, streaming]
+    [clearPendingFlush, flushResponse, model, provider, scheduleFlush, streaming]
   );
 
   return { response, fullResponse, isLoading, error, sendMessage };

@@ -27,6 +27,7 @@ import {
 import { runAutoFixLoop, isAutoFixRunning } from '@/lib/validation';
 import { analyzeAndAddMissingDependencies } from '@/lib/dependencies';
 import { pushTerminalLog } from '@/lib/terminal/store';
+import { inferRequiredPathsForBatch } from '@/lib/generation/routePlanning';
 import {
   beginPreviewStage,
   completePreviewStage,
@@ -299,9 +300,9 @@ do NOT attempt the whole product in one giant response. Emit a complete,
 runnable first batch and clearly end with "NEXT BATCH NEEDED: <what
 remains>". Preferred batches:
   1. package/config/layout/globals
-  2. types/lib/storage
-  3. dashboard and shared components
-  4. add/edit/history pages
+  2. domain types/storage/helpers
+  3. primary feature routes and shared components
+  4. secondary feature routes and workflows
   5. validation
 Every batch must contain only complete, closed code fences. Never start
 a file you cannot finish in the same response.
@@ -898,21 +899,21 @@ const LARGE_APP_BATCHES: GenerationBatch[] = [
   },
   {
     id: 2,
-    title: 'types/lib/storage',
+    title: 'domain types/storage/helpers',
     scope:
-      'Create only core shared types, localStorage/storage helpers, seed helpers, and small reusable utilities. Do not create route pages in this batch.',
+      'Create only domain-specific shared types, localStorage/storage helpers, seed helpers, and small reusable utilities. Do not create route pages in this batch.',
   },
   {
     id: 3,
-    title: 'dashboard and shared components',
+    title: 'primary feature routes and shared components',
     scope:
-      'Create only dashboard route/page and shared UI components needed by dashboard/list/stats/navigation. Do not create add/edit/history route pages in this batch.',
+      'Create only the root experience, primary requested feature routes, and shared UI components needed by the product domain. Use route names from the user request; do not invent notes-style add/edit/history routes unless they are explicitly requested.',
   },
   {
     id: 4,
-    title: 'add/edit/history pages',
+    title: 'secondary feature routes and workflows',
     scope:
-      'Create only add, edit, history route pages and their immediate form/table components. If the request uses add-note, add-task, or add-entry, preserve that exact route name. Include search, filter, edit, delete, and localStorage wiring when requested.',
+      'Create only secondary requested feature routes and their immediate workflow components. Preserve exact route names from the request, such as /add-note, /history, /workouts, /progress, /timer, /settings, or CRM/SaaS domain routes. Include search, filter, edit, delete, and localStorage wiring where the requested workflow naturally needs them, without forcing a history route.',
   },
   {
     id: 5,
@@ -938,44 +939,6 @@ function dedupeGeneratedPaths(paths: Array<string | null | undefined>): string[]
     out.push(clean);
   }
   return out;
-}
-
-function inferAddRoutePath(baseRequest: string): string | null {
-  const lower = baseRequest.toLowerCase();
-  if (!/\badd\b/.test(lower)) return null;
-  if (/\badd-note\b|\badd note\b|\bnotes?\b/.test(lower)) {
-    return 'src/app/add-note/page.tsx';
-  }
-  if (/\badd-task\b|\badd task\b|\btasks?\b/.test(lower)) {
-    return 'src/app/add-task/page.tsx';
-  }
-  if (/\badd-entry\b|\badd entry\b|\bentries?\b/.test(lower)) {
-    return 'src/app/add-entry/page.tsx';
-  }
-  return 'src/app/add/page.tsx';
-}
-
-function inferRequiredPathsForBatch(baseRequest: string, batch: GenerationBatch): string[] {
-  const lower = baseRequest.toLowerCase();
-  const required: string[] = [];
-
-  if (batch.title === 'root page shell') {
-    required.push('src/app/page.tsx');
-  }
-
-  if (batch.title === 'dashboard and shared components' && /\bdashboard\b/.test(lower)) {
-    required.push('src/app/dashboard/page.tsx');
-  }
-
-  if (batch.title === 'add/edit/history pages') {
-    const addRoutePath = inferAddRoutePath(baseRequest);
-    if (addRoutePath) required.push(addRoutePath);
-    if (/\bhistory\b|\barchive\b|\blog\b/.test(lower)) {
-      required.push('src/app/history/page.tsx');
-    }
-  }
-
-  return dedupeGeneratedPaths(required);
 }
 
 function missingRequiredPathsForBatch(
@@ -1288,10 +1251,14 @@ export default function ChatComposer({
       onSetActivityStatus('Streaming response…');
     }
 
-    onUpdateLastMessage((prev) => ({
-      ...prev,
-      content: response,
-    }));
+    onUpdateLastMessage((prev) =>
+      prev.content === response
+        ? prev
+        : {
+            ...prev,
+            content: response,
+          }
+    );
   }, [response, onUpdateLastMessage, onSetActivityStatus]);
 
   useEffect(() => {
@@ -1493,7 +1460,7 @@ export default function ChatComposer({
               `The Coding Agent response appears truncated or internally inconsistent, so no files were written and validation was not started.\n\n` +
               `${issueLines}\n\n` +
               `Ask the Coding Agent to continue from the last complete file${completeness.lastCompletePath ? ` (\`${completeness.lastCompletePath}\`)` : ''}. ` +
-              `For large apps, continue in smaller batches: scaffold/config/layout, core types/lib, dashboard/add page, history/edit/delete, then validation.`,
+              `For large apps, continue in smaller batches: scaffold/config/layout, domain types/helpers, primary feature routes, secondary workflows, then validation.`,
             timestamp: new Date().toISOString(),
           });
           toast.error('Generation response was incomplete; validation paused.');
@@ -2301,8 +2268,8 @@ export default function ChatComposer({
   );
 
   return (
-    <div className="flex-shrink-0 border-t border-matrix-border bg-matrix-bg px-4 py-3">
-      <div className="neon-border-muted border rounded-sm bg-matrix-surface focus-within:border-matrix-green focus-within:shadow-neon-input transition-all duration-150">
+    <div className="workspace-composer flex-shrink-0 border-t border-matrix-border bg-matrix-bg px-4 py-3">
+      <div className="workspace-composer-frame neon-border-muted border rounded-sm bg-matrix-surface transition-all duration-150">
         <textarea
           ref={textareaRef}
           value={input}

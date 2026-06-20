@@ -60,7 +60,7 @@ export default function ChatPanel({
   }, [messages]);
 
   return (
-    <div className="flex flex-col h-full bg-matrix-bg">
+    <div className="workspace-chat-panel flex flex-col h-full bg-matrix-bg">
       {/* Agent status bar */}
       <AgentStatusBar
         activeAgent={activeAgent}

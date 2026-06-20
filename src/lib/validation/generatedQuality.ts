@@ -127,46 +127,75 @@ function requirementTerms(requirements: string): string[] {
   return terms;
 }
 
+const GENERIC_PAGE_WORDS = new Set([
+  'home',
+  'homepage',
+  'landing',
+  'root',
+  'main',
+  'at',
+  'to',
+  'for',
+  'under',
+  'responsive',
+  'professional',
+  'production-quality',
+]);
+
+function addRequiredRoute(
+  routes: Array<{ label: string; candidates: string[] }>,
+  label: string,
+  candidates: string[]
+) {
+  if (!routes.some((existing) => existing.label === label)) {
+    routes.push({ label, candidates });
+  }
+}
+
 function requiredRoutes(requirements: string): Array<{ label: string; candidates: string[] }> {
   const lower = requirements.toLowerCase();
   const routes: Array<{ label: string; candidates: string[] }> = [];
   const explicitSlugs = requestedRouteSlugs(requirements);
-  const hasExplicitAddRoute = explicitSlugs.some((slug) => slug.startsWith('add-'));
-  if (/\bdashboard\b/.test(lower)) {
-    routes.push({
-      label: 'dashboard page',
-      candidates: ['src/app/dashboard/page.tsx', 'app/dashboard/page.tsx'],
-    });
+  if (/\bdashboard\s+(?:page|route|screen|view)\b/.test(lower)) {
+    addRequiredRoute(routes, 'dashboard page', [
+      'src/app/dashboard/page.tsx',
+      'app/dashboard/page.tsx',
+    ]);
   }
-  if (!hasExplicitAddRoute && (/\badd\b|\bentry\b|\bentries\b/.test(lower))) {
-    routes.push({
-      label: 'add entry page',
-      candidates: ['src/app/add/page.tsx', 'app/add/page.tsx', 'src/app/add-entry/page.tsx', 'app/add-entry/page.tsx'],
-    });
+  if (/\badd\s+entry\s+(?:page|route|screen|view)\b/.test(lower)) {
+    addRequiredRoute(routes, 'add entry page', [
+      'src/app/add-entry/page.tsx',
+      'app/add-entry/page.tsx',
+    ]);
   }
-  if (/\bhistory\b|\bedit\b|\bdelete\b/.test(lower)) {
-    routes.push({
-      label: 'history page',
-      candidates: ['src/app/history/page.tsx', 'app/history/page.tsx'],
-    });
+  if (
+    /\b(?:history|archive)\s+(?:page|route|screen|view)\b/.test(lower) ||
+    /\bactivity\s+(?:history|log)\b/.test(lower) ||
+    explicitSlugs.includes('history')
+  ) {
+    addRequiredRoute(routes, 'history page', [
+      'src/app/history/page.tsx',
+      'app/history/page.tsx',
+    ]);
   }
   if (/\b3\s+pages\b|\bthree\s+pages\b/.test(lower) && routes.length < 3) {
-    for (const route of [
-      {
-        label: 'dashboard page',
-        candidates: ['src/app/dashboard/page.tsx', 'app/dashboard/page.tsx'],
-      },
-      {
-        label: 'add entry page',
-        candidates: ['src/app/add/page.tsx', 'app/add/page.tsx', 'src/app/add-entry/page.tsx', 'app/add-entry/page.tsx'],
-      },
-      {
-        label: 'history page',
-        candidates: ['src/app/history/page.tsx', 'app/history/page.tsx'],
-      },
-    ]) {
-      if (route.label === 'add entry page' && hasExplicitAddRoute) continue;
-      if (!routes.some((existing) => existing.label === route.label)) routes.push(route);
+    if (/\bdashboard\b/.test(lower)) {
+      addRequiredRoute(routes, 'dashboard page', [
+        'src/app/dashboard/page.tsx',
+        'app/dashboard/page.tsx',
+      ]);
+    }
+    if (/\badd\s+entry\b/.test(lower)) {
+      addRequiredRoute(routes, 'add entry page', [
+        'src/app/add-entry/page.tsx',
+        'app/add-entry/page.tsx',
+      ]);
+    }
+    if (/\bhistory\b/.test(lower)) {
+      addRequiredRoute(routes, 'history page', [
+        'src/app/history/page.tsx',
+        'app/history/page.tsx',
+      ]);
     }
   }
   return routes;
@@ -175,15 +204,50 @@ function requiredRoutes(requirements: string): Array<{ label: string; candidates
 function requestedRouteSlugs(requirements: string): string[] {
   const lower = requirements.toLowerCase();
   const out: string[] = [];
-  const quotedRoute = /(?:route|page|path)\s+["'`]?\/([a-z0-9-]+)["'`]?/g;
+  const addSlug = (slug: string) => {
+    const clean = slug
+      .replace(/^\/+|\/+$/g, '')
+      .replace(/\s+/g, '-')
+      .replace(/[^a-z0-9-]/g, '')
+      .replace(/-+/g, '-');
+    if (!clean || GENERIC_PAGE_WORDS.has(clean)) return;
+    if (!out.includes(clean)) out.push(clean);
+  };
+
+  const quotedRoute = /(?:route|page|path|url|at|under)\s+["'`]?\/([a-z0-9-]+)["'`]?/g;
   let match: RegExpExecArray | null;
   while ((match = quotedRoute.exec(lower)) !== null) {
-    if (match[1].includes('-') && !out.includes(match[1])) out.push(match[1]);
+    addSlug(match[1]);
   }
-  const hyphenRoute = /\b([a-z][a-z0-9]+-[a-z0-9-]+)\b/g;
-  while ((match = hyphenRoute.exec(lower)) !== null) {
-    if (!out.includes(match[1])) out.push(match[1]);
+
+  const slugBeforeRouteNoun = /\b([a-z][a-z0-9-]*)\s+(?:page|route|path|screen|view)\b/g;
+  while ((match = slugBeforeRouteNoun.exec(lower)) !== null) {
+    const before = lower.slice(Math.max(0, match.index - 8), match.index);
+    if (/\b(?:add|edit|new)\s+$/.test(before)) continue;
+    addSlug(match[1]);
   }
+
+  const routeNounBeforeSlug = /\b(?:page|route|path|screen|view)\s+["'`]?([a-z][a-z0-9-]*)["'`]?\b/g;
+  while ((match = routeNounBeforeSlug.exec(lower)) !== null) {
+    addSlug(match[1]);
+  }
+
+  const listedPages = /\b(?:pages|routes|screens|views)\s*:\s*([^\n.]+)/g;
+  while ((match = listedPages.exec(lower)) !== null) {
+    for (const part of match[1].split(/,|;|\band\b/)) {
+      const cleaned = part
+        .replace(/\bwith\b[\s\S]*$/, '')
+        .replace(/\b(page|route|screen|view|homepage|home)\b/g, '')
+        .trim();
+      addSlug(cleaned);
+    }
+  }
+
+  const addEntityPage = /\badd\s+([a-z][a-z0-9-]*)\s+(?:page|route|screen|view)\b/g;
+  while ((match = addEntityPage.exec(lower)) !== null) {
+    addSlug(`add-${match[1]}`);
+  }
+
   return out;
 }
 

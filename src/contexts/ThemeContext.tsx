@@ -85,6 +85,7 @@ function applyThemeToDocument(theme: ThemeDefinition) {
     '--theme-panel-background-rgb': colorToRgb(tokens.panelBackground),
     '--theme-active-state-rgb': colorToRgb(tokens.activeState),
     '--theme-hover-state-rgb': colorToRgb(tokens.hoverState),
+    '--theme-ai-accent-rgb': colorToRgb(tokens.aiAccent),
     '--theme-success-accent-rgb': colorToRgb(tokens.successAccent),
     '--theme-preview-accent-rgb': colorToRgb(tokens.previewAccent),
     '--theme-terminal-accent-rgb': colorToRgb(tokens.terminalAccent),

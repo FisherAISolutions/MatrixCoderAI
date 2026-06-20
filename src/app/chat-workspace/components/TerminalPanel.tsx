@@ -393,7 +393,7 @@ export default function TerminalPanel({ collapsed: collapsedProp, onCollapsedCha
 
   return (
     <div
-      className="flex-shrink-0 border-t border-matrix-border bg-matrix-bg font-mono"
+      className="workspace-zone workspace-zone-terminal workspace-terminal-shell flex-shrink-0 border-t border-matrix-border bg-matrix-bg font-mono"
       data-testid="terminal-panel"
       style={{ height: collapsed ? 32 : height }}
     >
@@ -409,7 +409,7 @@ export default function TerminalPanel({ collapsed: collapsedProp, onCollapsedCha
 
       {/* Header */}
       <div
-        className="flex items-center justify-between h-8 px-3 border-b border-matrix-border bg-matrix-surface select-none cursor-pointer"
+        className="workspace-zone-header flex items-center justify-between h-8 px-3 border-b border-matrix-border bg-matrix-surface select-none cursor-pointer"
         onClick={() => setCollapsed(!collapsed)}
         data-testid="terminal-header"
       >
@@ -483,7 +483,7 @@ export default function TerminalPanel({ collapsed: collapsedProp, onCollapsedCha
               const atBottom = el.scrollTop + el.clientHeight >= el.scrollHeight - 20;
               setAutoScroll(atBottom);
             }}
-            className="overflow-auto text-xs leading-5 px-3 py-2 bg-matrix-bg"
+            className="workspace-terminal-body overflow-auto text-xs leading-5 px-3 py-2 bg-matrix-bg"
             style={{ height: height - 32 - 1 - 32 - 1 /* header + resize + command-row */ }}
             data-testid="terminal-log-body"
           >
@@ -522,7 +522,7 @@ export default function TerminalPanel({ collapsed: collapsedProp, onCollapsedCha
           </div>
 
           {/* Command input row */}
-          <div className="flex items-center gap-2 h-8 px-3 border-t border-matrix-border bg-matrix-surface">
+          <div className="workspace-terminal-command flex items-center gap-2 h-8 px-3 border-t border-matrix-border bg-matrix-surface">
             <span className="text-matrix-green-muted text-xs">$</span>
             <input
               type="text"

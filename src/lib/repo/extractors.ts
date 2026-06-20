@@ -83,6 +83,13 @@ export interface ResponseCompletenessAudit {
   lastCompletePath?: string;
 }
 
+export interface TruncatedEditPatchDiagnostic {
+  truncated: boolean;
+  path?: string;
+  reason?: string;
+  missingMarkers: string[];
+}
+
 // ---------- EDIT block parsing ----------
 
 // Match ```edit:<path>\n<body>``` — body must contain SEARCH/REPLACE markers
@@ -92,6 +99,55 @@ const EDIT_FENCE_REGEX =
 // Inside an edit body, match one or more SEARCH / REPLACE pairs
 const SEARCH_REPLACE_REGEX =
   /<{5,}\s*SEARCH\s*\n([\s\S]*?)\n={5,}\s*\n([\s\S]*?)\n>{5,}\s*REPLACE/g;
+
+export function detectTruncatedEditPatch(
+  content: string
+): TruncatedEditPatchDiagnostic {
+  const empty: TruncatedEditPatchDiagnostic = {
+    truncated: false,
+    missingMarkers: [],
+  };
+  if (!content) return empty;
+
+  const lastEditStart = content.lastIndexOf('```edit:');
+  const hasSearch = /<{5,}\s*SEARCH/.test(content);
+  const hasSeparator = /={5,}/.test(content);
+  const hasReplace = />{5,}\s*REPLACE/.test(content);
+
+  if (lastEditStart === -1 && !hasSearch && !hasSeparator && !hasReplace) {
+    return empty;
+  }
+
+  const trailingFenceClosed =
+    lastEditStart === -1 ||
+    content.indexOf('```', lastEditStart + '```edit:'.length) !== -1;
+  const tail = lastEditStart >= 0 ? content.slice(lastEditStart) : content;
+  const path = tail.match(/^```edit:\s*([^\s`]+)/)?.[1];
+  const missingMarkers: string[] = [];
+  if (!/<{5,}\s*SEARCH/.test(tail)) missingMarkers.push('<<<<<<< SEARCH');
+  if (!/={5,}/.test(tail)) missingMarkers.push('=======');
+  if (!/>{5,}\s*REPLACE/.test(tail)) missingMarkers.push('>>>>>>> REPLACE');
+
+  if (!trailingFenceClosed) {
+    return {
+      truncated: true,
+      path: path ? normalizeEditPath(path) : undefined,
+      reason: 'The response ended inside an unclosed edit fence.',
+      missingMarkers,
+    };
+  }
+
+  if ((hasSearch || hasSeparator) && !hasReplace) {
+    return {
+      truncated: true,
+      path: path ? normalizeEditPath(path) : undefined,
+      reason: 'A SEARCH/REPLACE edit block was cut off before the REPLACE marker.',
+      missingMarkers,
+    };
+  }
+
+  return empty;
+}
 
 /**
  * Normalize a path emitted by the AI inside an `edit:` fence.

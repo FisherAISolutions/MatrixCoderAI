@@ -418,7 +418,7 @@ ${clean}\`\`\``)
     ).toBe(true);
   });
 
-  it('surfaces finish reason and token usage when auto-fix returns empty content', async () => {
+  it('surfaces finish reason and token usage when auto-fix hits the output limit', async () => {
     mockRunValidation.mockResolvedValueOnce(
       validationFail('Some error', 'raw log')
     );
@@ -444,10 +444,69 @@ ${clean}\`\`\``)
 
     expect(result.ran).toBe(true);
     expect(result.succeeded).toBe(false);
-    expect(result.attempts).toBe(1);
+    expect(result.attempts).toBe(2);
+    expect(mockGetChatCompletion).toHaveBeenCalledTimes(2);
     const contents = r.chatMessages.map((m) => m.content).join('\n');
     expect(contents).toContain('finish_reason=length');
     expect(contents).toContain('completion_tokens=8192');
+    expect(contents).toContain('hit the output limit');
+    expect(contents).toContain('compact context');
+  });
+
+  it('REGRESSION: output-limit retry shrinks context before trying again', async () => {
+    const largeFile = `const x: number = "broken";\n${'// filler\n'.repeat(1500)}`;
+    const hugeLog =
+      `src/app/page.tsx(1,7): error TS2322: Type 'string' is not assignable to type 'number'.\n` +
+      'x'.repeat(30_000);
+
+    mockRunValidation
+      .mockResolvedValueOnce(
+        validationFail(
+          "Type 'string' is not assignable to type 'number'.",
+          hugeLog
+        )
+      )
+      .mockResolvedValueOnce(validationPass());
+
+    mockGetChatCompletion
+      .mockResolvedValueOnce(
+        aiCompletion('', {
+          finish_reason: 'length',
+          usage: {
+            prompt_tokens: 9654,
+            completion_tokens: 8192,
+            total_tokens: 17846,
+          },
+        })
+      )
+      .mockResolvedValueOnce(
+        aiCompletion(
+          aiPatch(
+            'src/app/page.tsx',
+            `const x: number = "broken";`,
+            `const x: number = 42;`
+          )
+        )
+      );
+
+    const r = makeRecorder();
+    const result = await runAutoFixLoop({
+      files: [file('src/app/page.tsx', largeFile)],
+      onStatus: r.onStatus,
+      onChatMessage: r.onChatMessage,
+      onUpdateFile: r.onUpdateFile,
+      onAddFile: r.onAddFile,
+      maxAttempts: 2,
+    });
+
+    expect(result.succeeded).toBe(true);
+    expect(mockGetChatCompletion).toHaveBeenCalledTimes(2);
+    const firstPrompt = (mockGetChatCompletion.mock.calls[0][2] as any[])[1]
+      .content;
+    const secondPrompt = (mockGetChatCompletion.mock.calls[1][2] as any[])[1]
+      .content;
+    expect(secondPrompt.length).toBeLessThan(firstPrompt.length);
+    expect(r.fileUpdates[0].content).toContain('const x: number = 42');
   });
 
   it('exhausts max attempts when AI patches don\'t fix the error', async () => {

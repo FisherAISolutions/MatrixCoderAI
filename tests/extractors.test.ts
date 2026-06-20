@@ -24,6 +24,7 @@
 import { describe, it, expect } from 'vitest';
 import {
   analyzeResponseCompleteness,
+  detectTruncatedEditPatch,
   extractFromAssistantResponse,
 } from '@/lib/repo/extractors';
 
@@ -327,6 +328,47 @@ just prose
     expect(r.malformedEditReasons['src/foo.ts']).toMatch(
       /missing `<<<<<<< SEARCH` marker/i
     );
+  });
+});
+
+describe('REGRESSION - truncated SEARCH/REPLACE patches are diagnosed', () => {
+  it('detects an unclosed edit fence', () => {
+    const searchMarker = '<' + '<<<<<< SEARCH';
+    const separatorMarker = '=' + '======';
+    const diagnostic = detectTruncatedEditPatch(
+      [
+        '```edit:src/app/page.tsx',
+        searchMarker,
+        'const x = 1;',
+        separatorMarker,
+        'const x = 2;',
+      ].join('\n')
+    );
+
+    expect(diagnostic.truncated).toBe(true);
+    expect(diagnostic.path).toBe('src/app/page.tsx');
+    expect(diagnostic.reason).toMatch(/unclosed edit fence/i);
+    expect(diagnostic.missingMarkers).toContain('>>>>>>> REPLACE');
+  });
+
+  it('does not flag a complete edit block', () => {
+    const searchMarker = '<' + '<<<<<< SEARCH';
+    const separatorMarker = '=' + '======';
+    const replaceMarker = '>' + '>>>>>> REPLACE';
+    const diagnostic = detectTruncatedEditPatch(
+      [
+        '```edit:src/app/page.tsx',
+        searchMarker,
+        'const x = 1;',
+        separatorMarker,
+        'const x = 2;',
+        replaceMarker,
+        '```',
+      ].join('\n')
+    );
+
+    expect(diagnostic.truncated).toBe(false);
+    expect(diagnostic.missingMarkers).toEqual([]);
   });
 });
 
