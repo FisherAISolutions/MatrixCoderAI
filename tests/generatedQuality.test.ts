@@ -319,6 +319,83 @@ export default function HistoryPage() {
     expect(result.errors.some((error) => error.file === 'src/app/add-note/page.tsx')).toBe(false);
   });
 
+  it('does not turn route-name instructions or negative route examples into required pages', () => {
+    const result = runGeneratedQualityAudit(
+      [
+        pkg,
+        tsconfig,
+        file('src/app/page.tsx', 'export default function Page(){ return <main />; }'),
+      ],
+      'Build a fitness tracker with workouts, progress, timer, and calories. Preserve requested route names exactly. Do not create /add-note, /history, /preserve, or /names; they were not part of the original requested route set.'
+    );
+
+    expect(result.errors.some((error) => error.file === 'src/app/preserve/page.tsx')).toBe(false);
+    expect(result.errors.some((error) => error.file === 'src/app/names/page.tsx')).toBe(false);
+    expect(result.errors.some((error) => error.file === 'src/app/add-note/page.tsx')).toBe(false);
+    expect(result.errors.some((error) => error.file === 'src/app/history/page.tsx')).toBe(false);
+  });
+
+  it('requires every explicitly listed CRM slash route and ignores the root slash bullet', () => {
+    const result = runGeneratedQualityAudit(
+      [
+        pkg,
+        tsconfig,
+        file('src/app/page.tsx', 'export default function Page(){ return <main />; }'),
+        file('src/app/contacts/page.tsx', 'export default function Contacts(){ return <main />; }'),
+        file('src/app/companies/page.tsx', 'export default function Companies(){ return <main />; }'),
+      ],
+      'Build a Personal CRM application. Requirements: Routes: * / * /contacts * /companies * /tasks * /pipeline Features: Dashboard (/) Contacts (/contacts) Companies (/companies) Tasks (/tasks) Pipeline (/pipeline). Preserve route names exactly. Do not create /add-note. Do not create /history.'
+    );
+
+    expect(result.errors.some((error) => error.file === 'src/app/-/page.tsx')).toBe(false);
+    expect(result.errors.some((error) => error.file === 'src/app/tasks/page.tsx')).toBe(true);
+    expect(result.errors.some((error) => error.file === 'src/app/pipeline/page.tsx')).toBe(true);
+    expect(result.errors.some((error) => error.file === 'src/app/add-note/page.tsx')).toBe(false);
+    expect(result.errors.some((error) => error.file === 'src/app/history/page.tsx')).toBe(false);
+  });
+
+  it('fails generated navigation links that point to missing app routes', () => {
+    const result = runGeneratedQualityAudit(
+      [
+        pkg,
+        tsconfig,
+        file(
+          'src/app/page.tsx',
+          `import Link from 'next/link';
+
+export default function Page() {
+  return (
+    <nav>
+      <Link href="/contacts">Contacts</Link>
+      <Link href="/tasks">Tasks</Link>
+      <Link href="/pipeline">Pipeline</Link>
+    </nav>
+  );
+}`
+        ),
+        file('src/app/contacts/page.tsx', 'export default function Contacts(){ return <main />; }'),
+      ],
+      'Build a Personal CRM application with routes /, /contacts, /tasks, and /pipeline.'
+    );
+
+    expect(result.ok).toBe(false);
+    expect(result.errors.some((error) => error.file === 'src/app/tasks/page.tsx')).toBe(true);
+    expect(result.errors.some((error) => error.file === 'src/app/pipeline/page.tsx')).toBe(true);
+  });
+
+  it('fails unnamed fallback component files before validation can pass', () => {
+    const result = runGeneratedQualityAudit([
+      pkg,
+      tsconfig,
+      file('src/app/page.tsx', 'export default function Page(){ return <main />; }'),
+      file('src/components/Component0.tsx', 'export default function Component0(){ return <section />; }'),
+    ]);
+
+    expect(result.ok).toBe(false);
+    expect(result.errors.some((error) => error.file === 'src/components/Component0.tsx')).toBe(true);
+    expect(result.log).toMatch(/unnamed fallback file/i);
+  });
+
   it('does not demand generic add route when explicit add-note route exists', () => {
     const result = runGeneratedQualityAudit(
       [

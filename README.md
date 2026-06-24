@@ -1,4 +1,4 @@
-# CodePilot
+# MatrixCoderAI
 
 Multi-agent AI coding workspace — Next.js 15 + React 19 + Tailwind + Supabase + OpenAI.
 

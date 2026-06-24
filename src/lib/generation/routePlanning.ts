@@ -15,6 +15,22 @@ const GENERIC_PAGE_WORDS = new Set([
   'responsive',
   'professional',
   'production-quality',
+  'preserve',
+  'requested',
+  'request',
+  'route',
+  'routes',
+  'name',
+  'names',
+  'exactly',
+  'domain',
+  'generic',
+  'notes-style',
+  'primary',
+  'secondary',
+  'feature',
+  'workflow',
+  'workflows',
 ]);
 
 function toRouteSlug(value: string): string | null {
@@ -25,12 +41,24 @@ function toRouteSlug(value: string): string | null {
     .replace(/\s+/g, '-')
     .replace(/[^a-z0-9-]/g, '')
     .replace(/-+/g, '-');
-  if (!slug || GENERIC_PAGE_WORDS.has(slug)) return null;
+  if (!slug || !/[a-z0-9]/.test(slug) || GENERIC_PAGE_WORDS.has(slug)) return null;
   return slug;
 }
 
 function addUniqueRouteSlug(out: string[], slug: string | null) {
   if (slug && !out.includes(slug)) out.push(slug);
+}
+
+function isNegatedRouteMention(text: string, matchIndex: number): boolean {
+  const before = text.slice(Math.max(0, matchIndex - 90), matchIndex);
+  return /(?:do not|don't|dont|never|avoid|without|not requested|not part of|not part|unless explicitly)\s+(?:[\w\s-]*?)(?:create|use|add|include|requested|request)?\s*$/i.test(
+    before
+  );
+}
+
+function addRouteMatch(out: string[], value: string, text: string, matchIndex: number) {
+  if (isNegatedRouteMention(text, matchIndex)) return;
+  addUniqueRouteSlug(out, toRouteSlug(value));
 }
 
 export function inferRequestedRouteSlugs(baseRequest: string): string[] {
@@ -41,57 +69,54 @@ export function inferRequestedRouteSlugs(baseRequest: string): string[] {
   const explicitSlash =
     /(?:route|page|path|url|at|under|to|for)?\s*["'`]\/([a-z0-9-]+)["'`]?/g;
   while ((match = explicitSlash.exec(lower)) !== null) {
-    addUniqueRouteSlug(out, toRouteSlug(match[1]));
+    addRouteMatch(out, match[1], lower, match.index);
   }
 
-  const slugBeforeRouteNoun = /\b([a-z][a-z0-9-]*?)\s+(?:page|route|path|screen|view)\b/g;
+  const slugBeforeRouteNoun = /\b([a-z][a-z0-9-]*?)\s+(?:page|route|screen|view)\b/g;
   while ((match = slugBeforeRouteNoun.exec(lower)) !== null) {
     const before = lower.slice(Math.max(0, match.index - 8), match.index);
     if (/\b(?:add|edit|new)\s+$/.test(before)) continue;
-    addUniqueRouteSlug(out, toRouteSlug(match[1]));
+    addRouteMatch(out, match[1], lower, match.index);
   }
 
-  const routeNounBeforeSlug = /\b(?:page|route|path|screen|view)\s+["'`]?([a-z][a-z0-9-]*)["'`]?\b/g;
+  const routeNounBeforeSlug = /\b(?:page|route|screen|view)\s+["'`]?([a-z][a-z0-9-]*)["'`]?\b/g;
   while ((match = routeNounBeforeSlug.exec(lower)) !== null) {
-    addUniqueRouteSlug(out, toRouteSlug(match[1]));
+    addRouteMatch(out, match[1], lower, match.index);
   }
 
   const listedPages = /\b(?:pages|routes|screens|views)\s*:\s*([^\n.]+)/g;
   while ((match = listedPages.exec(lower)) !== null) {
+    if (match[1].includes('/')) {
+      const slashRoutes = /\/([a-z0-9-]+)/g;
+      let slashMatch: RegExpExecArray | null;
+      while ((slashMatch = slashRoutes.exec(match[1])) !== null) {
+        addRouteMatch(out, slashMatch[1], lower, match.index + slashMatch.index);
+      }
+      continue;
+    }
     for (const part of match[1].split(/,|;|\band\b/)) {
       const cleaned = part
         .replace(/\bwith\b[\s\S]*$/, '')
         .replace(/\b(page|route|screen|view|homepage|home)\b/g, '')
         .trim();
-      addUniqueRouteSlug(out, toRouteSlug(cleaned));
+      addRouteMatch(out, cleaned, lower, match.index);
     }
   }
 
   const addEntityPage = /\badd\s+([a-z][a-z0-9-]*)\s+(?:page|route|screen|view)\b/g;
   while ((match = addEntityPage.exec(lower)) !== null) {
-    addUniqueRouteSlug(out, toRouteSlug(`add-${match[1]}`));
+    addRouteMatch(out, `add-${match[1]}`, lower, match.index);
   }
 
   return out;
 }
 
 function inferAddRoutePath(baseRequest: string): string | null {
-  const lower = baseRequest.toLowerCase();
-  if (!/\badd\b/.test(lower)) return null;
   const explicitAddSlug = inferRequestedRouteSlugs(baseRequest).find((slug) =>
-    slug.startsWith('add-')
+    slug === 'add' || slug.startsWith('add-')
   );
   if (explicitAddSlug) return `src/app/${explicitAddSlug}/page.tsx`;
-  if (/\badd-note\b|\badd note\b|\bnotes?\b/.test(lower)) {
-    return 'src/app/add-note/page.tsx';
-  }
-  if (/\badd-task\b|\badd task\b|\btasks?\b/.test(lower)) {
-    return 'src/app/add-task/page.tsx';
-  }
-  if (/\badd-entry\b|\badd entry\b|\bentries?\b/.test(lower)) {
-    return 'src/app/add-entry/page.tsx';
-  }
-  return 'src/app/add/page.tsx';
+  return null;
 }
 
 export function inferRequiredPathsForBatch(

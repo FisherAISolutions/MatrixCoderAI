@@ -888,7 +888,9 @@ interface ActiveBatchGeneration {
 }
 
 const GENERATION_MAX_COMPLETION_TOKENS = 8192;
-const BATCH_MAX_FILES = 3;
+const BATCH_MAX_FILES = 2;
+const BATCH_TARGET_FILE_LINES = 220;
+const BATCH_HARD_FILE_LINES = 320;
 
 const LARGE_APP_BATCHES: GenerationBatch[] = [
   {
@@ -907,13 +909,13 @@ const LARGE_APP_BATCHES: GenerationBatch[] = [
     id: 3,
     title: 'primary feature routes and shared components',
     scope:
-      'Create only the root experience, primary requested feature routes, and shared UI components needed by the product domain. Use route names from the user request; do not invent notes-style add/edit/history routes unless they are explicitly requested.',
+      'Create only the root experience, primary requested feature routes, and shared UI components needed by the product domain. Use route names from the user request; do not invent notes-style add/edit/history routes unless they are explicitly requested. For CRUD-heavy apps, implement one route workflow at a time and keep client components route-specific.',
   },
   {
     id: 4,
     title: 'secondary feature routes and workflows',
     scope:
-      'Create only secondary requested feature routes and their immediate workflow components. Preserve exact route names from the request, such as /add-note, /history, /workouts, /progress, /timer, /settings, or CRM/SaaS domain routes. Include search, filter, edit, delete, and localStorage wiring where the requested workflow naturally needs them, without forcing a history route.',
+      'Create only secondary requested feature routes and their immediate workflow components. Preserve exact route names from the request, such as /add-note, /history, /workouts, /progress, /timer, /settings, or CRM/SaaS domain routes. Include search, filter, edit, delete, and localStorage wiring where the requested workflow naturally needs them, without forcing a history route. For CRUD-heavy apps, implement one route workflow at a time and keep client components route-specific.',
   },
   {
     id: 5,
@@ -996,6 +998,9 @@ function buildBatchPrompt(
     '',
     'Hard limits for this response:',
     `- Emit at most ${BATCH_MAX_FILES} files.`,
+    `- Target ${BATCH_TARGET_FILE_LINES} lines or fewer per file; never exceed about ${BATCH_HARD_FILE_LINES} lines in a single file.`,
+    '- Never put multiple requested route workflows into one giant client component. Use route-specific client files, for example src/components/<domain>/ContactsClient.tsx, CompaniesClient.tsx, TasksClient.tsx, or PipelineClient.tsx.',
+    '- For CRUD-heavy pages, finish one complete route workflow first. If another route would make a file or response too large, leave it for the next automatic continuation instead of starting it.',
     '- Emit only complete, closed code fences.',
     '- Stop before the response becomes long enough to risk truncation.',
     '- Do not start a file unless you can finish it in this same response.',

@@ -45,4 +45,44 @@ describe('large app route planning', () => {
     expect(required).not.toContain('src/app/history/page.tsx');
     expect(required).not.toContain('src/app/add-note/page.tsx');
   });
+
+  it('ignores route-name instructions and negative examples as app routes', () => {
+    const request =
+      'Build a fitness tracker with workouts, progress, timer, and calories. Preserve requested route names exactly. Do not create /add-note, /history, /preserve, or /names; they were not part of the original requested route set.';
+
+    expect(inferRequestedRouteSlugs(request)).toEqual([]);
+
+    const required = inferRequiredPathsForBatch(request, {
+      title: 'secondary feature routes and workflows',
+    });
+
+    expect(required).not.toContain('src/app/preserve/page.tsx');
+    expect(required).not.toContain('src/app/names/page.tsx');
+    expect(required).not.toContain('src/app/add-note/page.tsx');
+    expect(required).not.toContain('src/app/history/page.tsx');
+  });
+
+  it('reads slash-route bullet lists without inventing a dash route', () => {
+    const request =
+      'Build a Personal CRM application. Requirements: Routes: * / * /contacts * /companies * /tasks * /pipeline Features: Dashboard (/) Contacts (/contacts) Companies (/companies) Tasks (/tasks) Pipeline (/pipeline). Preserve route names exactly. Do not create /add-note. Do not create /history.';
+
+    expect(inferRequestedRouteSlugs(request)).toEqual([
+      'contacts',
+      'companies',
+      'tasks',
+      'pipeline',
+    ]);
+
+    expect(
+      inferRequiredPathsForBatch(request, {
+        title: 'primary feature routes and shared components',
+      })
+    ).toEqual(['src/app/contacts/page.tsx', 'src/app/companies/page.tsx']);
+
+    expect(
+      inferRequiredPathsForBatch(request, {
+        title: 'secondary feature routes and workflows',
+      })
+    ).toEqual(['src/app/tasks/page.tsx', 'src/app/pipeline/page.tsx']);
+  });
 });

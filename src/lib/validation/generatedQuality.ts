@@ -3,11 +3,14 @@ import { extractImports, flattenTree } from '@/lib/repo/heuristics';
 import { getAppRouterRootFiles } from '@/lib/repo/appRouterRoot';
 import { findDuplicateEffectiveAppRoutes } from '@/lib/repo/appRoutes';
 import { describePatchMarkerLeak } from '@/lib/repo/patchMarkers';
+import { inferRequestedRouteSlugs } from '@/lib/generation/routePlanning';
 import type { ParsedError } from './errorParser';
 
 const CODE_EXTENSIONS = new Set(['ts', 'tsx', 'js', 'jsx', 'mjs', 'cjs']);
 const RESOLVE_EXTENSIONS = ['.ts', '.tsx', '.js', '.jsx', '.mjs', '.cjs', '.json', '.css'];
 const INDEX_FILES = ['index.ts', 'index.tsx', 'index.js', 'index.jsx'];
+const LINKED_APP_ROUTE_REGEX =
+  /(?:href\s*=\s*|href\s*:\s*|router\.push\(\s*)["'`]\/([a-z0-9][a-z0-9-]*)(?:\/)?["'`]/gi;
 
 export interface GeneratedQualityAudit {
   ok: boolean;
@@ -127,21 +130,6 @@ function requirementTerms(requirements: string): string[] {
   return terms;
 }
 
-const GENERIC_PAGE_WORDS = new Set([
-  'home',
-  'homepage',
-  'landing',
-  'root',
-  'main',
-  'at',
-  'to',
-  'for',
-  'under',
-  'responsive',
-  'professional',
-  'production-quality',
-]);
-
 function addRequiredRoute(
   routes: Array<{ label: string; candidates: string[] }>,
   label: string,
@@ -152,25 +140,41 @@ function addRequiredRoute(
   }
 }
 
+function hasPositiveRoutePhrase(text: string, pattern: RegExp): boolean {
+  pattern.lastIndex = 0;
+  let match: RegExpExecArray | null;
+  while ((match = pattern.exec(text)) !== null) {
+    const before = text.slice(Math.max(0, match.index - 90), match.index);
+    if (
+      !/(?:do not|don't|dont|never|avoid|without|not requested|not part of|not part|unless explicitly)\s+(?:[\w\s-]*?)(?:create|use|add|include|requested|request)?\s*$/i.test(
+        before
+      )
+    ) {
+      return true;
+    }
+  }
+  return false;
+}
+
 function requiredRoutes(requirements: string): Array<{ label: string; candidates: string[] }> {
   const lower = requirements.toLowerCase();
   const routes: Array<{ label: string; candidates: string[] }> = [];
-  const explicitSlugs = requestedRouteSlugs(requirements);
-  if (/\bdashboard\s+(?:page|route|screen|view)\b/.test(lower)) {
+  const explicitSlugs = inferRequestedRouteSlugs(requirements);
+  if (hasPositiveRoutePhrase(lower, /\bdashboard\s+(?:page|route|screen|view)\b/g)) {
     addRequiredRoute(routes, 'dashboard page', [
       'src/app/dashboard/page.tsx',
       'app/dashboard/page.tsx',
     ]);
   }
-  if (/\badd\s+entry\s+(?:page|route|screen|view)\b/.test(lower)) {
+  if (hasPositiveRoutePhrase(lower, /\badd\s+entry\s+(?:page|route|screen|view)\b/g)) {
     addRequiredRoute(routes, 'add entry page', [
       'src/app/add-entry/page.tsx',
       'app/add-entry/page.tsx',
     ]);
   }
   if (
-    /\b(?:history|archive)\s+(?:page|route|screen|view)\b/.test(lower) ||
-    /\bactivity\s+(?:history|log)\b/.test(lower) ||
+    hasPositiveRoutePhrase(lower, /\b(?:history|archive)\s+(?:page|route|screen|view)\b/g) ||
+    hasPositiveRoutePhrase(lower, /\bactivity\s+(?:history|log)\b/g) ||
     explicitSlugs.includes('history')
   ) {
     addRequiredRoute(routes, 'history page', [
@@ -201,58 +205,12 @@ function requiredRoutes(requirements: string): Array<{ label: string; candidates
   return routes;
 }
 
-function requestedRouteSlugs(requirements: string): string[] {
-  const lower = requirements.toLowerCase();
-  const out: string[] = [];
-  const addSlug = (slug: string) => {
-    const clean = slug
-      .replace(/^\/+|\/+$/g, '')
-      .replace(/\s+/g, '-')
-      .replace(/[^a-z0-9-]/g, '')
-      .replace(/-+/g, '-');
-    if (!clean || GENERIC_PAGE_WORDS.has(clean)) return;
-    if (!out.includes(clean)) out.push(clean);
-  };
-
-  const quotedRoute = /(?:route|page|path|url|at|under)\s+["'`]?\/([a-z0-9-]+)["'`]?/g;
-  let match: RegExpExecArray | null;
-  while ((match = quotedRoute.exec(lower)) !== null) {
-    addSlug(match[1]);
-  }
-
-  const slugBeforeRouteNoun = /\b([a-z][a-z0-9-]*)\s+(?:page|route|path|screen|view)\b/g;
-  while ((match = slugBeforeRouteNoun.exec(lower)) !== null) {
-    const before = lower.slice(Math.max(0, match.index - 8), match.index);
-    if (/\b(?:add|edit|new)\s+$/.test(before)) continue;
-    addSlug(match[1]);
-  }
-
-  const routeNounBeforeSlug = /\b(?:page|route|path|screen|view)\s+["'`]?([a-z][a-z0-9-]*)["'`]?\b/g;
-  while ((match = routeNounBeforeSlug.exec(lower)) !== null) {
-    addSlug(match[1]);
-  }
-
-  const listedPages = /\b(?:pages|routes|screens|views)\s*:\s*([^\n.]+)/g;
-  while ((match = listedPages.exec(lower)) !== null) {
-    for (const part of match[1].split(/,|;|\band\b/)) {
-      const cleaned = part
-        .replace(/\bwith\b[\s\S]*$/, '')
-        .replace(/\b(page|route|screen|view|homepage|home)\b/g, '')
-        .trim();
-      addSlug(cleaned);
-    }
-  }
-
-  const addEntityPage = /\badd\s+([a-z][a-z0-9-]*)\s+(?:page|route|screen|view)\b/g;
-  while ((match = addEntityPage.exec(lower)) !== null) {
-    addSlug(`add-${match[1]}`);
-  }
-
-  return out;
-}
-
 function routePagePath(slug: string): string {
   return `src/app/${slug}/page.tsx`;
+}
+
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
 
 const DUPLICATE_ROUTE_PAIRS: Array<[string, string]> = [
@@ -271,6 +229,41 @@ function appRouteSlugs(paths: Set<string>): string[] {
     if (match) slugs.push(match[1]);
   }
   return slugs;
+}
+
+function hasAppRoutePage(slug: string, paths: Set<string>): boolean {
+  const slugPattern = escapeRegExp(slug);
+  const routePattern = new RegExp(
+    `^(?:src/)?app/(?:\\([^/]+\\)/)*${slugPattern}/page\\.(?:tsx|jsx|ts|js)$`
+  );
+  for (const path of paths) {
+    if (routePattern.test(path)) return true;
+  }
+  return false;
+}
+
+function linkedAppRoutes(files: FileNode[]): Map<string, Set<string>> {
+  const out = new Map<string, Set<string>>();
+  for (const file of files) {
+    if (!/\.(?:tsx|jsx|ts|js)$/.test(file.path)) continue;
+    LINKED_APP_ROUTE_REGEX.lastIndex = 0;
+    let match: RegExpExecArray | null;
+    while ((match = LINKED_APP_ROUTE_REGEX.exec(file.content ?? '')) !== null) {
+      const slug = match[1];
+      if (slug === 'api' || slug.startsWith('_')) continue;
+      const sources = out.get(slug) ?? new Set<string>();
+      sources.add(file.path);
+      out.set(slug, sources);
+    }
+  }
+  return out;
+}
+
+function isFallbackGeneratedPath(path: string): boolean {
+  return (
+    /^src\/components\/Component\d+\.(?:tsx|jsx|ts|js)$/.test(path) ||
+    /^src\/generated\d+\.(?:tsx|jsx|ts|js|css|json)$/.test(path)
+  );
 }
 
 function hasTerm(content: string, term: string): boolean {
@@ -398,7 +391,7 @@ export function runGeneratedQualityAudit(
     );
   }
 
-  for (const slug of requestedRouteSlugs(requirements)) {
+  for (const slug of inferRequestedRouteSlugs(requirements)) {
     const exactPath = routePagePath(slug);
     if (!byPath.has(exactPath)) {
       fail(
@@ -447,6 +440,13 @@ export function runGeneratedQualityAudit(
   }
 
   for (const file of flat) {
+    if (isFallbackGeneratedPath(file.path)) {
+      fail(
+        file.path,
+        `${file.path} is an unnamed fallback file produced from a code fence without an explicit path. Regenerate this as a domain-named file with a real // path: annotation, or remove it if it is unused.`
+      );
+    }
+
     const markerLeak = describePatchMarkerLeak(file.content ?? '');
     if (markerLeak) {
       fail(
@@ -497,6 +497,14 @@ export function runGeneratedQualityAudit(
         `The original request requires a ${route.label}, but none of these route files exist: ${route.candidates.join(', ')}. Do not validate a config-only scaffold; create the requested page/component files first.`
       );
     }
+  }
+
+  for (const [slug, sources] of linkedAppRoutes(flat)) {
+    if (hasAppRoutePage(slug, allPaths)) continue;
+    fail(
+      routePagePath(slug),
+      `Generated navigation links to "/${slug}", but no App Router page exists for that route. Create ${routePagePath(slug)} or remove/update the link in: ${Array.from(sources).join(', ')}.`
+    );
   }
 
   const globals =
