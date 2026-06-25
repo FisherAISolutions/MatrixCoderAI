@@ -1,0 +1,277 @@
+import {
+  GENERATION_BENCHMARKS,
+  getGenerationBenchmark,
+  type GenerationBenchmark,
+} from './benchmarks';
+import {
+  validateGeneratedFilesAgainstBenchmark,
+  type BenchmarkValidationIssue,
+} from './benchmarkValidation';
+import type { BenchmarkGeneratorOutput } from './benchmarkRunner';
+
+export type BenchmarkExecutionStatus =
+  | 'dry-run'
+  | 'passed'
+  | 'failed'
+  | 'error'
+  | 'refused';
+
+export interface BenchmarkExecutionGeneratorOutput
+  extends BenchmarkGeneratorOutput {
+  previewConnected?: boolean;
+  autoFixAttemptCount?: number;
+  warnings?: string[];
+}
+
+export type BenchmarkExecutionGenerator = (
+  benchmark: GenerationBenchmark
+) =>
+  | Promise<BenchmarkExecutionGeneratorOutput | string[]>
+  | BenchmarkExecutionGeneratorOutput
+  | string[];
+
+export interface BenchmarkRiskEstimate {
+  level: 'low' | 'medium';
+  promptChars: number;
+  expectedRouteCount: number;
+  warning: string;
+}
+
+export interface BenchmarkExecutionResult {
+  benchmarkId?: string;
+  prompt?: string;
+  status: BenchmarkExecutionStatus;
+  dryRun: boolean;
+  durationMs: number;
+  generatedFileCount: number;
+  generatedFilePaths: string[];
+  missingRequiredRoutes: BenchmarkValidationIssue[];
+  forbiddenRoutesFound: BenchmarkValidationIssue[];
+  validationStatus: 'not-run' | 'passed' | 'failed';
+  previewConnected?: boolean;
+  autoFixAttemptCount?: number;
+  riskEstimate?: BenchmarkRiskEstimate;
+  errors: string[];
+  warnings: string[];
+  log: string[];
+}
+
+export interface RunBenchmarkExecutionHarnessOptions {
+  benchmarkId?: string;
+  dryRun?: boolean;
+  devOnly?: boolean;
+  confirmExecution?: boolean;
+  generator?: BenchmarkExecutionGenerator;
+  logger?: (message: string) => void;
+  now?: () => number;
+}
+
+function normalizeGeneratedOutput(
+  output: BenchmarkExecutionGeneratorOutput | string[]
+): BenchmarkExecutionGeneratorOutput {
+  return Array.isArray(output) ? { generatedFiles: output } : output;
+}
+
+function emptyResult(
+  status: BenchmarkExecutionStatus,
+  dryRun: boolean,
+  errors: string[],
+  warnings: string[] = []
+): BenchmarkExecutionResult {
+  return {
+    status,
+    dryRun,
+    durationMs: 0,
+    generatedFileCount: 0,
+    generatedFilePaths: [],
+    missingRequiredRoutes: [],
+    forbiddenRoutesFound: [],
+    validationStatus: 'not-run',
+    errors,
+    warnings,
+    log: [],
+  };
+}
+
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
+export function estimateBenchmarkExecutionRisk(
+  benchmark: GenerationBenchmark
+): BenchmarkRiskEstimate {
+  return {
+    level: 'medium',
+    promptChars: benchmark.prompt.length,
+    expectedRouteCount: benchmark.expectedRoutes.length,
+    warning:
+      'Dev-only single-benchmark execution can consume model tokens and may run validation/preview work if the injected generator does so.',
+  };
+}
+
+function emit(
+  log: string[],
+  logger: ((message: string) => void) | undefined,
+  message: string
+) {
+  log.push(message);
+  logger?.(message);
+}
+
+function validateHarnessRequest(
+  options: RunBenchmarkExecutionHarnessOptions
+): { benchmark?: GenerationBenchmark; errors: string[] } {
+  const errors: string[] = [];
+  const id = options.benchmarkId?.trim();
+
+  if (!options.devOnly) {
+    errors.push('Benchmark execution harness is dev-only. Pass devOnly: true from trusted internal code.');
+  }
+  if (!id) {
+    errors.push('An explicit benchmark id is required. The harness refuses implicit or all-benchmark execution.');
+  } else if (id === 'all' || id === '*') {
+    errors.push('Refusing to run all benchmarks. Select exactly one benchmark id.');
+  }
+
+  const benchmark = id && id !== 'all' && id !== '*' ? getGenerationBenchmark(id) : undefined;
+  if (id && id !== 'all' && id !== '*' && !benchmark) {
+    errors.push(
+      `Unknown benchmark id "${id}". Available ids: ${GENERATION_BENCHMARKS.map((item) => item.id).join(', ')}.`
+    );
+  }
+
+  return { benchmark, errors };
+}
+
+export async function runBenchmarkExecutionHarness(
+  options: RunBenchmarkExecutionHarnessOptions
+): Promise<BenchmarkExecutionResult> {
+  const dryRun = options.dryRun !== false;
+  const request = validateHarnessRequest(options);
+  if (request.errors.length > 0 || !request.benchmark) {
+    return emptyResult('refused', dryRun, request.errors);
+  }
+
+  const benchmark = request.benchmark;
+  const riskEstimate = estimateBenchmarkExecutionRisk(benchmark);
+  const log: string[] = [];
+  const warnings = [riskEstimate.warning];
+
+  emit(
+    log,
+    options.logger,
+    `[benchmark-harness] id=${benchmark.id} mode=${dryRun ? 'dry-run' : 'execute'} risk=${riskEstimate.level} prompt_chars=${riskEstimate.promptChars} expected_routes=${riskEstimate.expectedRouteCount}`
+  );
+
+  if (dryRun) {
+    emit(log, options.logger, `[benchmark-harness] prompt:\n${benchmark.prompt}`);
+    emit(
+      log,
+      options.logger,
+      `[benchmark-harness] expected_routes=${benchmark.expectedRoutes.join(', ')}`
+    );
+    emit(
+      log,
+      options.logger,
+      `[benchmark-harness] forbidden_routes=${benchmark.forbiddenRoutes.join(', ')}`
+    );
+    emit(
+      log,
+      options.logger,
+      '[benchmark-harness] validation=required src/app route files, forbidden route absence, and no root app/ files'
+    );
+
+    return {
+      benchmarkId: benchmark.id,
+      prompt: benchmark.prompt,
+      status: 'dry-run',
+      dryRun: true,
+      durationMs: 0,
+      generatedFileCount: 0,
+      generatedFilePaths: [],
+      missingRequiredRoutes: [],
+      forbiddenRoutesFound: [],
+      validationStatus: 'not-run',
+      riskEstimate,
+      errors: [],
+      warnings,
+      log,
+    };
+  }
+
+  if (!options.confirmExecution) {
+    return {
+      ...emptyResult('refused', false, [
+        'Live benchmark execution requires confirmExecution: true.',
+      ], warnings),
+      benchmarkId: benchmark.id,
+      prompt: benchmark.prompt,
+      riskEstimate,
+      log,
+    };
+  }
+  if (!options.generator) {
+    return {
+      ...emptyResult('refused', false, [
+        'Live benchmark execution requires an injected generator function.',
+      ], warnings),
+      benchmarkId: benchmark.id,
+      prompt: benchmark.prompt,
+      riskEstimate,
+      log,
+    };
+  }
+
+  const now = options.now ?? Date.now;
+  const startedAt = now();
+
+  try {
+    const output = normalizeGeneratedOutput(await options.generator(benchmark));
+    const validation = validateGeneratedFilesAgainstBenchmark(
+      benchmark,
+      output.generatedFiles
+    );
+    const missingRequiredRoutes = validation.issues.filter(
+      (issue) => issue.type === 'missing-required-route'
+    );
+    const forbiddenRoutesFound = validation.issues.filter(
+      (issue) => issue.type === 'forbidden-route-present'
+    );
+
+    return {
+      benchmarkId: benchmark.id,
+      prompt: benchmark.prompt,
+      status: validation.ok ? 'passed' : 'failed',
+      dryRun: false,
+      durationMs: Math.max(0, now() - startedAt),
+      generatedFileCount: output.generatedFiles.length,
+      generatedFilePaths: output.generatedFiles,
+      missingRequiredRoutes,
+      forbiddenRoutesFound,
+      validationStatus: validation.ok ? 'passed' : 'failed',
+      previewConnected: output.previewConnected,
+      autoFixAttemptCount: output.autoFixAttemptCount,
+      riskEstimate,
+      errors: validation.issues.map((issue) => issue.message),
+      warnings: [...warnings, ...(output.warnings ?? [])],
+      log: output.log ? [...log, output.log] : log,
+    };
+  } catch (error) {
+    return {
+      benchmarkId: benchmark.id,
+      prompt: benchmark.prompt,
+      status: 'error',
+      dryRun: false,
+      durationMs: Math.max(0, now() - startedAt),
+      generatedFileCount: 0,
+      generatedFilePaths: [],
+      missingRequiredRoutes: [],
+      forbiddenRoutesFound: [],
+      validationStatus: 'not-run',
+      riskEstimate,
+      errors: [errorMessage(error)],
+      warnings,
+      log,
+    };
+  }
+}

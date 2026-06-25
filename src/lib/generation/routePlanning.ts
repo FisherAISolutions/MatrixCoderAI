@@ -12,6 +12,8 @@ const GENERIC_PAGE_WORDS = new Set([
   'to',
   'for',
   'under',
+  'with',
+  'the',
   'responsive',
   'professional',
   'production-quality',
@@ -31,6 +33,8 @@ const GENERIC_PAGE_WORDS = new Set([
   'feature',
   'workflow',
   'workflows',
+  'mention',
+  'mentions',
 ]);
 
 function toRouteSlug(value: string): string | null {
@@ -51,7 +55,7 @@ function addUniqueRouteSlug(out: string[], slug: string | null) {
 
 function isNegatedRouteMention(text: string, matchIndex: number): boolean {
   const before = text.slice(Math.max(0, matchIndex - 90), matchIndex);
-  return /(?:do not|don't|dont|never|avoid|without|not requested|not part of|not part|unless explicitly)\s+(?:[\w\s-]*?)(?:create|use|add|include|requested|request)?\s*$/i.test(
+  return /(?:do not|don't|dont|never|avoid|without|not requested|not part of|not part|unless explicitly|forbidden|forbid)\s+(?:[\w\s-]*?)(?:create|use|add|include|requested|request)?\s*$/i.test(
     before
   );
 }
@@ -61,9 +65,33 @@ function addRouteMatch(out: string[], value: string, text: string, matchIndex: n
   addUniqueRouteSlug(out, toRouteSlug(value));
 }
 
+function inferForbiddenRouteSlugs(text: string): Set<string> {
+  const lower = text.toLowerCase();
+  const forbidden = new Set<string>();
+  const slashRoute = /\/([a-z0-9-]+)/g;
+  let match: RegExpExecArray | null;
+  while ((match = slashRoute.exec(lower)) !== null) {
+    const before = lower.slice(Math.max(0, match.index - 110), match.index);
+    const after = lower.slice(match.index + match[0].length, match.index + match[0].length + 90);
+    if (
+      /(?:do not|don't|dont|never|avoid|without|not requested|not part of|not part|unless explicitly|forbidden|forbid)\s+(?:[\w\s,/-]*?)(?:create|use|add|include|requested|request)?\s*$/i.test(
+        before
+      ) ||
+      /^\s*(?:is|are|was|were)?\s*(?:not requested|not part of|forbidden|forbid|disallowed|not allowed|excluded)/i.test(
+        after
+      )
+    ) {
+      const slug = toRouteSlug(match[1]);
+      if (slug) forbidden.add(slug);
+    }
+  }
+  return forbidden;
+}
+
 export function inferRequestedRouteSlugs(baseRequest: string): string[] {
   const lower = baseRequest.toLowerCase();
   const out: string[] = [];
+  const forbidden = inferForbiddenRouteSlugs(lower);
 
   let match: RegExpExecArray | null;
   const explicitSlash =
@@ -108,7 +136,7 @@ export function inferRequestedRouteSlugs(baseRequest: string): string[] {
     addRouteMatch(out, `add-${match[1]}`, lower, match.index);
   }
 
-  return out;
+  return out.filter((slug) => !forbidden.has(slug));
 }
 
 function inferAddRoutePath(baseRequest: string): string | null {

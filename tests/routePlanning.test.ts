@@ -3,6 +3,12 @@ import {
   inferRequestedRouteSlugs,
   inferRequiredPathsForBatch,
 } from '@/lib/generation/routePlanning';
+import { GENERATION_BENCHMARKS } from '@/lib/generation/benchmarks';
+
+function routeToSlug(route: string): string | null {
+  if (route === '/') return null;
+  return route.replace(/^\/+/, '').replace(/\/+$/, '');
+}
 
 describe('large app route planning', () => {
   it('preserves explicit notes benchmark routes without inventing note route', () => {
@@ -84,5 +90,57 @@ describe('large app route planning', () => {
         title: 'secondary feature routes and workflows',
       })
     ).toEqual(['src/app/tasks/page.tsx', 'src/app/pipeline/page.tsx']);
+  });
+
+  it.each(GENERATION_BENCHMARKS)(
+    'infers explicit benchmark routes for $id without forbidden routes',
+    (benchmark) => {
+      const expectedSlugs = benchmark.expectedRoutes
+        .map(routeToSlug)
+        .filter((slug): slug is string => Boolean(slug));
+      const forbiddenSlugs = benchmark.forbiddenRoutes
+        .map(routeToSlug)
+        .filter((slug): slug is string => Boolean(slug));
+
+      expect(inferRequestedRouteSlugs(benchmark.prompt)).toEqual(expectedSlugs);
+      for (const slug of forbiddenSlugs) {
+        expect(inferRequestedRouteSlugs(benchmark.prompt)).not.toContain(slug);
+      }
+    }
+  );
+
+  it.each(GENERATION_BENCHMARKS)(
+    'splits benchmark route gates conservatively for $id',
+    (benchmark) => {
+      const expectedSlugs = benchmark.expectedRoutes
+        .map(routeToSlug)
+        .filter((slug): slug is string => Boolean(slug));
+
+      expect(
+        inferRequiredPathsForBatch(benchmark.prompt, {
+          title: 'primary feature routes and shared components',
+        })
+      ).toEqual(expectedSlugs.slice(0, 2).map((slug) => `src/app/${slug}/page.tsx`));
+
+      expect(
+        inferRequiredPathsForBatch(benchmark.prompt, {
+          title: 'secondary feature routes and workflows',
+        })
+      ).toEqual(expectedSlugs.slice(2).map((slug) => `src/app/${slug}/page.tsx`));
+    }
+  );
+
+  it('lets forbidden slash routes override positive-looking route mentions', () => {
+    const request =
+      'Build a CRM app. Routes: /contacts, /tasks. Do not create /history, /preserve, or /names. The route /history is forbidden.';
+
+    expect(inferRequestedRouteSlugs(request)).toEqual(['contacts', 'tasks']);
+  });
+
+  it('does not infer routes from descriptive feature prose', () => {
+    const request =
+      'Build a professional SaaS dashboard with reusable components, empty states, loading-safe client components, settings controls, relationship history text, and production-quality UI.';
+
+    expect(inferRequestedRouteSlugs(request)).toEqual([]);
   });
 });
