@@ -18,13 +18,32 @@ export type BenchmarkExecutionStatus =
 
 export interface BenchmarkExecutionGeneratorOutput
   extends BenchmarkGeneratorOutput {
+  generationSuccess?: boolean;
+  validationSuccess?: boolean;
+  detectedRoutes?: string[];
   previewConnected?: boolean;
   autoFixAttemptCount?: number;
   warnings?: string[];
+  errors?: string[];
 }
 
 export type BenchmarkExecutionGenerator = (
   benchmark: GenerationBenchmark
+) =>
+  | Promise<BenchmarkExecutionGeneratorOutput | string[]>
+  | BenchmarkExecutionGeneratorOutput
+  | string[];
+
+export interface MatrixCoderBenchmarkAdapterRequest {
+  benchmark: GenerationBenchmark;
+  benchmarkId: string;
+  prompt: string;
+  expectedRoutes: string[];
+  forbiddenRoutes: string[];
+}
+
+export type MatrixCoderBenchmarkAdapter = (
+  request: MatrixCoderBenchmarkAdapterRequest
 ) =>
   | Promise<BenchmarkExecutionGeneratorOutput | string[]>
   | BenchmarkExecutionGeneratorOutput
@@ -39,12 +58,16 @@ export interface BenchmarkRiskEstimate {
 
 export interface BenchmarkExecutionResult {
   benchmarkId?: string;
+  benchmarkName?: string;
   prompt?: string;
   status: BenchmarkExecutionStatus;
   dryRun: boolean;
   durationMs: number;
+  generationSuccess?: boolean;
+  validationSuccess?: boolean;
   generatedFileCount: number;
   generatedFilePaths: string[];
+  detectedRoutes: string[];
   missingRequiredRoutes: BenchmarkValidationIssue[];
   forbiddenRoutesFound: BenchmarkValidationIssue[];
   validationStatus: 'not-run' | 'passed' | 'failed';
@@ -61,6 +84,16 @@ export interface RunBenchmarkExecutionHarnessOptions {
   dryRun?: boolean;
   devOnly?: boolean;
   confirmExecution?: boolean;
+  /**
+   * Adapter for live benchmark execution. This must call Matrix Coder's
+   * normal generation orchestration and return the resulting file snapshot.
+   * The harness only handles safety checks and scoring.
+   */
+  matrixCoderAdapter?: MatrixCoderBenchmarkAdapter;
+  /**
+   * Backwards-compatible injected generator used by unit tests and older
+   * internal callers. Prefer matrixCoderAdapter for real Matrix Coder runs.
+   */
   generator?: BenchmarkExecutionGenerator;
   logger?: (message: string) => void;
   now?: () => number;
@@ -84,6 +117,7 @@ function emptyResult(
     durationMs: 0,
     generatedFileCount: 0,
     generatedFilePaths: [],
+    detectedRoutes: [],
     missingRequiredRoutes: [],
     forbiddenRoutesFound: [],
     validationStatus: 'not-run',
@@ -91,6 +125,30 @@ function emptyResult(
     warnings,
     log: [],
   };
+}
+
+const PAGE_FILE_REGEX = /^(?:src\/)?app\/(.+\/)?page\.(?:tsx|jsx|ts|js)$/;
+
+function normalizePath(path: string): string {
+  return path.replace(/\\/g, '/').replace(/^\.\/+/, '').replace(/^\/+/, '');
+}
+
+export function detectRoutesFromGeneratedFiles(generatedFiles: string[]): string[] {
+  const routes = new Set<string>();
+
+  for (const rawPath of generatedFiles) {
+    const path = normalizePath(rawPath);
+    const match = path.match(PAGE_FILE_REGEX);
+    if (!match) continue;
+    const segments = (match[1] ?? '').replace(/\/$/, '');
+    routes.add(segments ? `/${segments}` : '/');
+  }
+
+  return Array.from(routes).sort((a, b) => {
+    if (a === '/') return -1;
+    if (b === '/') return 1;
+    return a.localeCompare(b);
+  });
 }
 
 function errorMessage(error: unknown): string {
@@ -183,12 +241,16 @@ export async function runBenchmarkExecutionHarness(
 
     return {
       benchmarkId: benchmark.id,
+      benchmarkName: benchmark.displayName,
       prompt: benchmark.prompt,
       status: 'dry-run',
       dryRun: true,
       durationMs: 0,
+      generationSuccess: undefined,
+      validationSuccess: undefined,
       generatedFileCount: 0,
       generatedFilePaths: [],
+      detectedRoutes: [],
       missingRequiredRoutes: [],
       forbiddenRoutesFound: [],
       validationStatus: 'not-run',
@@ -205,17 +267,19 @@ export async function runBenchmarkExecutionHarness(
         'Live benchmark execution requires confirmExecution: true.',
       ], warnings),
       benchmarkId: benchmark.id,
+      benchmarkName: benchmark.displayName,
       prompt: benchmark.prompt,
       riskEstimate,
       log,
     };
   }
-  if (!options.generator) {
+  if (!options.matrixCoderAdapter && !options.generator) {
     return {
       ...emptyResult('refused', false, [
-        'Live benchmark execution requires an injected generator function.',
+        'Live benchmark execution requires an injected Matrix Coder adapter.',
       ], warnings),
       benchmarkId: benchmark.id,
+      benchmarkName: benchmark.displayName,
       prompt: benchmark.prompt,
       riskEstimate,
       log,
@@ -226,7 +290,18 @@ export async function runBenchmarkExecutionHarness(
   const startedAt = now();
 
   try {
-    const output = normalizeGeneratedOutput(await options.generator(benchmark));
+    const adapterOutput = options.matrixCoderAdapter
+      ? await options.matrixCoderAdapter({
+          benchmark,
+          benchmarkId: benchmark.id,
+          prompt: benchmark.prompt,
+          expectedRoutes: benchmark.expectedRoutes,
+          forbiddenRoutes: benchmark.forbiddenRoutes,
+        })
+      : await options.generator!(benchmark);
+    const output = normalizeGeneratedOutput(adapterOutput);
+    const detectedRoutes =
+      output.detectedRoutes ?? detectRoutesFromGeneratedFiles(output.generatedFiles);
     const validation = validateGeneratedFilesAgainstBenchmark(
       benchmark,
       output.generatedFiles
@@ -240,31 +315,39 @@ export async function runBenchmarkExecutionHarness(
 
     return {
       benchmarkId: benchmark.id,
+      benchmarkName: benchmark.displayName,
       prompt: benchmark.prompt,
       status: validation.ok ? 'passed' : 'failed',
       dryRun: false,
       durationMs: Math.max(0, now() - startedAt),
+      generationSuccess: output.generationSuccess ?? true,
+      validationSuccess: output.validationSuccess ?? validation.ok,
       generatedFileCount: output.generatedFiles.length,
       generatedFilePaths: output.generatedFiles,
+      detectedRoutes,
       missingRequiredRoutes,
       forbiddenRoutesFound,
       validationStatus: validation.ok ? 'passed' : 'failed',
       previewConnected: output.previewConnected,
       autoFixAttemptCount: output.autoFixAttemptCount,
       riskEstimate,
-      errors: validation.issues.map((issue) => issue.message),
+      errors: [...(output.errors ?? []), ...validation.issues.map((issue) => issue.message)],
       warnings: [...warnings, ...(output.warnings ?? [])],
       log: output.log ? [...log, output.log] : log,
     };
   } catch (error) {
     return {
       benchmarkId: benchmark.id,
+      benchmarkName: benchmark.displayName,
       prompt: benchmark.prompt,
       status: 'error',
       dryRun: false,
       durationMs: Math.max(0, now() - startedAt),
+      generationSuccess: false,
+      validationSuccess: false,
       generatedFileCount: 0,
       generatedFilePaths: [],
+      detectedRoutes: [],
       missingRequiredRoutes: [],
       forbiddenRoutesFound: [],
       validationStatus: 'not-run',

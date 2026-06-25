@@ -1,6 +1,9 @@
 import { describe, expect, it } from 'vitest';
 import { getGenerationBenchmark } from '@/lib/generation/benchmarks';
-import { runBenchmarkExecutionHarness } from '@/lib/generation/benchmarkExecutionHarness';
+import {
+  detectRoutesFromGeneratedFiles,
+  runBenchmarkExecutionHarness,
+} from '@/lib/generation/benchmarkExecutionHarness';
 import type { GenerationBenchmark } from '@/lib/generation/benchmarks';
 
 function routeFile(route: string): string {
@@ -92,6 +95,18 @@ describe('benchmark execution harness', () => {
     expect(result.errors.join('\n')).toMatch(/confirmExecution: true/);
   });
 
+  it('refuses live execution without an injected Matrix Coder adapter', async () => {
+    const result = await runBenchmarkExecutionHarness({
+      benchmarkId: 'personal-crm',
+      devOnly: true,
+      dryRun: false,
+      confirmExecution: true,
+    });
+
+    expect(result.status).toBe('refused');
+    expect(result.errors.join('\n')).toMatch(/Matrix Coder adapter/);
+  });
+
   it('runs one selected benchmark with an injected fake generator', async () => {
     const benchmark = getGenerationBenchmark('personal-crm')!;
     let tick = 1000;
@@ -112,9 +127,19 @@ describe('benchmark execution harness', () => {
     });
 
     expect(result.status).toBe('passed');
+    expect(result.benchmarkName).toBe('Personal CRM');
+    expect(result.generationSuccess).toBe(true);
+    expect(result.validationSuccess).toBe(true);
     expect(result.durationMs).toBe(50);
     expect(result.generatedFileCount).toBe(validFilesFor(benchmark).length);
     expect(result.generatedFilePaths).toContain('src/app/pipeline/page.tsx');
+    expect(result.detectedRoutes).toEqual([
+      '/',
+      '/companies',
+      '/contacts',
+      '/pipeline',
+      '/tasks',
+    ]);
     expect(result.missingRequiredRoutes).toEqual([]);
     expect(result.forbiddenRoutesFound).toEqual([]);
     expect(result.validationStatus).toBe('passed');
@@ -122,6 +147,58 @@ describe('benchmark execution harness', () => {
     expect(result.autoFixAttemptCount).toBe(1);
     expect(result.warnings).toContain('fake execution only');
     expect(result.log).toContain('fake generator completed');
+  });
+
+  it('runs one selected benchmark through an injected Matrix Coder adapter', async () => {
+    const benchmark = getGenerationBenchmark('personal-crm')!;
+    const seen: string[] = [];
+
+    const result = await runBenchmarkExecutionHarness({
+      benchmarkId: 'personal-crm',
+      devOnly: true,
+      dryRun: false,
+      confirmExecution: true,
+      matrixCoderAdapter: (request) => {
+        seen.push(request.benchmarkId);
+        expect(request.benchmark).toBe(benchmark);
+        expect(request.prompt).toContain('Build a Personal CRM application');
+        expect(request.expectedRoutes).toEqual(benchmark.expectedRoutes);
+        expect(request.forbiddenRoutes).toEqual(benchmark.forbiddenRoutes);
+        return {
+          generatedFiles: validFilesFor(benchmark),
+          generationSuccess: true,
+          previewConnected: true,
+          autoFixAttemptCount: 2,
+          log: 'matrix coder adapter completed',
+        };
+      },
+    });
+
+    expect(seen).toEqual(['personal-crm']);
+    expect(result.status).toBe('passed');
+    expect(result.benchmarkId).toBe('personal-crm');
+    expect(result.benchmarkName).toBe('Personal CRM');
+    expect(result.generationSuccess).toBe(true);
+    expect(result.validationSuccess).toBe(true);
+    expect(result.generatedFileCount).toBe(validFilesFor(benchmark).length);
+    expect(result.detectedRoutes).toContain('/pipeline');
+    expect(result.previewConnected).toBe(true);
+    expect(result.autoFixAttemptCount).toBe(2);
+    expect(result.errors).toEqual([]);
+    expect(result.log).toContain('matrix coder adapter completed');
+  });
+
+  it('detects generated src/app routes from file paths', () => {
+    expect(
+      detectRoutesFromGeneratedFiles([
+        'src/app/page.tsx',
+        'src/app/tasks/page.tsx',
+        'src/app/pipeline/page.tsx',
+        'src/app/api/health/route.ts',
+        'src/components/crm/ContactsClient.tsx',
+        'app/history/page.tsx',
+      ])
+    ).toEqual(['/', '/history', '/pipeline', '/tasks']);
   });
 
   it('captures missing and forbidden routes from injected generation output', async () => {
@@ -139,6 +216,8 @@ describe('benchmark execution harness', () => {
     });
 
     expect(result.status).toBe('failed');
+    expect(result.generationSuccess).toBe(true);
+    expect(result.validationSuccess).toBe(false);
     expect(result.validationStatus).toBe('failed');
     expect(result.missingRequiredRoutes).toContainEqual(
       expect.objectContaining({
