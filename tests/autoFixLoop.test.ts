@@ -26,6 +26,7 @@
 
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import type { FileNode } from '@/app/chat-workspace/components/types';
+import { runGeneratedQualityAudit } from '@/lib/validation/generatedQuality';
 
 // --- Mocks ------------------------------------------------------------------
 
@@ -187,6 +188,26 @@ function validationSkipped(reason: string) {
     errors: [],
     combinedLog: '',
     durationMs: 0,
+  };
+}
+
+function validationGeneratedQualityFail(files: FileNode[]) {
+  const audit = runGeneratedQualityAudit(files);
+  return {
+    success: false,
+    skipped: false,
+    steps: [
+      {
+        step: 'generated-quality' as const,
+        status: 'failed' as const,
+        durationMs: 5,
+        errors: audit.errors,
+        log: audit.log,
+      },
+    ],
+    errors: audit.errors,
+    combinedLog: audit.log,
+    durationMs: 5,
   };
 }
 
@@ -668,5 +689,54 @@ ${clean}\`\`\``)
     // Resolve the first call so the test exits cleanly.
     resolveFirst!(validationPass());
     await firstPromise;
+  });
+
+  it('REGRESSION: missing linked routes are repaired deterministically without GPT', async () => {
+    const files = [
+      file('package.json', '{"scripts":{"build":"next build"}}'),
+      file('tsconfig.json', '{"compilerOptions":{"baseUrl":".","paths":{"@/*":["./src/*"]}}}'),
+      file(
+        'src/app/page.tsx',
+        `import Link from 'next/link';
+
+export default function Page() {
+  return (
+    <nav>
+      <Link href="/nutrition">Nutrition</Link>
+      <Link href="/progress">Progress</Link>
+      <Link href="/goals">Goals</Link>
+    </nav>
+  );
+}`
+      ),
+      file('src/app/globals.css', '@tailwind base;\n@tailwind components;\n@tailwind utilities;\n'),
+    ];
+
+    mockRunValidation
+      .mockResolvedValueOnce(validationGeneratedQualityFail(files))
+      .mockResolvedValueOnce(validationPass());
+
+    const r = makeRecorder();
+    const result = await runAutoFixLoop({
+      files,
+      onStatus: r.onStatus,
+      onChatMessage: r.onChatMessage,
+      onUpdateFile: r.onUpdateFile,
+      onAddFile: r.onAddFile,
+    });
+
+    expect(result.ran).toBe(true);
+    expect(result.succeeded).toBe(true);
+    expect(result.attempts).toBe(0);
+    expect(mockRunValidation).toHaveBeenCalledTimes(2);
+    expect(mockGetChatCompletion).not.toHaveBeenCalled();
+    expect(r.fileAdds.map((item) => item.path).sort()).toEqual([
+      'src/app/goals/page.tsx',
+      'src/app/nutrition/page.tsx',
+      'src/app/progress/page.tsx',
+    ]);
+    expect(r.chatMessages.map((m) => m.content).join('\n')).toContain(
+      'deterministic fixes resolved the issue before an AI repair attempt was needed'
+    );
   });
 });

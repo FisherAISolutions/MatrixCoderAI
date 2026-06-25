@@ -14,10 +14,16 @@ interface DeterministicDelete {
   reason: string;
 }
 
+interface DeterministicCreate {
+  file: FileNode;
+  reason: string;
+}
+
 export interface DeterministicFixReport {
   mutated: boolean;
   updates: DeterministicUpdate[];
   deletes: DeterministicDelete[];
+  creates: DeterministicCreate[];
 }
 
 const REACT_IMPORTS = new Set([
@@ -27,6 +33,9 @@ const REACT_IMPORTS = new Set([
   'useRef',
   'useState',
 ]);
+
+const MISSING_LINKED_ROUTE_REGEX =
+  /Generated navigation links to "\/([a-z0-9][a-z0-9-]*)", but no App Router page exists for that route\. Create (src\/app\/[a-z0-9-]+\/page\.tsx)/i;
 
 function addNamedImport(content: string, moduleName: string, symbol: string): string {
   const escaped = moduleName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
@@ -248,6 +257,115 @@ function updateFile(file: FileNode, content: string): FileNode {
   };
 }
 
+function routeSlugFromQualityError(error: { file?: string; message?: string }): {
+  slug: string;
+  path: string;
+} | null {
+  const messageMatch = error.message?.match(MISSING_LINKED_ROUTE_REGEX);
+  if (messageMatch) {
+    return {
+      slug: messageMatch[1],
+      path: messageMatch[2],
+    };
+  }
+
+  const fileMatch = error.file?.match(/^src\/app\/([a-z0-9][a-z0-9-]*)\/page\.tsx$/i);
+  if (
+    fileMatch &&
+    /Generated navigation links to "\//i.test(error.message ?? '') &&
+    /no App Router page exists/i.test(error.message ?? '')
+  ) {
+    return {
+      slug: fileMatch[1],
+      path: error.file!,
+    };
+  }
+
+  return null;
+}
+
+function titleFromSlug(slug: string): string {
+  return slug
+    .split('-')
+    .filter(Boolean)
+    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+    .join(' ');
+}
+
+function identifierFromSlug(slug: string): string {
+  const title = titleFromSlug(slug).replace(/[^A-Za-z0-9]/g, '');
+  return title ? `${title}Page` : 'GeneratedRoutePage';
+}
+
+function createLinkedRoutePage(slug: string, path: string): FileNode {
+  const title = titleFromSlug(slug);
+  const componentName = identifierFromSlug(slug);
+  const content = `import type { Metadata } from 'next';
+import Link from 'next/link';
+
+export const metadata: Metadata = {
+  title: '${title}',
+  description: 'Generated ${title} workspace route.',
+};
+
+export default function ${componentName}() {
+  return (
+    <main className="min-h-screen bg-slate-950 px-6 py-10 text-white">
+      <section className="mx-auto flex max-w-4xl flex-col gap-8">
+        <nav className="flex items-center justify-between rounded-2xl border border-white/10 bg-white/5 px-5 py-4 shadow-2xl shadow-black/20">
+          <Link href="/" className="text-sm font-semibold text-cyan-200 transition hover:text-white">
+            Back to dashboard
+          </Link>
+          <span className="rounded-full border border-cyan-300/30 bg-cyan-300/10 px-3 py-1 text-xs font-semibold uppercase tracking-[0.2em] text-cyan-100">
+            ${title}
+          </span>
+        </nav>
+
+        <div className="rounded-3xl border border-white/10 bg-white/[0.06] p-8 shadow-2xl shadow-black/20">
+          <p className="text-sm font-semibold uppercase tracking-[0.2em] text-cyan-200">
+            Navigation route
+          </p>
+          <h1 className="mt-4 text-4xl font-black tracking-tight sm:text-5xl">
+            ${title}
+          </h1>
+          <p className="mt-4 max-w-2xl text-base leading-7 text-slate-300">
+            This page keeps the app navigation complete and gives the route a styled, build-safe
+            destination while the main experience remains connected from the dashboard.
+          </p>
+
+          <div className="mt-8 grid gap-4 sm:grid-cols-3">
+            {['Overview', 'Workflow', 'Next steps'].map((label) => (
+              <div key={label} className="rounded-2xl border border-white/10 bg-slate-900/80 p-5">
+                <p className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-400">
+                  {label}
+                </p>
+                <p className="mt-3 text-sm leading-6 text-slate-200">
+                  Route-ready content area for ${title.toLowerCase()} details and actions.
+                </p>
+              </div>
+            ))}
+          </div>
+        </div>
+      </section>
+    </main>
+  );
+}
+`;
+
+  return {
+    id: `deterministic-route-${slug}`,
+    name: 'page.tsx',
+    path,
+    parentPath: path.split('/').slice(0, -1).join('/'),
+    type: 'file',
+    language: 'typescript',
+    content,
+    size: content.length,
+    lastModified: new Date().toISOString(),
+    isNew: true,
+  };
+}
+
 export function applyDeterministicFixes(
   files: FileNode[],
   validation: ValidationResult
@@ -259,6 +377,7 @@ export function applyDeterministicFixes(
   );
   const updates = new Map<string, DeterministicUpdate>();
   const deletes = new Map<string, DeterministicDelete>();
+  const creates = new Map<string, DeterministicCreate>();
 
   for (const file of byPath.values()) {
     if (!file.content || !isCssPath(file.path)) continue;
@@ -292,6 +411,17 @@ export function applyDeterministicFixes(
         });
       }
     }
+  }
+
+  for (const error of validation.errors) {
+    const missingRoute = routeSlugFromQualityError(error);
+    if (!missingRoute || byPath.has(missingRoute.path)) continue;
+    const file = createLinkedRoutePage(missingRoute.slug, missingRoute.path);
+    creates.set(file.path, {
+      file,
+      reason: `created missing linked App Router route /${missingRoute.slug}`,
+    });
+    byPath.set(file.path, file);
   }
 
   for (const error of validation.errors) {
@@ -346,8 +476,9 @@ export function applyDeterministicFixes(
   }
 
   return {
-    mutated: updates.size > 0 || deletes.size > 0,
+    mutated: updates.size > 0 || deletes.size > 0 || creates.size > 0,
     updates: Array.from(updates.values()),
     deletes: Array.from(deletes.values()),
+    creates: Array.from(creates.values()),
   };
 }

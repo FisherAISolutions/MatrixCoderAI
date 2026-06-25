@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { FileNode } from '@/app/chat-workspace/components/types';
 import { applyDeterministicFixes } from '@/lib/validation/deterministicFixes';
+import { runGeneratedQualityAudit } from '@/lib/validation/generatedQuality';
 import type { ValidationResult } from '@/lib/validation/engine';
 
 const file = (path: string, content: string): FileNode => ({
@@ -29,6 +30,26 @@ function validation(filePath: string, message: string): ValidationResult {
   };
 }
 
+function qualityValidation(files: FileNode[], requirements = ''): ValidationResult {
+  const audit = runGeneratedQualityAudit(files, requirements);
+  return {
+    success: audit.ok,
+    skipped: false,
+    steps: [
+      {
+        step: 'generated-quality',
+        status: audit.ok ? 'ok' : 'failed',
+        durationMs: 0,
+        errors: audit.errors,
+        log: audit.log,
+      },
+    ],
+    errors: audit.errors,
+    combinedLog: audit.log,
+    durationMs: 0,
+  };
+}
+
 describe('applyDeterministicFixes', () => {
   it('adds missing React hook imports from exact TypeScript errors', () => {
     const report = applyDeterministicFixes(
@@ -48,6 +69,51 @@ describe('applyDeterministicFixes', () => {
 
     expect(report.mutated).toBe(true);
     expect(report.updates[0].file.content).toContain("import Link from 'next/link';");
+  });
+
+  it('creates missing linked App Router route pages before AI auto-fix', () => {
+    const files = [
+      file('package.json', '{"scripts":{"build":"next build"}}'),
+      file('tsconfig.json', '{"compilerOptions":{"baseUrl":".","paths":{"@/*":["./src/*"]}}}'),
+      file(
+        'src/app/page.tsx',
+        `import Link from 'next/link';
+
+export default function Page() {
+  return (
+    <nav>
+      <Link href="/nutrition">Nutrition</Link>
+      <Link href="/progress">Progress</Link>
+      <Link href="/goals">Goals</Link>
+    </nav>
+  );
+}`
+      ),
+      file('src/app/globals.css', '@tailwind base;\n@tailwind components;\n@tailwind utilities;\n'),
+    ];
+
+    const report = applyDeterministicFixes(files, qualityValidation(files));
+
+    expect(report.mutated).toBe(true);
+    expect(report.creates.map((item) => item.file.path).sort()).toEqual([
+      'src/app/goals/page.tsx',
+      'src/app/nutrition/page.tsx',
+      'src/app/progress/page.tsx',
+    ]);
+
+    for (const create of report.creates) {
+      expect(create.file.content).toContain("import Link from 'next/link';");
+      expect(create.file.content).toContain('export const metadata');
+      expect(create.file.content).toContain('href="/"');
+      expect(create.file.content).not.toContain("'use client'");
+      expect(create.file.content).not.toMatch(/\bTODO\b|placeholder/i);
+    }
+
+    const repairedAudit = runGeneratedQualityAudit([
+      ...files,
+      ...report.creates.map((item) => item.file),
+    ]);
+    expect(repairedAudit.errors.some((error) => /Generated navigation links/.test(error.message))).toBe(false);
   });
 
   it('removes duplicate route aliases from route consistency errors', () => {

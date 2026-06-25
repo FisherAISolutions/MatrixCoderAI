@@ -415,6 +415,7 @@ async function applyDeterministicAndRevalidate(
   lastValidation: ValidationResult,
   fileMap: Map<string, FileNode>,
   updateFile: (f: FileNode) => void,
+  addFile: (f: FileNode) => void,
   deleteFile: (f: FileNode) => void,
   onChatMessage: (msg: ChatSystemMessage) => void,
   onStatus: (label: string | null) => void,
@@ -430,6 +431,9 @@ async function applyDeterministicAndRevalidate(
   for (const update of report.updates) {
     updateFile(update.file);
   }
+  for (const create of report.creates) {
+    addFile(create.file);
+  }
   for (const removal of report.deletes) {
     deleteFile(removal.file);
   }
@@ -437,6 +441,7 @@ async function applyDeterministicAndRevalidate(
     sysMsg(
       `**Deterministic auto-fix applied** — ${[
         ...report.updates.map((update) => `${update.reason} in \`${update.file.path}\``),
+        ...report.creates.map((create) => `${create.reason} at \`${create.file.path}\``),
         ...report.deletes.map((removal) => removal.reason),
       ]
         .join('; ')}. Re-running validation before using an AI repair attempt.`
@@ -587,6 +592,7 @@ export async function runAutoFixLoop(
       lastValidation,
       fileMap,
       updateFile,
+      addFile,
       deleteFile,
       onChatMessage,
       onStatus,
@@ -643,6 +649,7 @@ export async function runAutoFixLoop(
         lastValidation,
         fileMap,
         updateFile,
+        addFile,
         deleteFile,
         onChatMessage,
         onStatus,
