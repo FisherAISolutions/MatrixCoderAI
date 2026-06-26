@@ -211,6 +211,72 @@ function validationGeneratedQualityFail(files: FileNode[]) {
   };
 }
 
+function validationPrimaryFallbackFail(routes: string[]) {
+  const errors = routes.map((route) => ({
+    source: 'quality' as const,
+    file: `src/app/${route}/page.tsx`,
+    message:
+      `Primary route /${route} is only a deterministic fallback page. Generate a real app screen for this route only; do not regenerate the whole app.`,
+    raw: `Primary route /${route} is only a deterministic fallback page.`,
+  }));
+  const log = errors.map((error) => error.message).join('\n');
+  return {
+    success: false,
+    skipped: false,
+    steps: [
+      {
+        step: 'generated-quality' as const,
+        status: 'failed' as const,
+        durationMs: 5,
+        errors,
+        log,
+      },
+    ],
+    errors,
+    combinedLog: log,
+    durationMs: 5,
+  };
+}
+
+function validationPrerenderFail(route: string) {
+  const log =
+    `Prerender failed for route "/${route}" - almost always a client/server boundary issue.\n` +
+    `Export encountered an error on /${route}/page: /${route}, exiting the build.`;
+  const error = {
+    source: 'build' as const,
+    file: `src/app/${route}/page.tsx`,
+    message:
+      `Prerender failed for route "/${route}" - almost always a client/server boundary issue.`,
+    raw: log,
+  };
+  return {
+    success: false,
+    skipped: false,
+    steps: [
+      {
+        step: 'build' as const,
+        status: 'failed' as const,
+        exitCode: 1,
+        durationMs: 20,
+        errors: [error],
+        log,
+      },
+    ],
+    errors: [error],
+    combinedLog: log,
+    durationMs: 20,
+  };
+}
+
+function fallbackPage(route: string): string {
+  const title = route[0].toUpperCase() + route.slice(1);
+  return `// MATRIX_CODER_FALLBACK_ROUTE
+export default function ${title}Page() {
+  return <main>${title}</main>;
+}
+`;
+}
+
 // Returns an AI response that emits a single SEARCH/REPLACE patch.
 function aiPatch(path: string, search: string, replace: string): string {
   return `Fixing the bug:
@@ -242,6 +308,37 @@ describe('runAutoFixLoop — integration', () => {
   beforeEach(() => {
     mockGetChatCompletion.mockReset();
     mockRunValidation.mockReset();
+  });
+
+  it('does not start validation or AI repair when already cancelled', async () => {
+    const controller = new AbortController();
+    controller.abort('Cancelled by user');
+    const r = makeRecorder();
+
+    const result = await runAutoFixLoop({
+      files: [
+        file(
+          'src/app/page.tsx',
+          'export default function Page() { return null; }'
+        ),
+      ],
+      signal: controller.signal,
+      onStatus: r.onStatus,
+      onChatMessage: r.onChatMessage,
+      onUpdateFile: r.onUpdateFile,
+      onAddFile: r.onAddFile,
+    });
+
+    expect(result).toMatchObject({
+      ran: false,
+      succeeded: false,
+      attempts: 0,
+      skippedReason: 'cancelled',
+    });
+    expect(mockRunValidation).not.toHaveBeenCalled();
+    expect(mockGetChatCompletion).not.toHaveBeenCalled();
+    expect(r.fileUpdates).toEqual([]);
+    expect(r.fileAdds).toEqual([]);
   });
 
   it('happy path: validation fails → AI patches → re-validation passes → success', async () => {
@@ -530,6 +627,160 @@ ${clean}\`\`\``)
     expect(r.fileUpdates[0].content).toContain('const x: number = 42');
   });
 
+  it('REGRESSION: primary fallback routes are repaired as separate one-route jobs', async () => {
+    const files = [
+      file('src/app/goals/page.tsx', fallbackPage('goals')),
+      file('src/app/nutrition/page.tsx', fallbackPage('nutrition')),
+      file('src/app/layout.tsx', 'export default function Layout({ children }) { return children; }'),
+    ];
+
+    mockRunValidation
+      .mockResolvedValueOnce(validationPrimaryFallbackFail(['goals', 'nutrition']))
+      .mockResolvedValueOnce(validationPrimaryFallbackFail(['nutrition']))
+      .mockResolvedValueOnce(validationPass());
+
+    mockGetChatCompletion.mockImplementation(async (_provider, _model, messages) => {
+      const prompt = messages[1].content as string;
+      if (prompt.includes('Repair ONLY route `/goals`')) {
+        return aiCompletion(
+          aiPatch(
+            'src/app/goals/page.tsx',
+            fallbackPage('goals').trim(),
+            `export default function GoalsPage() {
+  return <main><h1>Goals dashboard</h1><p>Track weekly milestones.</p></main>;
+}`
+          )
+        );
+      }
+      return aiCompletion(
+        aiPatch(
+          'src/app/nutrition/page.tsx',
+          fallbackPage('nutrition').trim(),
+          `export default function NutritionPage() {
+  return <main><h1>Nutrition tracker</h1><p>Track meals and macros.</p></main>;
+}`
+        )
+      );
+    });
+
+    const r = makeRecorder();
+    const result = await runAutoFixLoop({
+      files,
+      onStatus: r.onStatus,
+      onChatMessage: r.onChatMessage,
+      onUpdateFile: r.onUpdateFile,
+      onAddFile: r.onAddFile,
+      maxAttempts: 3,
+    });
+
+    expect(result.succeeded).toBe(true);
+    expect(mockGetChatCompletion).toHaveBeenCalledTimes(2);
+    const firstPrompt = (mockGetChatCompletion.mock.calls[0][2] as any[])[1].content;
+    const secondPrompt = (mockGetChatCompletion.mock.calls[1][2] as any[])[1].content;
+    expect(firstPrompt).toContain('Repair ONLY route `/goals`');
+    expect(firstPrompt).toContain('// path: src/app/goals/page.tsx');
+    expect(firstPrompt).not.toContain('// path: src/app/nutrition/page.tsx');
+    expect(firstPrompt).not.toContain('// path: src/app/layout.tsx');
+    expect(secondPrompt).toContain('Repair ONLY route `/nutrition`');
+    expect(secondPrompt).toContain('// path: src/app/nutrition/page.tsx');
+    expect(secondPrompt).not.toContain('// path: src/app/goals/page.tsx');
+    expect(r.fileUpdates.map((update) => update.path)).toEqual([
+      'src/app/goals/page.tsx',
+      'src/app/nutrition/page.tsx',
+    ]);
+  });
+
+  it('REGRESSION: one-route prerender failures do not attach layout unless directly implicated', async () => {
+    const files = [
+      file('src/app/goals/page.tsx', "'use client';\nexport default function GoalsPage() { return <main>Goals</main>; }"),
+      file('src/app/layout.tsx', 'export default function Layout({ children }) { return children; }'),
+    ];
+
+    mockRunValidation
+      .mockResolvedValueOnce(validationPrerenderFail('goals'))
+      .mockResolvedValueOnce(validationPass());
+
+    mockGetChatCompletion.mockResolvedValue(
+      aiCompletion(
+        aiPatch(
+          'src/app/goals/page.tsx',
+          "'use client';\nexport default function GoalsPage() { return <main>Goals</main>; }",
+          "import GoalsClient from '@/components/GoalsClient';\n\nexport default function GoalsPage() {\n  return <GoalsClient />;\n}"
+        )
+      )
+    );
+
+    const r = makeRecorder();
+    const result = await runAutoFixLoop({
+      files,
+      onStatus: r.onStatus,
+      onChatMessage: r.onChatMessage,
+      onUpdateFile: r.onUpdateFile,
+      onAddFile: r.onAddFile,
+      maxAttempts: 1,
+    });
+
+    expect(result.succeeded).toBe(true);
+    const prompt = (mockGetChatCompletion.mock.calls[0][2] as any[])[1].content;
+    expect(prompt).toContain('Repair ONLY route `/goals`');
+    expect(prompt).toContain('Keep `src/app/goals/page.tsx` as a Server Component');
+    expect(prompt).toContain("separate `'use client'` child component");
+    expect(prompt).toContain('// path: src/app/goals/page.tsx');
+    expect(prompt).not.toContain('// path: src/app/layout.tsx');
+  });
+
+  it('REGRESSION: route output-limit switches to one-route compact repair without repeating the same prompt', async () => {
+    const files = [file('src/app/goals/page.tsx', fallbackPage('goals'))];
+
+    mockRunValidation
+      .mockResolvedValueOnce(validationPrimaryFallbackFail(['goals']))
+      .mockResolvedValueOnce(validationPass());
+
+    mockGetChatCompletion
+      .mockResolvedValueOnce(
+        aiCompletion('', {
+          finish_reason: 'length',
+          usage: {
+            prompt_tokens: 4879,
+            completion_tokens: 8192,
+            total_tokens: 13071,
+          },
+        })
+      )
+      .mockResolvedValueOnce(
+        aiCompletion(
+          aiPatch(
+            'src/app/goals/page.tsx',
+            fallbackPage('goals').trim(),
+            `export default function GoalsPage() {
+  return <main><h1>Goals dashboard</h1><p>Track weekly milestones.</p></main>;
+}`
+          )
+        )
+      );
+
+    const r = makeRecorder();
+    const result = await runAutoFixLoop({
+      files,
+      onStatus: r.onStatus,
+      onChatMessage: r.onChatMessage,
+      onUpdateFile: r.onUpdateFile,
+      onAddFile: r.onAddFile,
+      maxAttempts: 2,
+    });
+
+    expect(result.succeeded).toBe(true);
+    expect(mockGetChatCompletion).toHaveBeenCalledTimes(2);
+    const firstPrompt = (mockGetChatCompletion.mock.calls[0][2] as any[])[1].content;
+    const secondPrompt = (mockGetChatCompletion.mock.calls[1][2] as any[])[1].content;
+    expect(firstPrompt).toContain('Repair ONLY route `/goals`');
+    expect(secondPrompt).toContain('Repair ONLY route `/goals`');
+    expect(r.chatMessages.map((m) => m.content).join('\n')).toContain(
+      'Output limit hit; switching to one-route compact repair for /goals'
+    );
+    expect(r.fileUpdates[0].path).toBe('src/app/goals/page.tsx');
+  });
+
   it('exhausts max attempts when AI patches don\'t fix the error', async () => {
     // 4 validation calls: 1 initial + 3 retries, all fail.
     for (let i = 0; i < 4; i++) {
@@ -702,9 +953,9 @@ ${clean}\`\`\``)
 export default function Page() {
   return (
     <nav>
-      <Link href="/nutrition">Nutrition</Link>
-      <Link href="/progress">Progress</Link>
-      <Link href="/goals">Goals</Link>
+      <Link href="/privacy">Privacy</Link>
+      <Link href="/terms">Terms</Link>
+      <Link href="/help">Help</Link>
     </nav>
   );
 }`
@@ -731,9 +982,9 @@ export default function Page() {
     expect(mockRunValidation).toHaveBeenCalledTimes(2);
     expect(mockGetChatCompletion).not.toHaveBeenCalled();
     expect(r.fileAdds.map((item) => item.path).sort()).toEqual([
-      'src/app/goals/page.tsx',
-      'src/app/nutrition/page.tsx',
-      'src/app/progress/page.tsx',
+      'src/app/help/page.tsx',
+      'src/app/privacy/page.tsx',
+      'src/app/terms/page.tsx',
     ]);
     expect(r.chatMessages.map((m) => m.content).join('\n')).toContain(
       'deterministic fixes resolved the issue before an AI repair attempt was needed'

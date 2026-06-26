@@ -1,6 +1,6 @@
 'use client';
 import { useState, useRef, useCallback, useEffect } from 'react';
-import { Send, Brain, Code2, Eye, ChevronDown, Zap } from 'lucide-react';
+import { Send, Brain, Code2, Eye, ChevronDown, Zap, Square } from 'lucide-react';
 import toast from 'react-hot-toast';
 
 import { useChat } from '@/lib/hooks/useChat';
@@ -16,7 +16,13 @@ import {
   extractFromAssistantResponse,
   extractMentionedPaths,
   normalizeEditPath,
+  sanitizeProjectPath,
 } from '@/lib/repo/extractors';
+import {
+  assessContinuationCompleteness,
+  buildContinuationRetryKey,
+  normalizeContinuationPaths,
+} from '@/lib/generation/continuationGuards';
 import { applyEditSequence } from '@/lib/repo/patcher';
 import { describePatchMarkerLeak } from '@/lib/repo/patchMarkers';
 import { flattenTree } from '@/lib/repo/heuristics';
@@ -33,7 +39,12 @@ import {
   completePreviewStage,
   failPreviewStage,
   resetPreviewDiagnostics,
+  skipRunningPreviewStages,
 } from '@/lib/preview/diagnostics';
+import {
+  createGenerationCancellationScope,
+  type GenerationCancellationScope,
+} from '@/lib/generation/cancellation';
 
 function logGenerationConsistency(
   label: string,
@@ -885,6 +896,7 @@ interface ActiveBatchGeneration {
   memStage: MemoryStage;
   batches: GenerationBatch[];
   index: number;
+  continuationRetryCounts: Record<string, number>;
 }
 
 const GENERATION_MAX_COMPLETION_TOKENS = 8192;
@@ -931,16 +943,23 @@ function dedupeGeneratedPaths(paths: Array<string | null | undefined>): string[]
   const out: string[] = [];
   for (const raw of paths) {
     if (!raw) continue;
-    const clean = raw
-      .trim()
-      .replace(/^["'`]+|["'`,.;:]+$/g, '')
-      .replace(/\\/g, '/')
-      .replace(/^\.\/+/, '')
-      .replace(/\/{2,}/g, '/');
+    const clean = sanitizeProjectPath(raw);
     if (!clean || out.includes(clean)) continue;
     out.push(clean);
   }
   return out;
+}
+
+function collectKnownGeneratedPaths(
+  fileTree: FileNode[],
+  extraPaths: string[] = []
+): string[] {
+  return [
+    ...flattenTree(fileTree)
+      .filter((file) => file.type === 'file')
+      .map((file) => file.path),
+    ...extraPaths,
+  ];
 }
 
 function missingRequiredPathsForBatch(
@@ -1044,6 +1063,7 @@ export default function ChatComposer({
   const [input, setInput] = useState('');
   const [selectedAgent, setSelectedAgent] = useState<AgentType | 'auto'>('auto');
   const [showAgentMenu, setShowAgentMenu] = useState(false);
+  const [generationPipelineActive, setGenerationPipelineActive] = useState(false);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const streamMsgIdRef = useRef<string>('');
   const accumulatedRef = useRef<string>('');
@@ -1055,6 +1075,7 @@ export default function ChatComposer({
   // activity message from "Sending request to AI…" → "Streaming response…".
   const streamingMessageShownRef = useRef<boolean>(false);
   const batchGenerationRef = useRef<ActiveBatchGeneration | null>(null);
+  const cancellationScopeRef = useRef<GenerationCancellationScope | null>(null);
   const consumedInitialPromptRef = useRef(false);
 
   const { response, isLoading, error, sendMessage } = useChat(AI_PROVIDER, PRIMARY_MODEL, true);
@@ -1073,6 +1094,29 @@ export default function ChatComposer({
     });
   }, []);
 
+  const ensureCancellationScope = useCallback(() => {
+    let scope = cancellationScopeRef.current;
+    if (!scope || scope.signal.aborted) {
+      scope = createGenerationCancellationScope();
+      cancellationScopeRef.current = scope;
+    }
+    return scope;
+  }, []);
+
+  const scheduleGenerationTimer = useCallback(
+    (callback: () => void, delayMs: number) => {
+      const scope = ensureCancellationScope();
+      return scope.setTimer(callback, delayMs);
+    },
+    [ensureCancellationScope]
+  );
+
+  useEffect(() => {
+    return () => {
+      cancellationScopeRef.current?.cancel('Composer unmounted');
+    };
+  }, []);
+
   const launchAgentRequest = useCallback(
     (
       agent: AgentType,
@@ -1085,6 +1129,8 @@ export default function ChatComposer({
         batchLabel?: string;
       }
     ) => {
+      const scope = ensureCancellationScope();
+      if (scope.signal.aborted) return;
       if (isLoading || streamMsgIdRef.current) {
         pushTerminalLog({
           level: 'warn',
@@ -1139,9 +1185,10 @@ export default function ChatComposer({
 
       sendMessage(apiMessages, {
         max_completion_tokens: GENERATION_MAX_COMPLETION_TOKENS,
-      });
+      }, { signal: scope.signal });
     },
     [
+      ensureCancellationScope,
       onAppendMessageToUI,
       onSetActiveAgent,
       onSetActivityStatus,
@@ -1153,6 +1200,7 @@ export default function ChatComposer({
 
   const continueBatchGeneration = useCallback(
     (continuation?: { lastCompletePath?: string | null; reason: string; missingPaths?: string[] }) => {
+      if (cancellationScopeRef.current?.signal.aborted) return;
       const state = batchGenerationRef.current;
       if (!state?.active) return;
       const batch = state.batches[state.index];
@@ -1247,6 +1295,7 @@ export default function ChatComposer({
 
   useEffect(() => {
     if (!streamMsgIdRef.current) return;
+    if (cancellationScopeRef.current?.signal.aborted) return;
 
     accumulatedRef.current = response;
 
@@ -1390,11 +1439,34 @@ export default function ChatComposer({
 
         if (completeness.blocking) {
           const reason = completeness.issues.map((issue) => issue.message).join(' ');
-          const missingPaths = dedupeGeneratedPaths(
-            completeness.issues.map((issue) => issue.path)
-          );
+          const completedPaths = dedupeGeneratedPaths([
+            ...creates.map((file) => file.path),
+            ...edits.map((edit) => edit.path),
+          ]);
+          const continuationAssessment = assessContinuationCompleteness({
+            rawMissingPaths: completeness.issues.map((issue) => issue.path),
+            knownPaths: collectKnownGeneratedPaths(fileTree, completedPaths),
+            completedPaths,
+            hasUnclosedFenceWithoutPath: completeness.issues.some(
+              (issue) => issue.kind === 'unclosed-fence' && !issue.path
+            ),
+          });
+          const missingPaths = continuationAssessment.actionableMissingPaths;
 
-          if (activeBatch && (creates.length > 0 || edits.length > 0)) {
+          if (
+            activeBatch &&
+            (creates.length > 0 || edits.length > 0) &&
+            continuationAssessment.acceptCompletedOutput
+          ) {
+            pushTerminalLog({
+              level: 'info',
+              text:
+                `[generation-batch] completeness audit reported only non-actionable fragments; ` +
+                `preserving=${creates.length + edits.length} and advancing batch=${activeBatch.index + 1}/${activeBatch.batches.length} ` +
+                `reason=${continuationAssessment.reason}\n`,
+              timestamp: Date.now(),
+            });
+          } else if (activeBatch && (creates.length > 0 || edits.length > 0)) {
             incompleteBatchContinuation = {
               lastCompletePath: completeness.lastCompletePath,
               reason,
@@ -1442,7 +1514,7 @@ export default function ChatComposer({
             });
             toast.error('Batch response was incomplete; auto-continuing.');
             onSetActivityStatus('Repairing incomplete generation batch...');
-            setTimeout(() => {
+            scheduleGenerationTimer(() => {
               continueBatchGeneration({
                 lastCompletePath: completeness.lastCompletePath,
                 reason,
@@ -1670,7 +1742,8 @@ export default function ChatComposer({
           );
         }
         creates.forEach((file, idx) => {
-          setTimeout(() => {
+          scheduleGenerationTimer(() => {
+            if (cancellationScopeRef.current?.signal.aborted) return;
             const markerLeak = describePatchMarkerLeak(file.content);
             if (markerLeak) {
               console.warn(`[Files] rejected create for ${file.path}: ${markerLeak}`);
@@ -1751,7 +1824,7 @@ export default function ChatComposer({
 
         // Clear activity status once all create timeouts have fired.
         if (creates.length > 0) {
-          setTimeout(() => onSetActivityStatus(null), creates.length * 200 + 300);
+          scheduleGenerationTimer(() => onSetActivityStatus(null), creates.length * 200 + 300);
         } else {
           onSetActivityStatus(null);
         }
@@ -1793,15 +1866,51 @@ export default function ChatComposer({
         }
 
         if (incompleteBatchContinuation && activeBatchGeneration) {
+          const retryKey = buildContinuationRetryKey(
+            activeBatchGeneration.index,
+            incompleteBatchContinuation
+          );
+          const retryCount =
+            (activeBatchGeneration.continuationRetryCounts[retryKey] ?? 0) + 1;
+          activeBatchGeneration.continuationRetryCounts[retryKey] = retryCount;
+          const writtenPaths = Array.from(mutatedFilesByPath.keys());
+          const retryAssessment = assessContinuationCompleteness({
+            rawMissingPaths: incompleteBatchContinuation.missingPaths ?? [],
+            knownPaths: collectKnownGeneratedPaths(fileTree, writtenPaths),
+            completedPaths: writtenPaths,
+            retryCount,
+          });
+
+          if (
+            retryAssessment.acceptCompletedOutput &&
+            (createdAny || appliedAnyEdit)
+          ) {
+            pushTerminalLog({
+              level: retryAssessment.reason === 'retry-limit' ? 'warn' : 'info',
+              text:
+                `[generation-batch] accepting completed continuation output; ` +
+                `batch=${activeBatchGeneration.index + 1}/${activeBatchGeneration.batches.length} ` +
+                `reason=${retryAssessment.reason} retry=${retryCount} ` +
+                `missing=${normalizeContinuationPaths(incompleteBatchContinuation.missingPaths ?? []).join(', ') || 'none'}\n`,
+              timestamp: Date.now(),
+            });
+            incompleteBatchContinuation = null;
+          }
+        }
+
+        if (incompleteBatchContinuation && activeBatchGeneration) {
           const launchDelay = createdAny ? createsCount * 200 + 600 : 600;
+          const missingPaths = normalizeContinuationPaths(
+            incompleteBatchContinuation.missingPaths ?? []
+          );
           pushTerminalLog({
             level: 'warn',
             text:
               `[generation-batch] validation paused for incomplete batch; ` +
-              `continuing missing=${dedupeGeneratedPaths(incompleteBatchContinuation.missingPaths ?? []).join(', ') || 'unknown'}\n`,
+              `continuing missing=${missingPaths.join(', ') || 'unknown'}\n`,
             timestamp: Date.now(),
           });
-          setTimeout(() => {
+          scheduleGenerationTimer(() => {
             continueBatchGeneration(incompleteBatchContinuation ?? undefined);
           }, launchDelay);
           streamMsgIdRef.current = '';
@@ -1869,7 +1978,7 @@ export default function ChatComposer({
               `Validation is paused while Matrix Coder continues the next generation batch automatically.`,
             timestamp: new Date().toISOString(),
           });
-          setTimeout(() => {
+          scheduleGenerationTimer(() => {
             continueBatchGeneration();
           }, launchDelay);
           streamMsgIdRef.current = '';
@@ -1893,6 +2002,7 @@ export default function ChatComposer({
         });
       }
 
+      let autoFixScheduled = false;
       if ((appliedAnyEdit || createdAny) && !isAutoFixRunning()) {
         // Build a predicted post-mutation file list — the source of
         // truth is the in-React fileTree, but creates are added on a
@@ -1969,7 +2079,10 @@ export default function ChatComposer({
         // have actually hit React state. The loop itself is async and
         // non-blocking from the UI's perspective.
         const launchDelay = createdAny ? createsCount * 200 + 400 : 0;
-        setTimeout(() => {
+        autoFixScheduled = true;
+        scheduleGenerationTimer(() => {
+          const scope = cancellationScopeRef.current;
+          if (scope?.signal.aborted) return;
           void runAutoFixLoop({
             files: depAdjustedFiles,
             onStatus: onSetActivityStatus,
@@ -1993,8 +2106,13 @@ export default function ChatComposer({
             // can't see.
             runtimeSmoke: true,
             requirements: lastUserTextRef.current,
+            signal: scope?.signal,
           }).catch((err) => {
             console.error('[autofix] loop crashed unexpectedly:', err);
+          }).finally(() => {
+            if (!scope?.signal.aborted) {
+              setGenerationPipelineActive(false);
+            }
           });
         }, launchDelay);
       }
@@ -2002,6 +2120,9 @@ export default function ChatComposer({
       streamMsgIdRef.current = '';
       accumulatedRef.current = '';
       streamingMessageShownRef.current = false;
+      if (!autoFixScheduled) {
+        setGenerationPipelineActive(false);
+      }
     }
   }, [
     isLoading,
@@ -2016,6 +2137,7 @@ export default function ChatComposer({
     onDeleteFile,
     onAddMessage,
     continueBatchGeneration,
+    scheduleGenerationTimer,
   ]);
 
   useEffect(() => {
@@ -2085,7 +2207,20 @@ export default function ChatComposer({
   const handleSend = useCallback(async () => {
     const text = input.trim();
 
-    if (!text || isStreaming) return;
+    if (
+      !text ||
+      isStreaming ||
+      isLoading ||
+      generationPipelineActive ||
+      streamMsgIdRef.current
+    ) {
+      return;
+    }
+
+    cancellationScopeRef.current?.cancel('New generation started');
+    const generationScope = createGenerationCancellationScope();
+    cancellationScopeRef.current = generationScope;
+    setGenerationPipelineActive(true);
 
     setInput('');
     // Remember the last sent text so we can offer retry on AI failure
@@ -2163,6 +2298,7 @@ export default function ChatComposer({
       // null on timeout / disabled / pgvector unavailable.
       onSetActivityStatus('Searching embeddings…');
       const semanticPromise = trySemanticSearch(sessionId, text, 8, {
+        signal: generationScope.signal,
         timeoutMs: SEMANTIC_SEARCH_TIMEOUT_MS,
       });
 
@@ -2172,6 +2308,7 @@ export default function ChatComposer({
       const overall = await Promise.race([
         (async () => {
           const semanticResults = await semanticPromise;
+          if (generationScope.signal.aborted) return null;
           if (semanticResults === null) {
             onSetActivityStatus('Falling back to heuristic context…');
           }
@@ -2184,10 +2321,13 @@ export default function ChatComposer({
             semanticResults,
           });
         })(),
-        new Promise<null>((resolve) =>
-          setTimeout(() => resolve(null), CONTEXT_BUILD_TIMEOUT_MS)
-        ),
+        new Promise<null>((resolve) => {
+          const timer = generationScope.setTimer(() => resolve(null), CONTEXT_BUILD_TIMEOUT_MS);
+          if (!timer) resolve(null);
+        }),
       ]);
+
+      if (generationScope.signal.aborted) return;
 
       if (overall) {
         repoContextString = overall.systemContext;
@@ -2205,12 +2345,14 @@ export default function ChatComposer({
         onSetActivityStatus('Falling back to heuristic context…');
       }
     } catch (ctxErr) {
+      if (generationScope.signal.aborted) return;
       console.warn('[RepoContext] failed, continuing without context:', ctxErr);
       onSetActivityStatus('Falling back to heuristic context…');
     }
 
     onSetActivityStatus('Sending request to AI…');
 
+    if (generationScope.signal.aborted) return;
     const shouldBatch = shouldBatchGenerationRequest(text, agent, fileTree);
     if (shouldBatch) {
       upsertDeterministicNextScaffold();
@@ -2222,6 +2364,7 @@ export default function ChatComposer({
         memStage,
         batches: LARGE_APP_BATCHES,
         index: 0,
+        continuationRetryCounts: {},
       };
       onAddMessage({
         id: prefixedId('msg'),
@@ -2244,6 +2387,8 @@ export default function ChatComposer({
   }, [
     input,
     isStreaming,
+    isLoading,
+    generationPipelineActive,
     selectedAgent,
     messages,
     activeFile,
@@ -2259,6 +2404,61 @@ export default function ChatComposer({
     upsertDeterministicNextScaffold,
   ]);
 
+  const handleStop = useCallback(() => {
+    const scope = cancellationScopeRef.current;
+    if (!scope && !isStreaming && !isLoading && !generationPipelineActive) return;
+
+    scope?.cancel('Cancelled by user');
+    if (batchGenerationRef.current) {
+      batchGenerationRef.current.active = false;
+    }
+
+    const hadStreamingMessage = Boolean(streamMsgIdRef.current);
+    streamMsgIdRef.current = '';
+    accumulatedRef.current = '';
+    streamingMessageShownRef.current = false;
+
+    onSetIsStreaming(false);
+    setGenerationPipelineActive(false);
+    onSetActiveAgent(null);
+    onSetActivityStatus('Cancelled by user');
+    skipRunningPreviewStages('Cancelled by user');
+
+    pushTerminalLog({
+      level: 'warn',
+      text: '[generation] Cancelled by user\n',
+      timestamp: Date.now(),
+    });
+
+    if (hadStreamingMessage) {
+      onUpdateLastMessage((prev) => ({
+        ...prev,
+        isStreaming: false,
+        content:
+          prev.content && prev.content.trim().length > 0
+            ? `${prev.content}\n\n_Cancelled by user._`
+            : '_Cancelled by user._',
+      }));
+    }
+
+    onAddMessage({
+      id: prefixedId('msg'),
+      role: 'system',
+      content:
+        '**Cancelled by user**\n\nGeneration stopped. Files already written were preserved.',
+      timestamp: new Date().toISOString(),
+    });
+  }, [
+    isLoading,
+    isStreaming,
+    generationPipelineActive,
+    onAddMessage,
+    onSetActiveAgent,
+    onSetActivityStatus,
+    onSetIsStreaming,
+    onUpdateLastMessage,
+  ]);
+
   const handleKeyDown = (
     e: React.KeyboardEvent<HTMLTextAreaElement>
   ) => {
@@ -2271,6 +2471,7 @@ export default function ChatComposer({
   const currentAgentOption = AGENT_OPTIONS.find(
     (a) => a.type === selectedAgent
   );
+  const generationActive = generationPipelineActive || isStreaming || isLoading;
 
   return (
     <div className="workspace-composer flex-shrink-0 border-t border-matrix-border bg-matrix-bg px-4 py-3">
@@ -2280,10 +2481,10 @@ export default function ChatComposer({
           value={input}
           onChange={(e) => setInput(e.target.value)}
           onKeyDown={handleKeyDown}
-          disabled={isStreaming}
+          disabled={generationActive}
           placeholder={
-            isStreaming
-              ? '// Agent is responding...'
+            generationActive
+              ? '// Generation is running...'
               : '// Describe what to build, debug, or review... (Shift+Enter for newline)'
           }
           rows={1}
@@ -2347,17 +2548,32 @@ export default function ChatComposer({
             </span>
           </div>
 
-          <button
-            onClick={handleSend}
-            disabled={!input.trim() || isStreaming}
-            className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-mono rounded-sm bg-matrix-green text-matrix-bg hover:bg-matrix-green-bright disabled:opacity-40 disabled:cursor-not-allowed transition-all"
-            aria-label="Send message"
-          >
-            <Send size={12} />
-            <span className="tracking-widest uppercase">
-              Send
-            </span>
-          </button>
+          {generationActive ? (
+            <button
+              type="button"
+              onClick={handleStop}
+              className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-mono rounded-sm border border-red-400/60 bg-red-500/15 text-red-200 hover:bg-red-500/25 transition-all"
+              aria-label="Stop generation"
+            >
+              <Square size={12} />
+              <span className="tracking-widest uppercase">
+                Stop
+              </span>
+            </button>
+          ) : (
+            <button
+              type="button"
+              onClick={handleSend}
+              disabled={!input.trim()}
+              className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-mono rounded-sm bg-matrix-green text-matrix-bg hover:bg-matrix-green-bright disabled:opacity-40 disabled:cursor-not-allowed transition-all"
+              aria-label="Send message"
+            >
+              <Send size={12} />
+              <span className="tracking-widest uppercase">
+                Send
+              </span>
+            </button>
+          )}
         </div>
       </div>
 

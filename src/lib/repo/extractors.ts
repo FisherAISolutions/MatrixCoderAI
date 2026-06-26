@@ -332,7 +332,7 @@ const FORBIDDEN_ROOT_SEGMENTS = new Set([
   'windows', 'program files', 'programdata', 'users',
 ]);
 
-function sanitizeCreatePath(raw: string): string | null {
+export function sanitizeProjectPath(raw: string): string | null {
   let p = raw.trim();
   if (!p) return null;
   // Strip surrounding quotes/backticks the model sometimes emits
@@ -356,6 +356,11 @@ function sanitizeCreatePath(raw: string): string | null {
   }
   p = p.replace(/\/{2,}/g, '/');
   if (!p) return null;
+  // Keep code fragments and rendered pseudo-URLs out of the path pipeline.
+  // The continuation detector once latched onto expressions such as
+  // `readProfile(value.profile)` and kept re-requesting an already complete
+  // file. Project paths never need these characters.
+  if (!/^[A-Za-z0-9._@/-]+$/.test(p)) return null;
   // Reject traversal / empty segments
   const segs = p.split('/');
   for (const s of segs) {
@@ -377,6 +382,8 @@ function sanitizeCreatePath(raw: string): string | null {
   }
   return p;
 }
+
+const sanitizeCreatePath = sanitizeProjectPath;
 
 function inferFallbackPath(code: string, language: string, idx: number): string {
   if (code.includes('export default function') || code.includes('export const')) {
@@ -614,7 +621,7 @@ export function extractMentionedPaths(content: string, max: number = 6): string[
   PATH_MENTION_REGEX.lastIndex = 0;
   let m: RegExpExecArray | null;
   while ((m = PATH_MENTION_REGEX.exec(content)) !== null) {
-    const p = m[1].trim();
+    const p = sanitizeProjectPath(m[1]);
     if (!p) continue;
     if (!paths.includes(p)) paths.push(p);
     if (paths.length >= max) break;

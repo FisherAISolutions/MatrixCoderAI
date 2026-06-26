@@ -54,6 +54,11 @@ import {
   skipPreviewStage,
   type PreviewDiagnosticStage,
 } from '@/lib/preview/diagnostics';
+import {
+  createAbortError,
+  isAbortLikeError,
+  throwIfCancelled,
+} from '@/lib/generation/cancellation';
 
 export type ValidationStep =
   | 'support-check'
@@ -125,6 +130,8 @@ export interface ValidationOptions {
   runtimeSmokeTimeoutMs?: number;
   /** Original user request for requirement-aware quality checks. */
   requirements?: string;
+  /** User-initiated generation cancellation signal. */
+  signal?: AbortSignal;
 }
 
 const DEFAULT_TIMEOUT_MS = 12 * 60 * 1000; // overall inactivity watchdog
@@ -185,14 +192,17 @@ function detectRuntimeOverlay(html: string): { found: boolean; reason: string | 
  * indicating whether the fetch itself errored (network failure, timed
  * out, etc.) as opposed to returning a non-2xx status.
  */
-async function smokeFetch(url: string): Promise<{
+async function smokeFetch(url: string, signal?: AbortSignal): Promise<{
   ok: boolean;
   status: number;
   body: string;
   networkError?: string;
 }> {
+  if (signal?.aborted) throw createAbortError();
   const ctrl = new AbortController();
   const timer = setTimeout(() => ctrl.abort(), SMOKE_FETCH_TIMEOUT_MS);
+  const abortHandler = () => ctrl.abort();
+  signal?.addEventListener('abort', abortHandler, { once: true });
   try {
     const resp = await fetch(url, {
       signal: ctrl.signal,
@@ -209,6 +219,7 @@ async function smokeFetch(url: string): Promise<{
       body: text.slice(0, 4096),
     };
   } catch (err) {
+    if (signal?.aborted) throw createAbortError();
     return {
       ok: false,
       status: 0,
@@ -222,13 +233,16 @@ async function smokeFetch(url: string): Promise<{
     };
   } finally {
     clearTimeout(timer);
+    signal?.removeEventListener('abort', abortHandler);
   }
 }
 
 async function runRuntimeSmoke(
   onLog: LogSink,
-  totalTimeoutMs: number
+  totalTimeoutMs: number,
+  signal?: AbortSignal
 ): Promise<StepResult> {
+  throwIfCancelled(signal);
   const stepStart = performance.now();
   const readyTimeoutMs = Math.max(5000, totalTimeoutMs - SMOKE_FETCH_TIMEOUT_MS - SMOKE_POST_READY_DELAY_MS - 2000);
   beginPreviewStage('dev-server', 'Starting npm run dev for runtime smoke.');
@@ -237,7 +251,7 @@ async function runRuntimeSmoke(
   // Start the dev server in the background.
   let bg;
   try {
-    bg = await spawnBackground('jsh', ['-c', 'npm run dev'], { onLog });
+    bg = await spawnBackground('jsh', ['-c', 'npm run dev'], { onLog, signal });
   } catch (err) {
     failPreviewStage(
       'dev-server',
@@ -257,9 +271,12 @@ async function runRuntimeSmoke(
   try {
     // Wait for server-ready (fired by manager.ts when the WC process
     // binds to any port).
+    throwIfCancelled(signal);
     const info = await waitForNextServerReady(readyTimeoutMs, {
       afterSequence: serverReadyBaseline,
+      signal,
     });
+    throwIfCancelled(signal);
     if (!info) {
       failPreviewStage(
         'dev-server',
@@ -298,7 +315,27 @@ async function runRuntimeSmoke(
     completePreviewStage('dev-server', `Server ready at ${info.url}.`);
 
     // Brief settle window so the first compile finishes before we hit /.
-    await new Promise((r) => setTimeout(r, SMOKE_POST_READY_DELAY_MS));
+    await new Promise<void>((resolve, reject) => {
+      let settled = false;
+      const cleanup = () => {
+        signal?.removeEventListener('abort', abortHandler);
+      };
+      const timer = setTimeout(() => {
+        if (settled) return;
+        settled = true;
+        cleanup();
+        resolve();
+      }, SMOKE_POST_READY_DELAY_MS);
+      const abortHandler = () => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        cleanup();
+        reject(createAbortError());
+      };
+      signal?.addEventListener('abort', abortHandler, { once: true });
+      if (signal?.aborted) abortHandler();
+    });
 
     onLog({
       level: 'info',
@@ -306,7 +343,7 @@ async function runRuntimeSmoke(
       timestamp: Date.now(),
     });
 
-    const fetchResult = await smokeFetch(info.url);
+    const fetchResult = await smokeFetch(info.url, signal);
     const overlay = fetchResult.networkError
       ? { found: false, reason: null }
       : detectRuntimeOverlay(fetchResult.body);
@@ -673,10 +710,13 @@ async function runStep(
   command: string,
   args: string[],
   onLog?: LogSink,
-  timeoutMs?: number
+  timeoutMs?: number,
+  signal?: AbortSignal
 ): Promise<StepResult> {
+  throwIfCancelled(signal);
   const start = performance.now();
-  const result: RunCommandResult = await runCommand(command, args, { onLog, timeoutMs });
+  const result: RunCommandResult = await runCommand(command, args, { onLog, timeoutMs, signal });
+  throwIfCancelled(signal);
   const durationMs = performance.now() - start;
 
   if (result.infrastructureError) {
@@ -755,6 +795,7 @@ export async function runValidation(
     runtimeSmoke = false,
     runtimeSmokeTimeoutMs = SMOKE_DEFAULT_TIMEOUT_MS,
     requirements = '',
+    signal,
   } = opts;
   const overallStart = performance.now();
   const steps: StepResult[] = [];
@@ -789,6 +830,18 @@ export async function runValidation(
     combinedLog: logChunks.map((c) => c.text).join(''),
     durationMs: performance.now() - overallStart,
   });
+
+  const finalizeCancelled = (): ValidationResult => {
+    const reason = 'Cancelled by user';
+    skipRunningPreviewStages(reason);
+    return finalize({
+      success: false,
+      skipped: true,
+      skipReason: reason,
+    });
+  };
+
+  if (signal?.aborted) return finalizeCancelled();
 
   // 1. Support check
   onStatus?.('Checking sandbox support…');
@@ -826,6 +879,7 @@ export async function runValidation(
   });
 
   const workPromise = (async (): Promise<ValidationResult> => {
+    throwIfCancelled(signal);
     let mountedPaths: string[] = [];
     // 2. Boot
     const wasBooted = isBooted();
@@ -833,7 +887,9 @@ export async function runValidation(
     const bootStart = performance.now();
     try {
       await bootWebContainer();
+      throwIfCancelled(signal);
     } catch (err) {
+      if (signal?.aborted || isAbortLikeError(err)) throw createAbortError();
       steps.push({
         step: 'boot',
         status: 'failed',
@@ -869,7 +925,9 @@ export async function runValidation(
           timestamp: Date.now(),
         });
       }
+      throwIfCancelled(signal);
     } catch (err) {
+      if (signal?.aborted || isAbortLikeError(err)) throw createAbortError();
       steps.push({
         step: 'mount',
         status: 'failed',
@@ -893,6 +951,7 @@ export async function runValidation(
     });
 
     const mountAudit = await getMountedFileAudit(files);
+    throwIfCancelled(signal);
     mountedPaths = mountAudit.mountedPaths;
     teeLog({
       level: mountAudit.ok ? 'info' : 'error',
@@ -932,6 +991,7 @@ export async function runValidation(
     // components like `@/components/HistoryPage` before the sandbox spends
     // minutes installing packages, and prevents false "success" reports
     // when the generator referenced a file it never wrote.
+    throwIfCancelled(signal);
     onStatus?.('Checking generated file references...');
     beginStepDiagnostic('import-integrity', 'Scanning local imports against generated files.');
     const importStep = runImportIntegrityStep(files, teeLog);
@@ -945,6 +1005,7 @@ export async function runValidation(
     // 5. Generated quality audit. Import integrity is necessary but not
     // sufficient: a 3-line placeholder component can satisfy imports while
     // still failing the requested app behavior.
+    throwIfCancelled(signal);
     onStatus?.('Checking generated file quality...');
     beginStepDiagnostic('generated-quality', 'Auditing generated files against request requirements.');
     const qualityStep = runGeneratedQualityStep(files, requirements, teeLog);
@@ -956,13 +1017,16 @@ export async function runValidation(
     }
 
     // 6. Install deps (skipped when fingerprint + node_modules unchanged)
+    throwIfCancelled(signal);
     onStatus?.('Installing dependencies…');
     beginStepDiagnostic('install', 'Installing project dependencies.');
     const installStart = performance.now();
     const installResult = await ensureDependenciesInstalled(teeLog, {
       timeoutMs: INSTALL_TIMEOUT_MS,
       files,
+      signal,
     });
+    throwIfCancelled(signal);
     const installDurationMs = performance.now() - installStart;
     if (installResult.infrastructureError || installResult.exitCode !== 0) {
       // Classify BEFORE deciding what to do — a WebContainer abort
@@ -1013,6 +1077,7 @@ export async function runValidation(
     finishStepDiagnostic('install', steps[steps.length - 1]);
 
     // 5. Type-check
+    throwIfCancelled(signal);
     onStatus?.('Running type-check…');
     beginStepDiagnostic('type-check', 'Running TypeScript validation.');
     logTypeCheckPreflight(files, mountedPaths, teeLog);
@@ -1021,7 +1086,8 @@ export async function runValidation(
       'npx',
       ['--yes', 'tsc', '--noEmit'],
       teeLog,
-      TYPECHECK_TIMEOUT_MS
+      TYPECHECK_TIMEOUT_MS,
+      signal
     );
     if (looksLikeTscHelpOutput(tcResult.log)) {
       const discoveryError = buildTypeCheckDiscoveryError(files, mountedPaths, tcResult.log);
@@ -1046,6 +1112,7 @@ export async function runValidation(
     // 6. CSS sanity. Catch leaked markdown / SEARCH/REPLACE markers and
     // unsafe pseudo-element @apply usage before spending time in Next build;
     // the log includes nearby source lines.
+    throwIfCancelled(signal);
     onStatus?.('Checking CSS syntax inputs...');
     const cssSanityStep = runCssSanityStep(files);
     steps.push(cssSanityStep);
@@ -1063,6 +1130,7 @@ export async function runValidation(
     if (typeCheckOnly) {
       // Style audit still runs in fast mode — it is static and free,
       // and "compiles but renders unstyled" is a quality failure.
+      throwIfCancelled(signal);
       onStatus?.('Auditing styling…');
       const fastStyleStep = runStyleAuditStep(files);
       if (fastStyleStep) {
@@ -1074,6 +1142,7 @@ export async function runValidation(
       }
       return finalize({ success: true, skipped: false });
     }
+    throwIfCancelled(signal);
     onStatus?.('Running build…');
     beginStepDiagnostic('build', 'Running production build.');
     const buildResult = appendCssUnknownWordContext(files, await runStep(
@@ -1081,7 +1150,8 @@ export async function runValidation(
       'npx',
       ['--yes', 'next', 'build'],
       teeLog,
-      BUILD_TIMEOUT_MS
+      BUILD_TIMEOUT_MS,
+      signal
     ));
     finishStepDiagnostic('build', buildResult);
     steps.push(buildResult);
@@ -1103,6 +1173,7 @@ export async function runValidation(
     // everything, components with zero utility classes). A failure here
     // feeds the auto-fix loop exactly like a build failure: an app that
     // renders as browser-default HTML is a quality failure.
+    throwIfCancelled(signal);
     onStatus?.('Auditing styling…');
     const styleStep = runStyleAuditStep(files);
     if (styleStep) {
@@ -1122,8 +1193,9 @@ export async function runValidation(
     // overall validation fails — feeding the auto-fix loop the exact
     // runtime diagnostic.
     if (runtimeSmoke) {
+      throwIfCancelled(signal);
       onStatus?.('Running runtime smoke test…');
-      const smokeResult = await runRuntimeSmoke(teeLog, runtimeSmokeTimeoutMs);
+      const smokeResult = await runRuntimeSmoke(teeLog, runtimeSmokeTimeoutMs, signal);
       steps.push(smokeResult);
       logs.push(smokeResult.log);
       if (smokeResult.status === 'failed') {
@@ -1134,9 +1206,17 @@ export async function runValidation(
     return finalize({ success: true, skipped: false });
   })();
 
-  const result = await Promise.race([workPromise, timeoutPromise]);
-  if (watchdogInterval) clearInterval(watchdogInterval);
-  return result;
+  try {
+    const result = await Promise.race([workPromise, timeoutPromise]);
+    if (watchdogInterval) clearInterval(watchdogInterval);
+    return result;
+  } catch (err) {
+    if (watchdogInterval) clearInterval(watchdogInterval);
+    if (signal?.aborted || isAbortLikeError(err)) {
+      return finalizeCancelled();
+    }
+    throw err;
+  }
 }
 
 /** Re-export the parsed error type for convenience. */

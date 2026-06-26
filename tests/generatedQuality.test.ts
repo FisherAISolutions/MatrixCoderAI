@@ -30,6 +30,28 @@ const tsconfig = file(
   })
 );
 
+function fallbackRoutePage(slug: string): FileNode {
+  const title = slug.charAt(0).toUpperCase() + slug.slice(1);
+  return file(
+    `src/app/${slug}/page.tsx`,
+    `// MATRIX_CODER_FALLBACK_ROUTE
+import Link from 'next/link';
+
+export const metadata = { title: '${title}' };
+
+export default function ${title}Page() {
+  return (
+    <main>
+      <Link href="/">Back to dashboard</Link>
+      <h1>${title}</h1>
+      <p>Route-ready content area for ${slug} details and actions.</p>
+    </main>
+  );
+}
+`
+  );
+}
+
 describe('runGeneratedQualityAudit', () => {
   it('fails generated apps without package.json before install/build', () => {
     const result = runGeneratedQualityAudit([
@@ -383,6 +405,78 @@ export default function Page() {
     expect(result.errors.some((error) => error.file === 'src/app/pipeline/page.tsx')).toBe(true);
   });
 
+  it('fails when home navigation uses same-page anchors instead of linking existing primary app routes', () => {
+    const result = runGeneratedQualityAudit(
+      [
+        pkg,
+        tsconfig,
+        file(
+          'src/app/page.tsx',
+          `import Link from 'next/link';
+
+export default function Page() {
+  return (
+    <main>
+      <nav>
+        <Link href="#features">Features</Link>
+        <Link href="#plan">Plan</Link>
+        <Link href="#progress">Progress</Link>
+      </nav>
+      <section id="features">Feature cards</section>
+      <section id="plan">Plan section</section>
+      <section id="progress">Progress teaser</section>
+    </main>
+  );
+}`
+        ),
+        file('src/app/dashboard/page.tsx', 'export default function Dashboard(){ return <main>Dashboard app screen</main>; }'),
+        file('src/app/workouts/page.tsx', 'export default function Workouts(){ return <main>Workouts app screen</main>; }'),
+      ],
+      'Build a fitness tracker with dashboard and workouts pages.'
+    );
+
+    expect(result.ok).toBe(false);
+    expect(result.errors.some((error) =>
+      error.file === 'src/app/page.tsx' &&
+      /does not link to existing primary route \/dashboard/.test(error.message)
+    )).toBe(true);
+    expect(result.errors.some((error) =>
+      error.file === 'src/app/page.tsx' &&
+      /does not link to existing primary route \/workouts/.test(error.message)
+    )).toBe(true);
+  });
+
+  it('passes when home navigation includes real route links alongside landing-page anchors', () => {
+    const result = runGeneratedQualityAudit(
+      [
+        pkg,
+        tsconfig,
+        file(
+          'src/app/page.tsx',
+          `import Link from 'next/link';
+
+export default function Page() {
+  return (
+    <main>
+      <nav>
+        <Link href="/dashboard">Dashboard</Link>
+        <Link href="/workouts">Workouts</Link>
+        <Link href="#features">Features</Link>
+      </nav>
+      <section id="features">Feature cards</section>
+    </main>
+  );
+}`
+        ),
+        file('src/app/dashboard/page.tsx', 'export default function Dashboard(){ return <main>Dashboard app screen</main>; }'),
+        file('src/app/workouts/page.tsx', 'export default function Workouts(){ return <main>Workouts app screen</main>; }'),
+      ],
+      'Build a fitness tracker with dashboard and workouts pages.'
+    );
+
+    expect(result.ok).toBe(true);
+  });
+
   it('fails unnamed fallback component files before validation can pass', () => {
     const result = runGeneratedQualityAudit([
       pkg,
@@ -509,6 +603,132 @@ export function NotesWorkflows() {
       file('src/lib/notes-storage.ts', 'export function addStoredNote(){}\nexport function deleteStoredNote(){}\nexport function readStoredNotes(){ return []; }\nexport function seedNotesIfEmpty(){}\nexport function updateStoredNote(){}'),
       file('src/types/note.ts', 'export interface Note { id: string }\nexport interface NoteDraft { title: string }\nexport type NoteSortDirection = "asc" | "desc";\nexport interface StorageResult { ok: boolean }'),
     ]);
+
+    expect(result.ok).toBe(true);
+  });
+
+  it('fails a deterministic fallback dashboard route for an expense tracker primary app screen', () => {
+    const result = runGeneratedQualityAudit(
+      [
+        pkg,
+        tsconfig,
+        file(
+          'src/app/page.tsx',
+          `import Link from 'next/link';
+
+export default function Page() {
+  return <Link href="/dashboard">Open dashboard</Link>;
+}
+`
+        ),
+        fallbackRoutePage('dashboard'),
+      ],
+      'Build me an Expense Tracker app.'
+    );
+
+    expect(result.ok).toBe(false);
+    expect(result.errors.some((error) =>
+      error.file === 'src/app/dashboard/page.tsx' &&
+      /Primary route \/dashboard is only a deterministic fallback page/.test(error.message)
+    )).toBe(true);
+  });
+
+  it('fails deterministic fallback progress and goals routes for fitness primary app screens', () => {
+    const result = runGeneratedQualityAudit(
+      [
+        pkg,
+        tsconfig,
+        file(
+          'src/app/page.tsx',
+          `import Link from 'next/link';
+
+export default function Page() {
+  return (
+    <nav>
+      <Link href="/workouts">Workouts</Link>
+      <Link href="/nutrition">Nutrition</Link>
+      <Link href="/progress">Progress</Link>
+      <Link href="/goals">Goals</Link>
+    </nav>
+  );
+}
+`
+        ),
+        file('src/app/workouts/page.tsx', 'export default function Workouts(){ return <main>Workout logging app screen</main>; }'),
+        file('src/app/nutrition/page.tsx', 'export default function Nutrition(){ return <main>Nutrition tracking app screen</main>; }'),
+        fallbackRoutePage('progress'),
+        fallbackRoutePage('goals'),
+      ],
+      'Build me a fitness tracking app with multiple screens.'
+    );
+
+    expect(result.ok).toBe(false);
+    expect(result.errors.some((error) =>
+      error.file === 'src/app/progress/page.tsx' &&
+      /Primary route \/progress is only a deterministic fallback page/.test(error.message)
+    )).toBe(true);
+    expect(result.errors.some((error) =>
+      error.file === 'src/app/goals/page.tsx' &&
+      /Primary route \/goals is only a deterministic fallback page/.test(error.message)
+    )).toBe(true);
+  });
+
+  it('allows an incidental deterministic fallback route when it is not a primary app screen', () => {
+    const result = runGeneratedQualityAudit(
+      [
+        pkg,
+        tsconfig,
+        file(
+          'src/app/page.tsx',
+          `import Link from 'next/link';
+
+export default function Page() {
+  return <Link href="/privacy">Privacy</Link>;
+}
+`
+        ),
+        fallbackRoutePage('privacy'),
+      ],
+      'Build me a simple landing page.'
+    );
+
+    expect(result.ok).toBe(true);
+  });
+
+  it('passes when a primary linked route is replaced with a real implementation', () => {
+    const result = runGeneratedQualityAudit(
+      [
+        pkg,
+        tsconfig,
+        file(
+          'src/app/page.tsx',
+          `import Link from 'next/link';
+
+export default function Page() {
+  return <Link href="/dashboard">Open dashboard</Link>;
+}
+`
+        ),
+        file(
+          'src/app/dashboard/page.tsx',
+          `export const metadata = { title: 'Expense dashboard' };
+
+export default function DashboardPage() {
+  return (
+    <main>
+      <h1>Monthly expense dashboard</h1>
+      <section>
+        <h2>Balance summary</h2>
+        <p>Income, expenses, savings rate, recent transactions, and budget progress.</p>
+      </section>
+    </main>
+  );
+}
+`
+        ),
+      ],
+      'Build me an Expense Tracker app.'
+    );
 
     expect(result.ok).toBe(true);
   });

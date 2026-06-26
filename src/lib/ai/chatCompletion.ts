@@ -1,4 +1,5 @@
 import { callAIEndpoint } from './aiClient';
+import { createAbortError, isAbortLikeError } from '@/lib/generation/cancellation';
 
 const ENDPOINT = '/api/ai/chat-completion';
 
@@ -6,7 +7,8 @@ export async function getChatCompletion(
   provider: string,
   model: string,
   messages: object[],
-  parameters: object = {}
+  parameters: object = {},
+  options: { signal?: AbortSignal } = {}
 ) {
   return callAIEndpoint(ENDPOINT, {
     provider,
@@ -14,7 +16,7 @@ export async function getChatCompletion(
     messages,
     stream: false,
     parameters,
-  });
+  }, options);
 }
 
 export async function getStreamingChatCompletion(
@@ -24,13 +26,17 @@ export async function getStreamingChatCompletion(
   onChunk: (chunk: any) => void,
   onComplete: () => void,
   onError: (error: Error) => void,
-  parameters: object = {}
+  parameters: object = {},
+  options: { signal?: AbortSignal } = {}
 ) {
+  const { signal } = options;
   try {
+    if (signal?.aborted) throw createAbortError();
     const response = await fetch(ENDPOINT, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ provider, model, messages, stream: true, parameters }),
+      signal,
     });
 
     if (!response.ok) {
@@ -45,6 +51,10 @@ export async function getStreamingChatCompletion(
     let buffer = '';
 
     while (true) {
+      if (signal?.aborted) {
+        await reader.cancel().catch(() => undefined);
+        throw createAbortError();
+      }
       const { done, value } = await reader.read();
       if (done) break;
 
@@ -73,6 +83,9 @@ export async function getStreamingChatCompletion(
       }
     }
   } catch (error) {
+    if (signal?.aborted || isAbortLikeError(error)) {
+      throw createAbortError();
+    }
     console.error('Streaming error:', error);
     onError(error instanceof Error ? error : new Error('Streaming error'));
   }

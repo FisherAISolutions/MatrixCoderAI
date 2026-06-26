@@ -8,12 +8,14 @@ import {
   type BenchmarkValidationIssue,
 } from './benchmarkValidation';
 import type { BenchmarkGeneratorOutput } from './benchmarkRunner';
+import { isAbortLikeError } from './cancellation';
 
 export type BenchmarkExecutionStatus =
   | 'dry-run'
   | 'passed'
   | 'failed'
   | 'error'
+  | 'cancelled'
   | 'refused';
 
 export interface BenchmarkExecutionGeneratorOutput
@@ -40,6 +42,7 @@ export interface MatrixCoderBenchmarkAdapterRequest {
   prompt: string;
   expectedRoutes: string[];
   forbiddenRoutes: string[];
+  signal?: AbortSignal;
 }
 
 export type MatrixCoderBenchmarkAdapter = (
@@ -97,6 +100,7 @@ export interface RunBenchmarkExecutionHarnessOptions {
   generator?: BenchmarkExecutionGenerator;
   logger?: (message: string) => void;
   now?: () => number;
+  signal?: AbortSignal;
 }
 
 function normalizeGeneratedOutput(
@@ -211,6 +215,14 @@ export async function runBenchmarkExecutionHarness(
   }
 
   const benchmark = request.benchmark;
+  if (options.signal?.aborted) {
+    return {
+      ...emptyResult('cancelled', dryRun, [], ['Cancelled by user']),
+      benchmarkId: benchmark.id,
+      benchmarkName: benchmark.displayName,
+      prompt: benchmark.prompt,
+    };
+  }
   const riskEstimate = estimateBenchmarkExecutionRisk(benchmark);
   const log: string[] = [];
   const warnings = [riskEstimate.warning];
@@ -297,8 +309,20 @@ export async function runBenchmarkExecutionHarness(
           prompt: benchmark.prompt,
           expectedRoutes: benchmark.expectedRoutes,
           forbiddenRoutes: benchmark.forbiddenRoutes,
+          signal: options.signal,
         })
       : await options.generator!(benchmark);
+    if (options.signal?.aborted) {
+      return {
+        ...emptyResult('cancelled', false, [], ['Cancelled by user']),
+        benchmarkId: benchmark.id,
+        benchmarkName: benchmark.displayName,
+        prompt: benchmark.prompt,
+        durationMs: Math.max(0, now() - startedAt),
+        riskEstimate,
+        log,
+      };
+    }
     const output = normalizeGeneratedOutput(adapterOutput);
     const detectedRoutes =
       output.detectedRoutes ?? detectRoutesFromGeneratedFiles(output.generatedFiles);
@@ -336,6 +360,17 @@ export async function runBenchmarkExecutionHarness(
       log: output.log ? [...log, output.log] : log,
     };
   } catch (error) {
+    if (options.signal?.aborted || isAbortLikeError(error)) {
+      return {
+        ...emptyResult('cancelled', false, [], ['Cancelled by user']),
+        benchmarkId: benchmark.id,
+        benchmarkName: benchmark.displayName,
+        prompt: benchmark.prompt,
+        durationMs: Math.max(0, now() - startedAt),
+        riskEstimate,
+        log,
+      };
+    }
     return {
       benchmarkId: benchmark.id,
       benchmarkName: benchmark.displayName,

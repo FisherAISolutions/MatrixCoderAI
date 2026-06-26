@@ -26,7 +26,48 @@ import {
   analyzeResponseCompleteness,
   detectTruncatedEditPatch,
   extractFromAssistantResponse,
+  extractMentionedPaths,
+  sanitizeProjectPath,
 } from '@/lib/repo/extractors';
+
+describe('REGRESSION - code fragments are not project paths', () => {
+  it('rejects expression-shaped fragments that look like truncated filenames', () => {
+    expect(sanitizeProjectPath('readProfile(value.profile)')).toBeNull();
+    expect(sanitizeProjectPath('{ ...value }')).toBeNull();
+    expect(sanitizeProjectPath('ts://path: src/lib/fitness-storage.ts')).toBeNull();
+  });
+
+  it('does not let invalid path annotations block a complete continuation', () => {
+    const input = `
+\`\`\`ts
+// path: src/lib/fitness-storage.ts
+export function readStorage(value: unknown) {
+  return value;
+}
+\`\`\`
+
+// path: readProfile(value.profile)
+`;
+    const extracted = extractFromAssistantResponse(input);
+    const audit = analyzeResponseCompleteness(input, extracted);
+
+    expect(extracted.creates.map((file) => file.path)).toEqual([
+      'src/lib/fitness-storage.ts',
+    ]);
+    expect(audit.blocking).toBe(false);
+  });
+
+  it('does not expose malformed ts URLs as mentioned file paths', () => {
+    expect(
+      extractMentionedPaths(
+        'Browser opened ts://path: src/lib/fitness-storage.ts instead of a file chip'
+      )
+    ).toEqual(['src/lib/fitness-storage.ts']);
+    expect(extractMentionedPaths('Missing readProfile(value.profile)')).toEqual(
+      []
+    );
+  });
+});
 
 describe('extractFromAssistantResponse — valid fences (regression baseline)', () => {
   it('extracts a well-formed SEARCH/REPLACE block', () => {

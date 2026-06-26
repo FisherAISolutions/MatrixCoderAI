@@ -2,6 +2,7 @@
 
 import { useState, useCallback, useRef } from 'react';
 import { getChatCompletion, getStreamingChatCompletion } from '@/lib/ai/chatCompletion';
+import { isAbortLikeError } from '@/lib/generation/cancellation';
 
 export function useChat(provider: string, model: string, streaming: boolean = true) {
   const [response, setResponse] = useState('');
@@ -33,7 +34,12 @@ export function useChat(provider: string, model: string, streaming: boolean = tr
   }, []);
 
   const sendMessage = useCallback(
-    async (messages: object[], parameters: object = {}) => {
+    async (
+      messages: object[],
+      parameters: object = {},
+      options: { signal?: AbortSignal } = {}
+    ) => {
+      const { signal } = options;
       clearPendingFlush();
       responseBufferRef.current = '';
       chunksRef.current = [];
@@ -41,8 +47,17 @@ export function useChat(provider: string, model: string, streaming: boolean = tr
       setFullResponse(streaming ? [] : null);
       setIsLoading(true);
       setError(null);
+      const handleAbort = () => {
+        clearPendingFlush();
+        setIsLoading(false);
+      };
+      signal?.addEventListener('abort', handleAbort, { once: true });
 
       try {
+        if (signal?.aborted) {
+          setIsLoading(false);
+          return;
+        }
         if (streaming) {
           await getStreamingChatCompletion(
             provider,
@@ -57,29 +72,42 @@ export function useChat(provider: string, model: string, streaming: boolean = tr
               }
             },
             () => {
+              if (signal?.aborted) return;
               flushResponse();
               setFullResponse(chunksRef.current);
               setIsLoading(false);
             },
             (err) => {
+              if (signal?.aborted) return;
               flushResponse();
               setFullResponse(chunksRef.current);
               setError(err);
               setIsLoading(false);
             },
-            parameters
+            parameters,
+            { signal }
           );
         } else {
-          const result = await getChatCompletion(provider, model, messages, parameters);
+          const result = await getChatCompletion(provider, model, messages, parameters, {
+            signal,
+          });
+          if (signal?.aborted) return;
           setFullResponse(result);
           setResponse(result?.choices?.[0]?.message?.content || '');
           setIsLoading(false);
         }
       } catch (err) {
+        if (signal?.aborted || isAbortLikeError(err)) {
+          clearPendingFlush();
+          setIsLoading(false);
+          return;
+        }
         flushResponse();
         if (streaming) setFullResponse(chunksRef.current);
         setError(err instanceof Error ? err : new Error('Unknown error'));
         setIsLoading(false);
+      } finally {
+        signal?.removeEventListener('abort', handleAbort);
       }
     },
     [clearPendingFlush, flushResponse, model, provider, scheduleFlush, streaming]

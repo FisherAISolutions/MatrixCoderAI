@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { getGenerationBenchmark } from '@/lib/generation/benchmarks';
 import {
   detectRoutesFromGeneratedFiles,
@@ -186,6 +186,26 @@ describe('benchmark execution harness', () => {
     expect(result.autoFixAttemptCount).toBe(2);
     expect(result.errors).toEqual([]);
     expect(result.log).toContain('matrix coder adapter completed');
+  });
+
+  it('cancels before invoking an injected Matrix Coder adapter', async () => {
+    const controller = new AbortController();
+    const adapter = vi.fn();
+    controller.abort('Cancelled by user');
+
+    const result = await runBenchmarkExecutionHarness({
+      benchmarkId: 'personal-crm',
+      devOnly: true,
+      dryRun: false,
+      confirmExecution: true,
+      signal: controller.signal,
+      matrixCoderAdapter: adapter,
+    });
+
+    expect(adapter).not.toHaveBeenCalled();
+    expect(result.status).toBe('cancelled');
+    expect(result.benchmarkId).toBe('personal-crm');
+    expect(result.warnings).toContain('Cancelled by user');
   });
 
   it('detects generated src/app routes from file paths', () => {

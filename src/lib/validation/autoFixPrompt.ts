@@ -36,7 +36,8 @@ const RAW_LOG_FILE_PATH_REGEX =
 /**
  * Map an App Router route (e.g. `/add` or `/add/page`) to the file
  * paths most likely to contain it, across both `src/app/` and `app/`
- * roots. Includes the root layout — boundary bugs often live there.
+ * roots. Layout files are intentionally excluded unless an error names
+ * them directly; route repairs should stay focused on the failing page.
  */
 function routeToPageCandidates(route: string): string[] {
   const cleaned = route
@@ -49,7 +50,52 @@ function routeToPageCandidates(route: string): string[] {
     for (const ext of ['tsx', 'jsx', 'ts', 'js']) {
       out.push(`${root}${seg}/page.${ext}`);
     }
-    out.push(`${root}/layout.tsx`);
+  }
+  return out;
+}
+
+export interface OneRouteRepairOptions {
+  route: string;
+  reason: 'primary-fallback' | 'prerender-boundary';
+}
+
+function normalizeRouteSlug(route: string): string {
+  return route.replace(/^\/+/, '').replace(/\/page$/, '').replace(/\/+$/, '');
+}
+
+function isRoutePagePath(path: string): boolean {
+  return /^(?:src\/)?app\/.+\/page\.(?:tsx?|jsx?)$/.test(path);
+}
+
+function localImportPathsFromFile(file: FileNode, allPaths: Set<string>): string[] {
+  const content = file.content ?? '';
+  const imports = content.matchAll(/from\s+['"]([^'"]+)['"]/g);
+  const out: string[] = [];
+  for (const match of imports) {
+    const spec = match[1];
+    if (!spec.startsWith('@/') && !spec.startsWith('./') && !spec.startsWith('../')) {
+      continue;
+    }
+    const base = spec.startsWith('@/')
+      ? `src/${spec.slice(2)}`
+      : spec.startsWith('./')
+      ? `${file.path.replace(/\/[^/]+$/, '')}/${spec.slice(2)}`
+      : `${file.path.replace(/\/[^/]+$/, '')}/${spec}`;
+    const normalized = base.replace(/\\/g, '/').replace(/\/\.\//g, '/');
+    for (const candidate of [
+      normalized,
+      `${normalized}.tsx`,
+      `${normalized}.ts`,
+      `${normalized}.jsx`,
+      `${normalized}.js`,
+      `${normalized}/index.tsx`,
+      `${normalized}/index.ts`,
+    ]) {
+      if (allPaths.has(candidate) && !out.includes(candidate)) {
+        out.push(candidate);
+        break;
+      }
+    }
   }
   return out;
 }
@@ -187,6 +233,8 @@ export interface BuildPromptOptions {
   requirements?: string;
   /** Shrink context after a token-limit failure. */
   compact?: boolean;
+  /** Keep a repair scoped to one App Router route. */
+  oneRouteRepair?: OneRouteRepairOptions;
 }
 
 export interface AutoFixPromptDiagnostics {
@@ -200,6 +248,7 @@ export interface AutoFixPromptDiagnostics {
   maxFileContentChars: number;
   maxRawLogChars: number;
   compact: boolean;
+  oneRouteRepair?: string;
 }
 
 function getPromptLimits(compact = false) {
@@ -228,14 +277,59 @@ function selectRelevantFiles(
   options: {
     failedStep?: string;
     maxAttachedFiles?: number;
+    oneRouteRepair?: OneRouteRepairOptions;
   } = {}
 ): FileNode[] {
   const flat = flattenTree(files).filter(
     (f) => f.type === 'file' && typeof f.content === 'string'
   );
   const byPath = new Map(flat.map((f) => [f.path, f]));
+  const allPaths = new Set(byPath.keys());
 
   const pick = new Set<string>();
+
+  const targetRoute = options.oneRouteRepair
+    ? normalizeRouteSlug(options.oneRouteRepair.route)
+    : '';
+  if (targetRoute) {
+    for (const candidate of routeToPageCandidates(`/${targetRoute}`)) {
+      if (byPath.has(candidate)) {
+        pick.add(candidate);
+        const routeFile = byPath.get(candidate);
+        if (routeFile) {
+          for (const importedPath of localImportPathsFromFile(routeFile, allPaths)) {
+            if (!isRoutePagePath(importedPath) && !importedPath.endsWith('/layout.tsx')) {
+              pick.add(importedPath);
+            }
+          }
+        }
+      }
+    }
+
+    RAW_LOG_FILE_PATH_REGEX.lastIndex = 0;
+    let targetMatch: RegExpExecArray | null;
+    while ((targetMatch = RAW_LOG_FILE_PATH_REGEX.exec(extraLogText ?? '')) !== null) {
+      const normalized = targetMatch[1]
+        .replace(/\\/g, '/')
+        .replace(/^\.\//, '')
+        .replace(/^\//, '');
+      const exact = byPath.has(normalized)
+        ? normalized
+        : flat.find((f) => f.path.endsWith('/' + normalized))?.path;
+      if (!exact) continue;
+      const isTargetPage = exact === `src/app/${targetRoute}/page.tsx` || exact === `app/${targetRoute}/page.tsx`;
+      const isRelatedNonRoute =
+        !isRoutePagePath(exact) &&
+        !exact.endsWith('/layout.tsx') &&
+        /^(src\/components|src\/lib|src\/types|components|lib|types)\//.test(exact);
+      if (isTargetPage || isRelatedNonRoute) pick.add(exact);
+    }
+
+    return Array.from(pick)
+      .map((p) => byPath.get(p)!)
+      .filter(Boolean)
+      .slice(0, options.maxAttachedFiles ?? MAX_ATTACHED_FILES);
+  }
 
   for (const err of errors) {
     if (!err.file) continue;
@@ -380,12 +474,14 @@ export function buildAutoFixPromptWithDiagnostics(opts: BuildPromptOptions): {
     infrastructureError,
     requirements,
     compact = false,
+    oneRouteRepair,
   } = opts;
   const limits = getPromptLimits(compact);
   const errorsToShow = errors.slice(0, limits.maxErrors);
   const relevant = selectRelevantFiles(errors, files, rawLog, {
     failedStep,
     maxAttachedFiles: limits.maxAttachedFiles,
+    oneRouteRepair,
   });
 
   const prerenderFailure =
@@ -421,6 +517,10 @@ export function buildAutoFixPromptWithDiagnostics(opts: BuildPromptOptions): {
 
   const rawLogBlock = truncatedRaw
     ? `\n\n## Raw \`${failedStep ?? 'validation'}\` output\n\n\`\`\`\n${truncatedRaw}\n\`\`\``
+    : '';
+
+  const oneRouteBlock = oneRouteRepair
+    ? `\n\n## One-route compact repair\n\nRepair ONLY route \`/${normalizeRouteSlug(oneRouteRepair.route)}\`. Do not edit unrelated routes, layouts, theme files, generated benchmark files, model config, preview code, or WebContainer code.\n\n${oneRouteRepair.reason === 'primary-fallback' ? `This route is a deterministic fallback page. Replace the fallback with a real app screen for this route only, remove the \`MATRIX_CODER_FALLBACK_ROUTE\` marker, and keep the page connected to the user's app domain.` : `This route failed static prerender. Keep \`src/app/${normalizeRouteSlug(oneRouteRepair.route)}/page.tsx\` as a Server Component. Move hooks, \`localStorage\`, browser APIs, \`useParams\`, \`useSearchParams\`, and event handlers into a separate \`'use client'\` child component under \`src/components/\` if interactivity is needed. Patch only this route and that route-specific child component.`}\n`
     : '';
 
   // When the structured parser came up empty, the raw log is the only
@@ -578,6 +678,17 @@ Rules for this repair:
   - Do NOT create tiny placeholders. Required generated components must
     contain state, handlers, rendering, and persistence needed by the
     request.
+  - If the error says \`Primary route /<route> is only a deterministic
+    fallback page\`, replace ONLY that route's fallback page and any
+    route-specific child component it needs. Remove the
+    \`MATRIX_CODER_FALLBACK_ROUTE\` marker from the finished route page.
+    Keep \`src/app/<route>/page.tsx\` a SERVER Component: no
+    \`'use client'\`, no \`useState\` / \`useEffect\`, no event handlers,
+    no \`window\` / \`document\` / \`localStorage\`, and no
+    \`useParams\` / \`useSearchParams\` in the page file. If the route
+    needs interactivity or localStorage, create a separate
+    \`'use client'\` child component under \`src/components/<domain>/\`
+    and import/render that child from the server page.
   - For requested collection/workflow pages, implement search, filter,
     edit, delete, and localStorage wiring where those features are in
     the user request. A tiny \`return null\` or one-line placeholder
@@ -637,6 +748,7 @@ problem, not a type error. Fix the boundary — do NOT weaken the build:
 ` : ''}## Structured errors (${errors.length})
 
 ${errorsBlock}${moreErrorsNote}${rawLogBlock}${noStructuredErrorsMandate}${infraBlock}${requirementsBlock}
+${oneRouteBlock}
 
 ## Current file contents
 
@@ -663,6 +775,7 @@ will gather more context and retry.`;
       maxFileContentChars: limits.maxFileContentChars,
       maxRawLogChars: limits.maxRawLogChars,
       compact,
+      oneRouteRepair: oneRouteRepair ? `/${normalizeRouteSlug(oneRouteRepair.route)}` : undefined,
     },
   };
 }

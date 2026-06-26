@@ -323,4 +323,110 @@ describe('buildAutoFixUserPrompt', () => {
     expect(prompt).toMatch(/Do NOT create tiny placeholders/);
     expect(prompt).toMatch(/search,\s*filter,\s*edit,\s*delete,\s*and localStorage wiring/);
   });
+
+  it('REGRESSION: fallback primary route repairs keep App Router pages server-side', () => {
+    const prompt = buildAutoFixUserPrompt({
+      errors: [
+        {
+          source: 'quality',
+          file: 'src/app/goals/page.tsx',
+          message:
+            'Primary route /goals is only a deterministic fallback page. Generate a real app screen for this route only; do not regenerate the whole app.',
+          raw: 'Primary route /goals is only a deterministic fallback page.',
+        },
+      ],
+      files: [
+        ...sampleFiles,
+        file(
+          'src/app/goals/page.tsx',
+          `// MATRIX_CODER_FALLBACK_ROUTE
+import Link from 'next/link';
+
+export const metadata = { title: 'Goals' };
+
+export default function GoalsPage() {
+  return <main><Link href="/">Back</Link><h1>Goals</h1></main>;
+}
+`
+        ),
+      ],
+      attempt: 1,
+      maxAttempts: 3,
+      failedStep: 'generated-quality',
+      requirements: 'Build me a fitness tracker app with goals.',
+    });
+
+    expect(prompt).toMatch(/Primary route \/<route> is only a deterministic\s+fallback page/);
+    expect(prompt).toContain('Remove the');
+    expect(prompt).toContain('MATRIX_CODER_FALLBACK_ROUTE');
+    expect(prompt).toContain('Keep `src/app/<route>/page.tsx` a SERVER Component');
+    expect(prompt).toMatch(/no\s+`'use client'`/);
+    expect(prompt).toMatch(/create a separate\s+`'use client'` child component/);
+  });
+
+  it('REGRESSION: one-route fallback repair attaches only the failing route', () => {
+    const { prompt, diagnostics } = buildAutoFixPromptWithDiagnostics({
+      errors: [
+        {
+          source: 'quality',
+          file: 'src/app/goals/page.tsx',
+          message:
+            'Primary route /goals is only a deterministic fallback page. Generate a real app screen for this route only; do not regenerate the whole app.',
+          raw: 'Primary route /goals is only a deterministic fallback page.',
+        },
+        {
+          source: 'quality',
+          file: 'src/app/nutrition/page.tsx',
+          message:
+            'Primary route /nutrition is only a deterministic fallback page. Generate a real app screen for this route only; do not regenerate the whole app.',
+          raw: 'Primary route /nutrition is only a deterministic fallback page.',
+        },
+      ],
+      files: [
+        file('src/app/layout.tsx', 'export default function Layout({ children }) { return children; }'),
+        file('src/app/goals/page.tsx', '// MATRIX_CODER_FALLBACK_ROUTE\nexport default function Goals() { return <main>Goals</main>; }'),
+        file('src/app/nutrition/page.tsx', '// MATRIX_CODER_FALLBACK_ROUTE\nexport default function Nutrition() { return <main>Nutrition</main>; }'),
+      ],
+      attempt: 1,
+      maxAttempts: 3,
+      failedStep: 'generated-quality',
+      oneRouteRepair: { route: 'goals', reason: 'primary-fallback' },
+    });
+
+    expect(prompt).toContain('Repair ONLY route `/goals`');
+    expect(diagnostics.oneRouteRepair).toBe('/goals');
+    expect(diagnostics.attachedFilePaths).toEqual(['src/app/goals/page.tsx']);
+    expect(prompt).toContain('// path: src/app/goals/page.tsx');
+    expect(prompt).not.toContain('// path: src/app/nutrition/page.tsx');
+    expect(prompt).not.toContain('// path: src/app/layout.tsx');
+  });
+
+  it('REGRESSION: one-route prerender repair instructs server page plus client child split', () => {
+    const prompt = buildAutoFixUserPrompt({
+      errors: [
+        {
+          source: 'nextjs',
+          file: 'src/app/goals/page.tsx',
+          message:
+            'Prerender failed for route "/goals" - almost always a client/server boundary issue.',
+          raw: 'Export encountered an error on /goals/page: /goals, exiting the build.',
+        },
+      ],
+      files: [
+        file('src/app/goals/page.tsx', "'use client';\nexport default function Goals() { return <main>Goals</main>; }"),
+        file('src/app/layout.tsx', 'export default function Layout({ children }) { return children; }'),
+      ],
+      attempt: 2,
+      maxAttempts: 3,
+      failedStep: 'build',
+      rawLog: 'Export encountered an error on /goals/page: /goals, exiting the build.',
+      oneRouteRepair: { route: '/goals', reason: 'prerender-boundary' },
+    });
+
+    expect(prompt).toContain('Repair ONLY route `/goals`');
+    expect(prompt).toContain('Keep `src/app/goals/page.tsx` as a Server Component');
+    expect(prompt).toContain("separate `'use client'` child component");
+    expect(prompt).toContain('// path: src/app/goals/page.tsx');
+    expect(prompt).not.toContain('// path: src/app/layout.tsx');
+  });
 });

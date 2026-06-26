@@ -396,6 +396,7 @@ export async function runCommand(
      *  expiry the process is killed and an infrastructureError is
      *  reported. Defaults to no timeout. */
     timeoutMs?: number;
+    signal?: AbortSignal;
     /**
      * Receives `{ kill }` once the process has spawned. Lets callers
      * cancel a long-running process (terminal stop button, etc.).
@@ -404,7 +405,18 @@ export async function runCommand(
     onProcess?: ProcessHandleSink;
   } = {}
 ): Promise<RunCommandResult> {
-  const { onLog, cwd, env, timeoutMs, onProcess } = options;
+  const { onLog, cwd, env, timeoutMs, signal, onProcess } = options;
+
+  if (signal?.aborted) {
+    return {
+      exitCode: -1,
+      stdout: '',
+      stderr: '',
+      combined: '',
+      killed: true,
+      infrastructureError: 'Cancelled by user',
+    };
+  }
 
   let wc: WebContainer;
   try {
@@ -478,6 +490,9 @@ export async function runCommand(
   };
   onProcess?.(killHandle);
 
+  const abortHandler = () => killHandle.kill();
+  signal?.addEventListener('abort', abortHandler, { once: true });
+
   let timedOut = false;
   let timeoutHandle: ReturnType<typeof setTimeout> | null = null;
   const armTimeout = () => {
@@ -509,6 +524,7 @@ export async function runCommand(
   armTimeout();
 
   const exitCode = await proc.exit;
+  signal?.removeEventListener('abort', abortHandler);
   if (timeoutHandle) clearTimeout(timeoutHandle);
   await pipePromise;
   const elapsedMs = Math.round(performance.now() - startedAt);
@@ -678,7 +694,7 @@ async function nodeModulesPresent(): Promise<boolean> {
  */
 export async function ensureDependenciesInstalled(
   onLog?: LogSink,
-  options: { force?: boolean; timeoutMs?: number; files?: FileNode[] } = {}
+  options: { force?: boolean; timeoutMs?: number; files?: FileNode[]; signal?: AbortSignal } = {}
 ): Promise<RunCommandResult> {
   const fingerprint = options.files
     ? computeDependencyFingerprint(options.files)
@@ -723,6 +739,7 @@ export async function ensureDependenciesInstalled(
     let result = await runCommand(command, args, {
       onLog,
       timeoutMs: options.timeoutMs,
+      signal: options.signal,
     });
 
     // npm ci with an out-of-sync lockfile → fall back to npm install.
@@ -740,6 +757,7 @@ export async function ensureDependenciesInstalled(
       result = await runCommand('npm', NPM_INSTALL_ARGS, {
         onLog,
         timeoutMs: options.timeoutMs,
+        signal: options.signal,
       });
     }
 
@@ -758,7 +776,7 @@ export async function ensureDependenciesInstalled(
       const retry = await runCommand(
         'npm',
         [...NPM_INSTALL_ARGS, '--legacy-peer-deps'],
-        { onLog, timeoutMs: options.timeoutMs }
+        { onLog, timeoutMs: options.timeoutMs, signal: options.signal }
       );
       if (retry.exitCode === 0 && !retry.infrastructureError) {
         result = retry;
@@ -891,10 +909,15 @@ export function clearPreviewInfo() {
  */
 export function waitForNextServerReady(
   timeoutMs: number,
-  options: { afterSequence?: number } = {}
+  options: { afterSequence?: number; signal?: AbortSignal } = {}
 ): Promise<PreviewServerInfo | null> {
   return new Promise((resolve) => {
+    if (options.signal?.aborted) {
+      resolve(null);
+      return;
+    }
     let settled = false;
+    let abortHandler: (() => void) | null = null;
     // 2026-01 BUG FIX — cache snapshot MUST be captured BEFORE we
     // subscribe. `subscribeToServerReady` synchronously replays the
     // most recent URL into the callback the moment a cached entry
@@ -917,6 +940,7 @@ export function waitForNextServerReady(
         return;
       }
       settled = true;
+      if (abortHandler) options.signal?.removeEventListener('abort', abortHandler);
       try {
         unsub();
       } catch {
@@ -927,6 +951,7 @@ export function waitForNextServerReady(
     const timer = setTimeout(() => {
       if (settled) return;
       settled = true;
+      if (abortHandler) options.signal?.removeEventListener('abort', abortHandler);
       try {
         unsub();
       } catch {
@@ -937,6 +962,18 @@ export function waitForNextServerReady(
     if (typeof (timer as { unref?: () => void }).unref === 'function') {
       (timer as { unref?: () => void }).unref?.();
     }
+    abortHandler = () => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      try {
+        unsub();
+      } catch {
+        /* swallow */
+      }
+      resolve(null);
+    };
+    options.signal?.addEventListener('abort', abortHandler, { once: true });
   });
 }
 
@@ -961,10 +998,14 @@ export async function spawnBackground(
     onLog?: LogSink;
     cwd?: string;
     env?: Record<string, string>;
+    signal?: AbortSignal;
   } = {}
 ): Promise<BackgroundProcess> {
+  if (options.signal?.aborted) {
+    throw new DOMException('Cancelled by user', 'AbortError');
+  }
   const wc = await bootWebContainer();
-  const { onLog, cwd, env } = options;
+  const { onLog, cwd, env, signal } = options;
   onLog?.({
     level: 'info',
     text: `$ ${command} ${args.join(' ')}  (background)\n`,
@@ -1003,15 +1044,19 @@ export async function spawnBackground(
   proc.output.pipeTo(sink).catch(() => {
     /* swallow — process may exit before pipe completes */
   });
-  return {
-    kill: () => {
+  const kill = () => {
       try {
         proc.kill();
       } catch {
         /* best-effort */
       }
-    },
+    };
+  const abortHandler = () => kill();
+  signal?.addEventListener('abort', abortHandler, { once: true });
+  return {
+    kill,
     exited: proc.exit.then((exitCode) => {
+      signal?.removeEventListener('abort', abortHandler);
       onLog?.({
         level: exitCode === 0 ? 'info' : 'error',
         text:

@@ -102,6 +102,7 @@ export default function Page() {
     ]);
 
     for (const create of report.creates) {
+      expect(create.file.content).toContain('// MATRIX_CODER_FALLBACK_ROUTE');
       expect(create.file.content).toContain("import Link from 'next/link';");
       expect(create.file.content).toContain('export const metadata');
       expect(create.file.content).toContain('href="/"');

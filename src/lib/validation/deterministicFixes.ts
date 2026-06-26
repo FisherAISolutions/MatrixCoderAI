@@ -300,7 +300,8 @@ function identifierFromSlug(slug: string): string {
 function createLinkedRoutePage(slug: string, path: string): FileNode {
   const title = titleFromSlug(slug);
   const componentName = identifierFromSlug(slug);
-  const content = `import type { Metadata } from 'next';
+  const content = `// MATRIX_CODER_FALLBACK_ROUTE
+import type { Metadata } from 'next';
 import Link from 'next/link';
 
 export const metadata: Metadata = {

@@ -1,9 +1,14 @@
-export async function callAIEndpoint(endpoint: string, payload: object) {
+export async function callAIEndpoint(
+  endpoint: string,
+  payload: object,
+  options: { signal?: AbortSignal } = {}
+) {
   try {
     const response = await fetch(endpoint, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(payload),
+      signal: options.signal,
     });
 
     const data = await response.json();

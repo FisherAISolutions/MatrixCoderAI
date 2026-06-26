@@ -11,6 +11,45 @@ const RESOLVE_EXTENSIONS = ['.ts', '.tsx', '.js', '.jsx', '.mjs', '.cjs', '.json
 const INDEX_FILES = ['index.ts', 'index.tsx', 'index.js', 'index.jsx'];
 const LINKED_APP_ROUTE_REGEX =
   /(?:href\s*=\s*|href\s*:\s*|router\.push\(\s*)["'`]\/([a-z0-9][a-z0-9-]*)(?:\/)?["'`]/gi;
+const SAME_PAGE_ANCHOR_LINK_REGEX = /href\s*=\s*["'`]#[^"'`]+["'`]/i;
+const FALLBACK_ROUTE_MARKER = 'MATRIX_CODER_FALLBACK_ROUTE';
+const IMPORTANT_LINKED_ROUTE_SLUGS = new Set([
+  'dashboard',
+  'progress',
+  'goals',
+  'transactions',
+  'budgets',
+  'expenses',
+  'reports',
+  'settings',
+  'contacts',
+  'companies',
+  'tasks',
+  'pipeline',
+  'workouts',
+  'nutrition',
+  'plans',
+  'timer',
+  'calories',
+  'items',
+  'suppliers',
+  'stock',
+  'boards',
+  'backlog',
+  'team',
+  'calendar',
+  'appointments',
+  'clients',
+  'metrics',
+  'users',
+  'habits',
+  'today',
+  'stats',
+  'products',
+  'orders',
+  'customers',
+  'promotions',
+]);
 
 export interface GeneratedQualityAudit {
   ok: boolean;
@@ -232,14 +271,18 @@ function appRouteSlugs(paths: Set<string>): string[] {
 }
 
 function hasAppRoutePage(slug: string, paths: Set<string>): boolean {
+  return Boolean(appRoutePagePathForSlug(slug, paths));
+}
+
+function appRoutePagePathForSlug(slug: string, paths: Set<string>): string | null {
   const slugPattern = escapeRegExp(slug);
   const routePattern = new RegExp(
     `^(?:src/)?app/(?:\\([^/]+\\)/)*${slugPattern}/page\\.(?:tsx|jsx|ts|js)$`
   );
   for (const path of paths) {
-    if (routePattern.test(path)) return true;
+    if (routePattern.test(path)) return path;
   }
-  return false;
+  return null;
 }
 
 function linkedAppRoutes(files: FileNode[]): Map<string, Set<string>> {
@@ -259,11 +302,35 @@ function linkedAppRoutes(files: FileNode[]): Map<string, Set<string>> {
   return out;
 }
 
+function linkedAppRouteSlugsInContent(content: string): Set<string> {
+  const slugs = new Set<string>();
+  LINKED_APP_ROUTE_REGEX.lastIndex = 0;
+  let match: RegExpExecArray | null;
+  while ((match = LINKED_APP_ROUTE_REGEX.exec(content)) !== null) {
+    const slug = match[1];
+    if (slug === 'api' || slug.startsWith('_')) continue;
+    slugs.add(slug);
+  }
+  return slugs;
+}
+
+function rootAppPage(filesByPath: Map<string, FileNode>): FileNode | undefined {
+  return filesByPath.get('src/app/page.tsx') ?? filesByPath.get('app/page.tsx');
+}
+
+function hasSamePageAnchorLinks(content: string): boolean {
+  return SAME_PAGE_ANCHOR_LINK_REGEX.test(content);
+}
+
 function isFallbackGeneratedPath(path: string): boolean {
   return (
     /^src\/components\/Component\d+\.(?:tsx|jsx|ts|js)$/.test(path) ||
     /^src\/generated\d+\.(?:tsx|jsx|ts|js|css|json)$/.test(path)
   );
+}
+
+function isDeterministicFallbackRoute(file: FileNode | undefined): boolean {
+  return Boolean(file?.content?.includes(FALLBACK_ROUTE_MARKER));
 }
 
 function hasTerm(content: string, term: string): boolean {
@@ -367,6 +434,8 @@ export function runGeneratedQualityAudit(
       specifier.startsWith('@/')
     )
   );
+  const requestedRouteSlugs = inferRequestedRouteSlugs(requirements);
+  const linkedRoutes = linkedAppRoutes(flat);
 
   const fail = (file: string | undefined, message: string) => {
     errors.push({ source: 'quality', file, message, raw: message });
@@ -391,7 +460,7 @@ export function runGeneratedQualityAudit(
     );
   }
 
-  for (const slug of inferRequestedRouteSlugs(requirements)) {
+  for (const slug of requestedRouteSlugs) {
     const exactPath = routePagePath(slug);
     if (!byPath.has(exactPath)) {
       fail(
@@ -499,11 +568,51 @@ export function runGeneratedQualityAudit(
     }
   }
 
-  for (const [slug, sources] of linkedAppRoutes(flat)) {
+  for (const [slug, sources] of linkedRoutes) {
     if (hasAppRoutePage(slug, allPaths)) continue;
     fail(
       routePagePath(slug),
       `Generated navigation links to "/${slug}", but no App Router page exists for that route. Create ${routePagePath(slug)} or remove/update the link in: ${Array.from(sources).join(', ')}.`
+    );
+  }
+
+  const homePage = rootAppPage(byPath);
+  if (homePage) {
+    const homeLinkedRoutes = linkedAppRouteSlugsInContent(homePage.content ?? '');
+    const homeHasNavigationLinks =
+      homeLinkedRoutes.size > 0 || hasSamePageAnchorLinks(homePage.content ?? '');
+    if (homeHasNavigationLinks) {
+      const existingPrimaryRoutes = new Set<string>();
+      for (const slug of appRouteSlugs(allPaths)) {
+        if (requestedRouteSlugs.includes(slug) || IMPORTANT_LINKED_ROUTE_SLUGS.has(slug)) {
+          existingPrimaryRoutes.add(slug);
+        }
+      }
+
+      for (const slug of existingPrimaryRoutes) {
+        if (homeLinkedRoutes.has(slug)) continue;
+        const routePath = appRoutePagePathForSlug(slug, allPaths) ?? routePagePath(slug);
+        fail(
+          homePage.path,
+          `${homePage.path} does not link to existing primary route /${slug} even though ${routePath} exists. Same-page anchors such as #features are allowed for landing sections, but they must not replace App Router navigation to /${slug}. Add a real route link to /${slug} from the home page navigation or primary calls-to-action.`
+        );
+      }
+    }
+  }
+
+  const primaryRouteSlugs = new Set(requestedRouteSlugs);
+  for (const slug of linkedRoutes.keys()) {
+    if (IMPORTANT_LINKED_ROUTE_SLUGS.has(slug)) primaryRouteSlugs.add(slug);
+  }
+
+  for (const slug of primaryRouteSlugs) {
+    const path = appRoutePagePathForSlug(slug, allPaths);
+    if (!path) continue;
+    const routeFile = byPath.get(path);
+    if (!isDeterministicFallbackRoute(routeFile)) continue;
+    fail(
+      path,
+      `Primary route /${slug} is only a deterministic fallback page. Generate a real app screen for this route only; do not regenerate the whole app.`
     );
   }
 

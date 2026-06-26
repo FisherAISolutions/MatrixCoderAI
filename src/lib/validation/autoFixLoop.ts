@@ -45,9 +45,14 @@ import {
   AUTO_FIX_SYSTEM_PROMPT,
   buildAutoFixPromptWithDiagnostics,
   type AutoFixPromptDiagnostics,
+  type OneRouteRepairOptions,
 } from './autoFixPrompt';
 import { prefixedId } from '@/lib/uuid';
 import { pushTerminalLog } from '@/lib/terminal/store';
+import {
+  isAbortLikeError,
+  throwIfCancelled,
+} from '@/lib/generation/cancellation';
 
 /** Master kill switch — flip to false to disable the loop project-wide. */
 export const AUTO_FIX_ENABLED = true;
@@ -102,6 +107,8 @@ export interface AutoFixLoopOptions {
   runtimeSmoke?: boolean;
   /** Original user request, used to judge and repair placeholder generated files. */
   requirements?: string;
+  /** User-initiated cancellation for generation / validation / repair. */
+  signal?: AbortSignal;
 }
 
 export interface AutoFixLoopResult {
@@ -236,8 +243,109 @@ function renderPromptDiagnostics(
     `raw_log_chars=${diagnostics.rawLogChars}`,
     `truncated_raw_log_chars=${diagnostics.truncatedRawLogChars}`,
     `attached_files=${diagnostics.attachedFileCount}/${diagnostics.maxAttachedFiles}`,
+    diagnostics.oneRouteRepair ? `one_route_repair=${diagnostics.oneRouteRepair}` : null,
     `attached_paths=${paths}`,
-  ].join(' ');
+  ]
+    .filter(Boolean)
+    .join(' ');
+}
+
+const PRIMARY_FALLBACK_ROUTE_REGEX =
+  /Primary route\s+\/([A-Za-z0-9_-]+)\s+is only a deterministic fallback page/i;
+
+const PRERENDER_FAILED_ROUTE_REGEX =
+  /(?:Prerender failed for route\s+"\/([^"]+)"|Export encountered an error on\s+\/([^/\s]+)\/page|Export encountered errors on\s+\/([^/\s]+)\/page|Export encountered an error on\s+\/([^,\s]+)|Error occurred prerendering page\s+"\/([^"]+)")/i;
+
+function normalizeRepairRoute(route: string): string {
+  return route.replace(/^\/+/, '').replace(/\/page$/, '').replace(/\/+$/, '');
+}
+
+function routePagePath(route: string): string {
+  return `src/app/${normalizeRepairRoute(route)}/page.tsx`;
+}
+
+function primaryFallbackRoutes(errors: ParsedError[]): string[] {
+  const routes: string[] = [];
+  for (const error of errors) {
+    const text = `${error.message}\n${error.raw ?? ''}`;
+    const match = text.match(PRIMARY_FALLBACK_ROUTE_REGEX);
+    if (!match) continue;
+    const route = normalizeRepairRoute(match[1]);
+    if (route && !routes.includes(route)) routes.push(route);
+  }
+  return routes;
+}
+
+function prerenderRouteFromText(text: string | undefined): string | null {
+  if (!text) return null;
+  const match = text.match(PRERENDER_FAILED_ROUTE_REGEX);
+  const route = match?.slice(1).find(Boolean);
+  return route ? normalizeRepairRoute(route) : null;
+}
+
+function oneRouteRepairForFailure(
+  errors: ParsedError[],
+  step: ValidationResult['steps'][number] | undefined,
+  validation: ValidationResult,
+  forced?: OneRouteRepairOptions
+): OneRouteRepairOptions | undefined {
+  if (forced) return forced;
+  const fallbackRoute = primaryFallbackRoutes(errors)[0];
+  if (fallbackRoute) {
+    return { route: fallbackRoute, reason: 'primary-fallback' };
+  }
+  if (step?.step === 'build') {
+    const route =
+      prerenderRouteFromText(step.log) ??
+      prerenderRouteFromText(validation.combinedLog) ??
+      errors.map((error) => prerenderRouteFromText(`${error.message}\n${error.raw ?? ''}`)).find(Boolean) ??
+      null;
+    if (route) return { route, reason: 'prerender-boundary' };
+  }
+  return undefined;
+}
+
+function errorsForRouteRepair(
+  errors: ParsedError[],
+  repair: OneRouteRepairOptions | undefined
+): ParsedError[] {
+  if (!repair) return errors;
+  const route = normalizeRepairRoute(repair.route);
+  const routePath = routePagePath(route);
+  const filtered = errors.filter((error) => {
+    const text = `${error.file ?? ''}\n${error.message}\n${error.raw ?? ''}`;
+    return (
+      text.includes(`/${route}`) ||
+      text.includes(routePath) ||
+      text.includes(`app/${route}/page`)
+    );
+  });
+  return filtered.length > 0 ? filtered : errors.slice(0, 1);
+}
+
+function rawLogForRouteRepair(
+  repair: OneRouteRepairOptions | undefined,
+  errors: ParsedError[],
+  stepLog: string | undefined,
+  combinedLog: string
+): string | undefined {
+  if (!repair) return stepLog && stepLog.length > 0 ? stepLog : combinedLog;
+  const route = normalizeRepairRoute(repair.route);
+  const routePath = routePagePath(route);
+  const lines = [
+    ...errors.map((error) => `${error.file ?? ''} ${error.message} ${error.raw ?? ''}`),
+    ...(stepLog ?? '').split(/\r?\n/),
+    ...combinedLog.split(/\r?\n/),
+  ].filter((line) => {
+    return (
+      line.includes(`/${route}`) ||
+      line.includes(routePath) ||
+      line.includes(`app/${route}/page`) ||
+      (repair.reason === 'prerender-boundary' &&
+        /prerender|workStore|searchParams|useSearchParams|useParams|localStorage|window|document|hook/i.test(line))
+    );
+  });
+  return lines.slice(0, 24).join('\n');
 }
 
 function sandboxInstallFailureMessage(f: { kind: string; reason: string }): string {
@@ -423,8 +531,10 @@ async function applyDeterministicAndRevalidate(
     typeCheckOnly: boolean;
     runtimeSmoke: boolean;
     requirements: string;
+    signal?: AbortSignal;
   }
 ): Promise<{ validation: ValidationResult; applied: boolean }> {
+  throwIfCancelled(options.signal);
   const report = applyDeterministicFixes(rebuildFiles(fileMap), lastValidation);
   if (!report.mutated) return { validation: lastValidation, applied: false };
 
@@ -453,6 +563,7 @@ async function applyDeterministicAndRevalidate(
     typeCheckOnly: options.typeCheckOnly,
     runtimeSmoke: options.runtimeSmoke,
     requirements: options.requirements,
+    signal: options.signal,
   });
   return { validation, applied: true };
 }
@@ -482,10 +593,14 @@ export async function runAutoFixLoop(
     typeCheckOnly = false,
     runtimeSmoke = false,
     requirements = '',
+    signal,
   } = opts;
 
   if (!enabled) {
     return { ran: false, succeeded: false, attempts: 0, skippedReason: 'disabled' };
+  }
+  if (signal?.aborted) {
+    return { ran: false, succeeded: false, attempts: 0, skippedReason: 'cancelled' };
   }
   if (loopInProgress) {
     return { ran: false, succeeded: false, attempts: 0, skippedReason: 'already-running' };
@@ -539,6 +654,7 @@ export async function runAutoFixLoop(
   }
 
   try {
+    throwIfCancelled(signal);
     onChatMessage(
       sysMsg(
         `**Build validation started** — running \`tsc --noEmit\` and \`next build\`${runtimeSmoke ? ' and a runtime smoke test (GET /)' : ''} inside the WebContainer sandbox.${typeCheckOnly ? ' (type-check only)' : ''}`
@@ -555,7 +671,9 @@ export async function runAutoFixLoop(
       typeCheckOnly,
       runtimeSmoke,
       requirements,
+      signal,
     });
+    throwIfCancelled(signal);
 
     if (lastValidation.skipped) {
       const reason = lastValidation.skipReason ?? 'unknown';
@@ -596,7 +714,7 @@ export async function runAutoFixLoop(
       deleteFile,
       onChatMessage,
       onStatus,
-      { typeCheckOnly, runtimeSmoke, requirements }
+      { typeCheckOnly, runtimeSmoke, requirements, signal }
     );
     if (deterministicInitial.applied) {
       lastValidation = deterministicInitial.validation;
@@ -644,7 +762,9 @@ export async function runAutoFixLoop(
     let attempt = 0;
     let consecutiveNoPatchAttempts = 0;
     let useCompactPrompt = false;
+    let forcedOneRouteRepair: OneRouteRepairOptions | undefined;
     while (attempt < maxAttempts && lastValidation && !lastValidation.success) {
+      throwIfCancelled(signal);
       const deterministic = await applyDeterministicAndRevalidate(
         lastValidation,
         fileMap,
@@ -653,7 +773,7 @@ export async function runAutoFixLoop(
         deleteFile,
         onChatMessage,
         onStatus,
-        { typeCheckOnly, runtimeSmoke, requirements }
+        { typeCheckOnly, runtimeSmoke, requirements, signal }
       );
       if (deterministic.applied) {
         lastValidation = deterministic.validation;
@@ -684,11 +804,24 @@ export async function runAutoFixLoop(
       const currentFailedStep = lastValidation.steps.find(
         (s) => s.status === 'failed'
       ) ?? firstFailedStep;
-      const promptErrors = errorsForFailedStep(lastValidation, currentFailedStep);
+      const stepErrors = errorsForFailedStep(lastValidation, currentFailedStep);
+      const oneRouteRepair = oneRouteRepairForFailure(
+        stepErrors,
+        currentFailedStep,
+        lastValidation,
+        forcedOneRouteRepair
+      );
+      const promptErrors = errorsForRouteRepair(stepErrors, oneRouteRepair);
 
       onStatus(`Auto-fix attempt ${attempt}/${maxAttempts} — calling AI…`);
       onChatMessage(
-        sysMsg(`**Auto-fix attempt ${attempt}/${maxAttempts} started.**`)
+        sysMsg(
+          `**Auto-fix attempt ${attempt}/${maxAttempts} started.**${
+            oneRouteRepair
+              ? ` Repairing only \`/${normalizeRepairRoute(oneRouteRepair.route)}\`.`
+              : ''
+          }`
+        )
       );
 
       const { prompt: userPrompt, diagnostics: promptDiagnostics } =
@@ -702,12 +835,15 @@ export async function runAutoFixLoop(
           requirements,
           // Prefer the failing step's own log; fall back to the combined
           // log if the step didn't capture one.
-          rawLog:
-            currentFailedStep?.log && currentFailedStep.log.length > 0
-              ? currentFailedStep.log
-              : lastValidation.combinedLog,
+          rawLog: rawLogForRouteRepair(
+            oneRouteRepair,
+            promptErrors,
+            currentFailedStep?.log,
+            lastValidation.combinedLog
+          ),
           infrastructureError: currentFailedStep?.infrastructureError,
-          compact: useCompactPrompt,
+          compact: useCompactPrompt || Boolean(oneRouteRepair),
+          oneRouteRepair,
         });
       pushTerminalLog({
         level: 'info',
@@ -723,6 +859,7 @@ export async function runAutoFixLoop(
         hitOutputLimit: false,
       };
       try {
+        throwIfCancelled(signal);
         const aiResult = await getChatCompletion(
           AUTO_FIX_PROVIDER,
           AUTO_FIX_MODEL,
@@ -730,12 +867,24 @@ export async function runAutoFixLoop(
             { role: 'system', content: AUTO_FIX_SYSTEM_PROMPT },
             { role: 'user', content: userPrompt },
           ],
-          { max_completion_tokens: AUTO_FIX_MAX_TOKENS }
+          { max_completion_tokens: AUTO_FIX_MAX_TOKENS },
+          { signal }
         );
+        throwIfCancelled(signal);
         aiDiagnostics = inspectAiResult(aiResult);
         aiResponseText =
           (aiResult as any)?.choices?.[0]?.message?.content ?? '';
       } catch (err) {
+        if (signal?.aborted || isAbortLikeError(err)) {
+          onStatus(null);
+          return {
+            ran: true,
+            succeeded: false,
+            attempts: attempt,
+            finalValidation: lastValidation,
+            skippedReason: 'cancelled',
+          };
+        }
         const msg = err instanceof Error ? err.message : 'AI request failed';
         onChatMessage(
           sysMsg(
@@ -761,6 +910,32 @@ export async function runAutoFixLoop(
           sysMsg(`**Auto-fix AI diagnostics** - ${aiDiagnostics.text}`)
         );
         if (aiDiagnostics.hitOutputLimit && attempt < maxAttempts) {
+          const routeRepair =
+            oneRouteRepair ??
+            oneRouteRepairForFailure(
+              stepErrors,
+              currentFailedStep,
+              lastValidation,
+              forcedOneRouteRepair
+            );
+          if (routeRepair) {
+            forcedOneRouteRepair = routeRepair;
+            useCompactPrompt = true;
+            previousAttemptSummary =
+              `Attempt ${attempt} hit the auto-fix model output limit before returning usable patches. Retry with a one-route compact repair for /${normalizeRepairRoute(routeRepair.route)} only.`;
+            const route = normalizeRepairRoute(routeRepair.route);
+            pushTerminalLog({
+              level: 'warn',
+              text: `[auto-fix] Output limit hit; switching to one-route compact repair for /${route}\n`,
+              timestamp: Date.now(),
+            });
+            onChatMessage(
+              sysMsg(
+                `**Auto-fix attempt ${attempt}/${maxAttempts} hit the output limit** — Output limit hit; switching to one-route compact repair for /${route}`
+              )
+            );
+            continue;
+          }
           if (!useCompactPrompt) {
             useCompactPrompt = true;
             previousAttemptSummary =
@@ -822,6 +997,24 @@ export async function runAutoFixLoop(
             )
           );
           if (attempt < maxAttempts && !useCompactPrompt) {
+            if (oneRouteRepair) {
+              forcedOneRouteRepair = oneRouteRepair;
+              const route = normalizeRepairRoute(oneRouteRepair.route);
+              previousAttemptSummary =
+                `Attempt ${attempt} was truncated or hit the output limit. Retry with a one-route compact repair for /${route} only.`;
+              pushTerminalLog({
+                level: 'warn',
+                text: `[auto-fix] Output limit hit; switching to one-route compact repair for /${route}\n`,
+                timestamp: Date.now(),
+              });
+              onChatMessage(
+                sysMsg(
+                  `**Auto-fix attempt ${attempt}/${maxAttempts} hit the output limit** — Output limit hit; switching to one-route compact repair for /${route}`
+                )
+              );
+              useCompactPrompt = true;
+              continue;
+            }
             useCompactPrompt = true;
             previousAttemptSummary =
               `Attempt ${attempt} was truncated or hit the output limit. Retry with compact context and emit exactly one complete edit fence for the first failing file.`;
@@ -866,6 +1059,8 @@ export async function runAutoFixLoop(
         };
       }
       consecutiveNoPatchAttempts = 0;
+      forcedOneRouteRepair = undefined;
+      useCompactPrompt = false;
 
       const patchLines = patchReport.report.slice(0, 12).join('\n');
       onChatMessage(
@@ -883,7 +1078,9 @@ export async function runAutoFixLoop(
         typeCheckOnly,
         runtimeSmoke,
         requirements,
+        signal,
       });
+      throwIfCancelled(signal);
 
       // Mid-loop sandbox failure (e.g. the re-install was aborted by
       // the WebContainer) — stop cleanly instead of burning attempts
@@ -951,6 +1148,15 @@ export async function runAutoFixLoop(
       finalValidation: lastValidation,
     };
   } catch (err) {
+    if (signal?.aborted || isAbortLikeError(err)) {
+      onStatus(null);
+      return {
+        ran: true,
+        succeeded: false,
+        attempts: 0,
+        skippedReason: 'cancelled',
+      };
+    }
     const msg = err instanceof Error ? err.message : 'unknown error';
     onChatMessage(
       sysMsg(
