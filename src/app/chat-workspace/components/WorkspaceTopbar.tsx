@@ -21,6 +21,7 @@ import {
   Search,
   Trash2,
   Palette,
+  Rocket,
 } from 'lucide-react';
 import AppLogo from '@/components/ui/AppLogo';
 import ThemeSwitcher from '@/components/theme/ThemeSwitcher';
@@ -228,6 +229,16 @@ export default function WorkspaceTopbar({
           >
             <Palette size={10} />
             Inspiration
+          </Link>
+          <Link
+            href="/deployment-center"
+            className="hidden lg:inline-flex items-center gap-1 px-2 py-1 border border-matrix-border text-matrix-green-muted hover:text-matrix-green hover:border-matrix-green text-[10px] uppercase tracking-[0.32em] transition-colors"
+            data-testid="workspace-deployment-btn"
+            aria-label="Open Deployment Center"
+            title="Open Deployment Center"
+          >
+            <Rocket size={10} />
+            Deploy
           </Link>
         </div>
 

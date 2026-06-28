@@ -25,6 +25,10 @@ import {
 } from '@/lib/storage/persistence';
 import { clearTerminalLogs, pushTerminalLog } from '@/lib/terminal/store';
 import { consumeStylePromptForWorkspace } from '@/lib/styleInspiration';
+import {
+  buildDeploymentWorkspaceSnapshot,
+  saveDeploymentWorkspaceSnapshot,
+} from '@/lib/deployment/workspaceStatus';
 
 // Helper function to build file tree from flat file list
 function buildFileTree(files: any[]): FileNode[] {
@@ -164,6 +168,25 @@ export default function ChatWorkspacePage() {
 
   // Determine session ID to use
   const effectiveSessionId = session?.id || '';
+
+  useEffect(() => {
+    if (isLoadingData) return;
+    const snapshot = buildDeploymentWorkspaceSnapshot({
+      sessionId: effectiveSessionId || undefined,
+      projectName: session?.title,
+      files: fileTree,
+      messages,
+      isGenerating: isStreaming,
+    });
+    saveDeploymentWorkspaceSnapshot(snapshot);
+  }, [
+    effectiveSessionId,
+    fileTree,
+    isLoadingData,
+    isStreaming,
+    messages,
+    session?.title,
+  ]);
 
   // Initialize memory manager
   useEffect(() => {
