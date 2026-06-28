@@ -53,6 +53,46 @@ function addUniqueRouteSlug(out: string[], slug: string | null) {
   if (slug && !out.includes(slug)) out.push(slug);
 }
 
+const ROUTE_PLANNING_CONTEXT_REGEX =
+  /\b(app|application|dashboard|tracker|manager|crm|admin|scheduler|board|tool|portal|workspace)\b/i;
+
+const PLANNABLE_FEATURE_ROUTES: Array<[slug: string, pattern: RegExp]> = [
+  ['workouts', /\b(?:workouts?|training sessions?|exercise sessions?|workout log|training log)\b/i],
+  ['calories', /\bcalor(?:y|ies)\b/i],
+  ['progress', /\bprogress(?:\s+(?:charts?|tracking|review|overview|page|screen|route|view))?\b/i],
+  ['goals', /\bgoals?\b/i],
+  ['nutrition', /\b(?:nutrition|meals?|macros?|hydration)\b/i],
+  ['timer', /\b(?:timer|countdown|intervals?)\b/i],
+  ['plans', /\b(?:plans?|training plans?|workout plans?)\b/i],
+  ['transactions', /\btransactions?\b/i],
+  ['expenses', /\bexpenses?\b/i],
+  ['budgets', /\bbudgets?\b/i],
+  ['contacts', /\bcontacts?\b/i],
+  ['companies', /\bcompanies\b/i],
+  ['tasks', /\btasks?\b/i],
+  ['pipeline', /\bpipeline\b/i],
+  ['products', /\bproducts?\b/i],
+  ['orders', /\borders?\b/i],
+  ['customers', /\bcustomers?\b/i],
+  ['items', /\bitems?\b/i],
+  ['suppliers', /\bsuppliers?\b/i],
+  ['stock', /\bstock\b/i],
+  ['boards', /\bboards?\b/i],
+  ['backlog', /\bbacklog\b/i],
+  ['calendar', /\bcalendar\b/i],
+  ['appointments', /\bappointments?\b/i],
+  ['clients', /\bclients?\b/i],
+  ['metrics', /\bmetrics?\b/i],
+  ['reports', /\breports?\b/i],
+  ['users', /\busers?\b/i],
+  ['habits', /\bhabits?\b/i],
+  ['today', /\btoday\b/i],
+  ['stats', /\bstats?\b/i],
+  ['promotions', /\bpromotions?\b/i],
+];
+
+const MAX_PLANNED_ROUTE_SLUGS = 5;
+
 function isNegatedRouteMention(text: string, matchIndex: number): boolean {
   const before = text.slice(Math.max(0, matchIndex - 90), matchIndex);
   return /(?:do not|don't|dont|never|avoid|without|not requested|not part of|not part|unless explicitly|forbidden|forbid)\s+(?:[\w\s-]*?)(?:create|use|add|include|requested|request)?\s*$/i.test(
@@ -139,6 +179,32 @@ export function inferRequestedRouteSlugs(baseRequest: string): string[] {
   return out.filter((slug) => !forbidden.has(slug));
 }
 
+export function inferPlannedRouteSlugs(baseRequest: string): string[] {
+  const lower = baseRequest.toLowerCase();
+  const out = [...inferRequestedRouteSlugs(baseRequest)];
+  const forbidden = inferForbiddenRouteSlugs(lower);
+
+  if (out.length > 0) {
+    return out.filter((slug) => !forbidden.has(slug)).slice(0, MAX_PLANNED_ROUTE_SLUGS);
+  }
+
+  if (!ROUTE_PLANNING_CONTEXT_REGEX.test(baseRequest)) {
+    return out;
+  }
+
+  for (const [slug, pattern] of PLANNABLE_FEATURE_ROUTES) {
+    if (out.length >= MAX_PLANNED_ROUTE_SLUGS) break;
+    if (forbidden.has(slug) || out.includes(slug)) continue;
+    pattern.lastIndex = 0;
+    const match = pattern.exec(baseRequest);
+    if (!match) continue;
+    if (isNegatedRouteMention(lower, match.index)) continue;
+    addUniqueRouteSlug(out, slug);
+  }
+
+  return out.filter((slug) => !forbidden.has(slug)).slice(0, MAX_PLANNED_ROUTE_SLUGS);
+}
+
 function inferAddRoutePath(baseRequest: string): string | null {
   const explicitAddSlug = inferRequestedRouteSlugs(baseRequest).find((slug) =>
     slug === 'add' || slug.startsWith('add-')
@@ -153,7 +219,7 @@ export function inferRequiredPathsForBatch(
 ): string[] {
   const lower = baseRequest.toLowerCase();
   const required: string[] = [];
-  const routePaths = inferRequestedRouteSlugs(baseRequest).map(
+  const routePaths = inferPlannedRouteSlugs(baseRequest).map(
     (slug) => `src/app/${slug}/page.tsx`
   );
 

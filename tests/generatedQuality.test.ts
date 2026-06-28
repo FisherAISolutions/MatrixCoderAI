@@ -477,6 +477,211 @@ export default function Page() {
     expect(result.ok).toBe(true);
   });
 
+  it('passes when home navigation computes route links from label arrays', () => {
+    const result = runGeneratedQualityAudit(
+      [
+        pkg,
+        tsconfig,
+        file(
+          'src/app/page.tsx',
+          `import Link from 'next/link';
+
+const navigationItems = ['Overview', 'Workouts', 'Calories', 'Progress'];
+
+export default function Page() {
+  return (
+    <main>
+      <nav>
+        {navigationItems.map((item) => (
+          <Link
+            key={item}
+            href={item === 'Overview' ? '/' : \`/\${item.toLowerCase()}\`}
+          >
+            {item}
+          </Link>
+        ))}
+      </nav>
+    </main>
+  );
+}`
+        ),
+        file('src/app/workouts/page.tsx', 'export default function Workouts(){ return <main>Workouts app screen</main>; }'),
+        file('src/app/calories/page.tsx', 'export default function Calories(){ return <main>Calories app screen</main>; }'),
+        file('src/app/progress/page.tsx', 'export default function Progress(){ return <main>Progress app screen</main>; }'),
+      ],
+      'Build a fitness tracker with workouts, calories, and progress pages.'
+    );
+
+    expect(result.ok).toBe(true);
+  });
+
+  it('fails when computed home navigation points to a missing route page', () => {
+    const result = runGeneratedQualityAudit(
+      [
+        pkg,
+        tsconfig,
+        file(
+          'src/app/page.tsx',
+          `import Link from 'next/link';
+
+const navigationItems = ['Overview', 'Workouts', 'Calories', 'Progress'];
+
+export default function Page() {
+  return (
+    <nav>
+      {navigationItems.map((item) => (
+        <Link key={item} href={item === 'Overview' ? '/' : \`/\${item.toLowerCase()}\`}>
+          {item}
+        </Link>
+      ))}
+    </nav>
+  );
+}`
+        ),
+        file('src/app/workouts/page.tsx', 'export default function Workouts(){ return <main>Workouts app screen</main>; }'),
+        file('src/app/progress/page.tsx', 'export default function Progress(){ return <main>Progress app screen</main>; }'),
+      ],
+      'Build a fitness tracker with navigation tabs.'
+    );
+
+    expect(result.ok).toBe(false);
+    expect(result.errors.some((error) => error.file === 'src/app/calories/page.tsx')).toBe(true);
+  });
+
+  it('passes when home navigation maps route objects through href={route.href}', () => {
+    const result = runGeneratedQualityAudit(
+      [
+        pkg,
+        tsconfig,
+        file(
+          'src/app/page.tsx',
+          `import Link from 'next/link';
+
+const routes = [
+  { label: 'Overview', href: '/' },
+  { label: 'Calories', href: '/calories' },
+];
+
+export default function Page() {
+  return (
+    <nav>
+      {routes.map((route) => (
+        <Link key={route.href} href={route.href}>{route.label}</Link>
+      ))}
+    </nav>
+  );
+}`
+        ),
+        file('src/app/calories/page.tsx', 'export default function Calories(){ return <main>Calories app screen</main>; }'),
+      ],
+      'Build a fitness tracker with a calories page.'
+    );
+
+    expect(result.ok).toBe(true);
+  });
+
+  it('fails large light route pages inside an otherwise dark-themed app', () => {
+    const result = runGeneratedQualityAudit(
+      [
+        pkg,
+        tsconfig,
+        file(
+          'src/app/page.tsx',
+          `import Link from 'next/link';
+
+export default function Page() {
+  return (
+    <main className="min-h-screen bg-slate-950 text-white">
+      <Link href="/progress">Progress</Link>
+    </main>
+  );
+}`
+        ),
+        file(
+          'src/app/progress/page.tsx',
+          `export default function ProgressPage() {
+  return (
+    <main className="min-h-screen bg-white text-slate-950">
+      <h1>Progress</h1>
+    </main>
+  );
+}`
+        ),
+      ],
+      'Build a fitness tracker with a progress page.'
+    );
+
+    expect(result.ok).toBe(false);
+    expect(result.errors.some((error) =>
+      error.file === 'src/app/progress/page.tsx' &&
+      /Visual consistency issue/.test(error.message)
+    )).toBe(true);
+  });
+
+  it('allows small light cards inside a dark-themed app page', () => {
+    const result = runGeneratedQualityAudit(
+      [
+        pkg,
+        tsconfig,
+        file(
+          'src/app/page.tsx',
+          `import Link from 'next/link';
+
+export default function Page() {
+  return (
+    <main className="min-h-screen bg-slate-950 text-white">
+      <Link href="/progress">Progress</Link>
+    </main>
+  );
+}`
+        ),
+        file(
+          'src/app/progress/page.tsx',
+          `export default function ProgressPage() {
+  return (
+    <main className="min-h-screen bg-slate-950 text-white">
+      <section className="rounded-3xl bg-white p-6 text-slate-950 shadow-xl">
+        <h1>Progress snapshot</h1>
+      </section>
+    </main>
+  );
+}`
+        ),
+      ],
+      'Build a fitness tracker with a progress page.'
+    );
+
+    expect(result.ok).toBe(true);
+  });
+
+  it('fails large light landing sections inside a dark-themed root page', () => {
+    const result = runGeneratedQualityAudit([
+      pkg,
+      tsconfig,
+      file(
+        'src/app/page.tsx',
+        `export default function Page() {
+  return (
+    <main className="min-h-screen bg-slate-950 text-white">
+      <section className="py-20">
+        <h1>Fitness dashboard</h1>
+      </section>
+      <section className="bg-slate-50 py-20 text-slate-950">
+        <h2>App screens</h2>
+      </section>
+    </main>
+  );
+}`
+      ),
+    ]);
+
+    expect(result.ok).toBe(false);
+    expect(result.errors.some((error) =>
+      error.file === 'src/app/page.tsx' &&
+      /Visual consistency issue/.test(error.message)
+    )).toBe(true);
+  });
+
   it('fails unnamed fallback component files before validation can pass', () => {
     const result = runGeneratedQualityAudit([
       pkg,

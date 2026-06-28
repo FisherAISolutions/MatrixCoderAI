@@ -12,6 +12,22 @@ const INDEX_FILES = ['index.ts', 'index.tsx', 'index.js', 'index.jsx'];
 const LINKED_APP_ROUTE_REGEX =
   /(?:href\s*=\s*|href\s*:\s*|router\.push\(\s*)["'`]\/([a-z0-9][a-z0-9-]*)(?:\/)?["'`]/gi;
 const SAME_PAGE_ANCHOR_LINK_REGEX = /href\s*=\s*["'`]#[^"'`]+["'`]/i;
+const COMPUTED_LABEL_ROUTE_HREF_REGEX =
+  /href\s*=\s*{[\s\S]{0,240}toLowerCase\s*\(\s*\)[\s\S]{0,240}}/i;
+const NAV_LABEL_ARRAY_REGEX =
+  /(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*=\s*\[([\s\S]*?)\]\s*;?/gi;
+const NAV_LABEL_ARRAY_NAME_REGEX = /(?:navigation|nav|routes?|links?|items?|tabs?|menu)/i;
+const STRING_LITERAL_REGEX = /["'`]([A-Za-z][A-Za-z0-9 &/_-]{0,48})["'`]/g;
+const DARK_THEME_CLASS_REGEX =
+  /\b(?:bg|from|via|to)-(?:slate|gray|zinc|neutral|stone)-(?:900|950)\b|\b(?:bg|from|via|to)-black\b|\btext-white\b/gi;
+const STRONG_DARK_THEME_CLASS_REGEX =
+  /\b(?:bg|from|via|to)-(?:slate|gray|zinc|neutral|stone)-(?:900|950)\b|\b(?:bg|from|via|to)-black\b/i;
+const LIGHT_THEME_CLASS_REGEX =
+  /\b(?:bg-(?:white|slate-50|gray-50|zinc-50|neutral-50|stone-50)|text-(?:slate|gray|zinc|neutral|stone)-950)\b/i;
+const LARGE_LAYOUT_CLASS_REGEX =
+  /\b(?:min-h-screen|h-screen|min-h-\[[^\]]+\]|py-(?:1[2-9]|[2-9]\d)|pt-(?:1[2-9]|[2-9]\d)|pb-(?:1[2-9]|[2-9]\d))\b/i;
+const JSX_CLASS_ATTRIBUTE_REGEX =
+  /<(main|section|div)\b[\s\S]{0,300}?className\s*=\s*(?:"([^"]*)"|'([^']*)'|`([^`]*)`|{\s*`([^`]*)`\s*})/gi;
 const FALLBACK_ROUTE_MARKER = 'MATRIX_CODER_FALLBACK_ROUTE';
 const IMPORTANT_LINKED_ROUTE_SLUGS = new Set([
   'dashboard',
@@ -289,11 +305,7 @@ function linkedAppRoutes(files: FileNode[]): Map<string, Set<string>> {
   const out = new Map<string, Set<string>>();
   for (const file of files) {
     if (!/\.(?:tsx|jsx|ts|js)$/.test(file.path)) continue;
-    LINKED_APP_ROUTE_REGEX.lastIndex = 0;
-    let match: RegExpExecArray | null;
-    while ((match = LINKED_APP_ROUTE_REGEX.exec(file.content ?? '')) !== null) {
-      const slug = match[1];
-      if (slug === 'api' || slug.startsWith('_')) continue;
+    for (const slug of linkedAppRouteSlugsInContent(file.content ?? '')) {
       const sources = out.get(slug) ?? new Set<string>();
       sources.add(file.path);
       out.set(slug, sources);
@@ -302,12 +314,53 @@ function linkedAppRoutes(files: FileNode[]): Map<string, Set<string>> {
   return out;
 }
 
+function labelToRouteSlug(label: string): string | null {
+  const normalized = label
+    .trim()
+    .toLowerCase()
+    .replace(/&/g, ' and ')
+    .replace(/['"]/g, '')
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '');
+  if (!normalized || ['home', 'overview', 'root', 'landing'].includes(normalized)) {
+    return null;
+  }
+  return normalized;
+}
+
+function computedLabelRouteSlugs(content: string): Set<string> {
+  const slugs = new Set<string>();
+  if (!COMPUTED_LABEL_ROUTE_HREF_REGEX.test(content)) return slugs;
+
+  NAV_LABEL_ARRAY_REGEX.lastIndex = 0;
+  let arrayMatch: RegExpExecArray | null;
+  while ((arrayMatch = NAV_LABEL_ARRAY_REGEX.exec(content)) !== null) {
+    const arrayName = arrayMatch[1];
+    const arrayBody = arrayMatch[2];
+    if (!NAV_LABEL_ARRAY_NAME_REGEX.test(arrayName)) continue;
+    if (/[{}]/.test(arrayBody)) continue;
+
+    STRING_LITERAL_REGEX.lastIndex = 0;
+    let labelMatch: RegExpExecArray | null;
+    while ((labelMatch = STRING_LITERAL_REGEX.exec(arrayBody)) !== null) {
+      const slug = labelToRouteSlug(labelMatch[1]);
+      if (slug) slugs.add(slug);
+    }
+  }
+
+  return slugs;
+}
+
 function linkedAppRouteSlugsInContent(content: string): Set<string> {
   const slugs = new Set<string>();
   LINKED_APP_ROUTE_REGEX.lastIndex = 0;
   let match: RegExpExecArray | null;
   while ((match = LINKED_APP_ROUTE_REGEX.exec(content)) !== null) {
     const slug = match[1];
+    if (slug === 'api' || slug.startsWith('_')) continue;
+    slugs.add(slug);
+  }
+  for (const slug of computedLabelRouteSlugs(content)) {
     if (slug === 'api' || slug.startsWith('_')) continue;
     slugs.add(slug);
   }
@@ -320,6 +373,35 @@ function rootAppPage(filesByPath: Map<string, FileNode>): FileNode | undefined {
 
 function hasSamePageAnchorLinks(content: string): boolean {
   return SAME_PAGE_ANCHOR_LINK_REGEX.test(content);
+}
+
+function looksDarkThemedApp(homePage: FileNode | undefined, globals: FileNode | undefined): boolean {
+  const content = `${homePage?.content ?? ''}\n${globals?.content ?? ''}`;
+  if (STRONG_DARK_THEME_CLASS_REGEX.test(content)) return true;
+
+  DARK_THEME_CLASS_REGEX.lastIndex = 0;
+  const darkSignals = content.match(DARK_THEME_CLASS_REGEX) ?? [];
+  return darkSignals.length >= 3;
+}
+
+function isGeneratedUiSurface(path: string): boolean {
+  return (
+    /^src\/app\/.+\.(?:tsx|jsx)$/.test(path) ||
+    /^src\/components\/.+\.(?:tsx|jsx)$/.test(path)
+  );
+}
+
+function hasLargeLightThemeSurface(content: string): boolean {
+  JSX_CLASS_ATTRIBUTE_REGEX.lastIndex = 0;
+  let match: RegExpExecArray | null;
+  while ((match = JSX_CLASS_ATTRIBUTE_REGEX.exec(content)) !== null) {
+    const tagName = match[1].toLowerCase();
+    const className = match.slice(2).find(Boolean) ?? '';
+    if (!LIGHT_THEME_CLASS_REGEX.test(className)) continue;
+    if (tagName === 'main') return true;
+    if (LARGE_LAYOUT_CLASS_REGEX.test(className)) return true;
+  }
+  return false;
 }
 
 function isFallbackGeneratedPath(path: string): boolean {
@@ -625,6 +707,17 @@ export function runGeneratedQualityAudit(
       globals.path,
       `${globals.path} is missing full Tailwind directives. It must include @tailwind base; @tailwind components; and @tailwind utilities;, not a tiny placeholder stylesheet.`
     );
+  }
+
+  if (looksDarkThemedApp(homePage, globals)) {
+    for (const file of flat) {
+      if (!isGeneratedUiSurface(file.path)) continue;
+      if (!hasLargeLightThemeSurface(file.content ?? '')) continue;
+      fail(
+        file.path,
+        `Visual consistency issue: ${file.path} uses a large light section inside a dark-themed app. Keep primary pages visually consistent with the app theme.`
+      );
+    }
   }
 
   const importedTargets = new Set<string>();

@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+  inferPlannedRouteSlugs,
   inferRequestedRouteSlugs,
   inferRequiredPathsForBatch,
 } from '@/lib/generation/routePlanning';
@@ -25,6 +26,46 @@ describe('large app route planning', () => {
       'Build a fitness tracker app with workouts, progress charts, personal plans, nutrition summaries, and a training timer.';
 
     expect(inferRequestedRouteSlugs(request)).toEqual([]);
+  });
+
+  it('plans fitness feature routes before validation even when they are prose features', () => {
+    const request =
+      'Build a fitness tracker app with workouts, calories, progress charts, and goals. Use localStorage and responsive design.';
+
+    expect(inferRequestedRouteSlugs(request)).toEqual([]);
+    expect(inferPlannedRouteSlugs(request)).toEqual([
+      'workouts',
+      'calories',
+      'progress',
+      'goals',
+    ]);
+
+    expect(
+      inferRequiredPathsForBatch(request, {
+        title: 'primary feature routes and shared components',
+      })
+    ).toEqual(['src/app/workouts/page.tsx', 'src/app/calories/page.tsx']);
+
+    expect(
+      inferRequiredPathsForBatch(request, {
+        title: 'secondary feature routes and workflows',
+      })
+    ).toEqual(['src/app/progress/page.tsx', 'src/app/goals/page.tsx']);
+  });
+
+  it('plans multiple fitness workflow routes without adding notes-style routes', () => {
+    const request =
+      'Build a FitTrack app for workout logging, nutrition summaries, progress review, goal management, and a training timer.';
+
+    expect(inferPlannedRouteSlugs(request)).toEqual([
+      'workouts',
+      'progress',
+      'goals',
+      'nutrition',
+      'timer',
+    ]);
+    expect(inferPlannedRouteSlugs(request)).not.toContain('history');
+    expect(inferPlannedRouteSlugs(request)).not.toContain('add-note');
   });
 
   it('infers explicitly listed domain routes', () => {
