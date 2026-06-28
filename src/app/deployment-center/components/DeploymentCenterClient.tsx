@@ -1,7 +1,7 @@
 'use client';
 
 import Link from 'next/link';
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import {
   Archive,
   ArrowLeft,
@@ -39,6 +39,13 @@ import {
   getAndroidReadiness,
   type AndroidReadinessStatus,
 } from '@/lib/deployment/androidReadiness';
+import {
+  addDeploymentHistoryEntry,
+  loadDeploymentHistory,
+  type AddDeploymentHistoryEntryInput,
+  type DeploymentHistoryEntry,
+  type DeploymentHistoryStatus,
+} from '@/lib/deployment/deploymentHistory';
 import { runValidation } from '@/lib/validation';
 
 const emptySnapshot: DeploymentWorkspaceSnapshot = {
@@ -214,6 +221,23 @@ function androidStatusClasses(status: AndroidReadinessStatus): string {
   }
 }
 
+function historyStatusClasses(status: DeploymentHistoryStatus): string {
+  switch (status) {
+    case 'Ready':
+    case 'Passed':
+      return 'border-matrix-green text-matrix-green-bright bg-matrix-green-ghost';
+    case 'Failed':
+      return 'border-red-400/60 text-red-200 bg-red-500/10';
+    case 'Running':
+      return 'border-matrix-blue text-matrix-blue bg-matrix-blue/10';
+    case 'Not ready':
+      return 'border-matrix-border text-matrix-green-muted bg-matrix-bg';
+    case 'Info':
+    default:
+      return 'border-matrix-border text-matrix-green-muted bg-matrix-card';
+  }
+}
+
 function ChecklistIcon({ status }: { status: DeploymentStatus }) {
   if (status === 'passed') {
     return <CheckCircle2 size={17} className="text-matrix-green-bright" />;
@@ -244,10 +268,15 @@ export default function DeploymentCenterClient() {
     () => createInitialProductionCheckSteps()
   );
   const [productionMessage, setProductionMessage] = useState<string | null>(null);
+  const [historyEntries, setHistoryEntries] = useState<DeploymentHistoryEntry[]>(
+    []
+  );
+  const readinessHistoryKeys = useRef(new Set<string>());
 
   useEffect(() => {
     const refresh = () => {
       setSnapshot(loadDeploymentWorkspaceSnapshot() ?? emptySnapshot);
+      setHistoryEntries(loadDeploymentHistory());
     };
     refresh();
     window.addEventListener('storage', refresh);
@@ -275,6 +304,42 @@ export default function DeploymentCenterClient() {
       ? snapshot.projectName
       : `${snapshot.projectName} (${snapshot.framework})`;
 
+  function recordHistory(input: AddDeploymentHistoryEntryInput) {
+    setHistoryEntries(addDeploymentHistoryEntry(input));
+  }
+
+  useEffect(() => {
+    const key = `vercel:${vercelReadiness.status}:${vercelReadiness.message}`;
+    if (readinessHistoryKeys.current.has(key)) return;
+    readinessHistoryKeys.current.add(key);
+    recordHistory({
+      action: 'Vercel readiness checked',
+      status:
+        vercelReadiness.status === 'Ready to connect'
+          ? 'Ready'
+          : vercelReadiness.status === 'Failed production check'
+            ? 'Failed'
+            : 'Not ready',
+      details: `${vercelReadiness.status}: ${vercelReadiness.message}`,
+    });
+  }, [vercelReadiness.message, vercelReadiness.status]);
+
+  useEffect(() => {
+    const key = `android:${androidReadiness.status}:${androidReadiness.message}`;
+    if (readinessHistoryKeys.current.has(key)) return;
+    readinessHistoryKeys.current.add(key);
+    recordHistory({
+      action: 'Android readiness checked',
+      status:
+        androidReadiness.status === 'Ready to configure'
+          ? 'Ready'
+          : androidReadiness.status === 'Failed production check'
+            ? 'Failed'
+            : 'Not ready',
+      details: `${androidReadiness.status}: ${androidReadiness.message}`,
+    });
+  }, [androidReadiness.message, androidReadiness.status]);
+
   const handleDownloadProject = async () => {
     if (!canDownload) return;
     setDownloadStatus('Preparing');
@@ -289,9 +354,22 @@ export default function DeploymentCenterClient() {
       anchor.remove();
       URL.revokeObjectURL(url);
       setDownloadStatus('Downloaded');
+      recordHistory({
+        action: 'ZIP downloaded',
+        status: 'Passed',
+        details: `${exportFiles.length} files exported as ${projectZipFileName(
+          snapshot.projectName
+        )}.`,
+      });
     } catch (error) {
       console.error('Project ZIP export failed:', error);
       setDownloadStatus('Failed');
+      recordHistory({
+        action: 'ZIP downloaded',
+        status: 'Failed',
+        details:
+          error instanceof Error ? error.message : 'Project ZIP export failed.',
+      });
     }
   };
 
@@ -300,6 +378,11 @@ export default function DeploymentCenterClient() {
     setProductionStatus('Running');
     setProductionSteps(createInitialProductionCheckSteps('running'));
     setProductionMessage('Running production readiness check...');
+    recordHistory({
+      action: 'Production check started',
+      status: 'Running',
+      details: 'Running install, type check, build, runtime smoke, and quality checks.',
+    });
 
     try {
       const result = await runValidation(exportFilesToFileNodes(exportFiles), {
@@ -311,6 +394,14 @@ export default function DeploymentCenterClient() {
       setProductionStatus(summary.status);
       setProductionSteps(summary.steps);
       setProductionMessage(summary.message ?? null);
+      recordHistory({
+        action:
+          summary.status === 'Passed'
+            ? 'Production check passed'
+            : 'Production check failed',
+        status: summary.status === 'Passed' ? 'Passed' : 'Failed',
+        details: summary.message ?? 'Production readiness check completed.',
+      });
     } catch (error) {
       setProductionStatus('Failed');
       setProductionSteps((steps) =>
@@ -321,6 +412,12 @@ export default function DeploymentCenterClient() {
       setProductionMessage(
         error instanceof Error ? error.message : 'Production check failed.'
       );
+      recordHistory({
+        action: 'Production check failed',
+        status: 'Failed',
+        details:
+          error instanceof Error ? error.message : 'Production check failed.',
+      });
     }
   };
 
@@ -603,6 +700,54 @@ export default function DeploymentCenterClient() {
               </div>
             ))}
           </div>
+        </section>
+
+        <section className="mb-6 border border-matrix-border bg-matrix-card p-5 shadow-neon-sm">
+          <div className="mb-5 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+            <div>
+              <p className="text-[10px] uppercase tracking-[0.34em] text-matrix-green-muted">
+                Deployment Activity
+              </p>
+              <h2 className="mt-2 text-xl font-bold tracking-wide text-matrix-green-bright">
+                Recent actions
+              </h2>
+            </div>
+            <span className="border border-matrix-border bg-matrix-bg px-2.5 py-1 text-[10px] uppercase tracking-[0.24em] text-matrix-green-muted">
+              Session history
+            </span>
+          </div>
+
+          {historyEntries.length === 0 ? (
+            <div className="border border-matrix-border bg-matrix-bg/70 p-4 text-sm text-matrix-green-muted">
+              No Deployment Center actions have been recorded in this session.
+            </div>
+          ) : (
+            <div className="space-y-3">
+              {historyEntries.slice(0, 8).map((entry) => (
+                <div
+                  key={entry.id}
+                  className="grid gap-3 border border-matrix-border bg-matrix-bg/70 p-4 md:grid-cols-[160px_1fr_auto]"
+                >
+                  <p className="text-xs leading-5 text-matrix-green-muted">
+                    {formatDate(entry.timestamp)}
+                  </p>
+                  <div>
+                    <p className="text-sm font-semibold text-matrix-green-bright">
+                      {entry.action}
+                    </p>
+                    <p className="mt-1 text-xs leading-5 text-matrix-green-muted">
+                      {entry.details}
+                    </p>
+                  </div>
+                  <span
+                    className={`inline-flex h-fit items-center justify-center border px-2.5 py-1 text-[10px] uppercase tracking-[0.2em] ${historyStatusClasses(entry.status)}`}
+                  >
+                    {entry.status}
+                  </span>
+                </div>
+              ))}
+            </div>
+          )}
         </section>
 
         <section className="grid flex-1 gap-4 md:grid-cols-2">
