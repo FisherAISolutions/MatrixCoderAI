@@ -391,6 +391,10 @@ function isGeneratedUiSurface(path: string): boolean {
   );
 }
 
+function isAppRoutePage(path: string): boolean {
+  return /^(?:src\/)?app\/(?:.*\/)?page\.(?:tsx|jsx|ts|js)$/.test(path);
+}
+
 function hasLargeLightThemeSurface(content: string): boolean {
   JSX_CLASS_ATTRIBUTE_REGEX.lastIndex = 0;
   let match: RegExpExecArray | null;
@@ -610,7 +614,12 @@ export function runGeneratedQualityAudit(
   for (const file of flat) {
     if (!/\.(?:tsx|jsx|ts|js)$/.test(file.path)) continue;
     const content = file.content ?? '';
-    if (hasMisplacedClientDirective(content)) {
+    if (isAppRoutePage(file.path) && hasTopClientDirective(content)) {
+      fail(
+        file.path,
+        `${file.path} is a Client Component route page. App Router route pages must be Server Components; move hooks, state, forms, effects, localStorage, browser APIs, and event handlers into a separate 'use client' child component and render that child from the page.`
+      );
+    } else if (hasMisplacedClientDirective(content)) {
       fail(
         file.path,
         `${file.path} contains a misplaced 'use client' directive. Client directives must be the first statement in a file. For App Router route pages, keep page.tsx as a Server Component and move interactive code into a separate 'use client' child component.`

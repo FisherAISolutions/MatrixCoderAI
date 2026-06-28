@@ -36,6 +36,15 @@ const REACT_IMPORTS = new Set([
 
 const MISSING_LINKED_ROUTE_REGEX =
   /Generated navigation links to "\/([a-z0-9][a-z0-9-]*)", but no App Router page exists for that route\. Create (src\/app\/[a-z0-9-]+\/page\.tsx)/i;
+const APP_ROUTE_PAGE_REGEX = /^(?:src\/)?app\/(?:(.+)\/)?page\.(?:tsx|jsx|ts|js)$/;
+const VISUAL_CONSISTENCY_REGEX =
+  /Visual consistency issue:\s+([^\s]+)\s+uses a large light section inside a dark-themed app/i;
+const JSX_CLASS_ATTRIBUTE_REGEX =
+  /<(main|section|div)\b([\s\S]{0,300}?className\s*=\s*)("([^"]*)"|'([^']*)'|`([^`]*)`|{\s*`([^`]*)`\s*})/gi;
+const LARGE_LAYOUT_CLASS_REGEX =
+  /\b(?:min-h-screen|h-screen|min-h-\[[^\]]+\]|py-(?:1[2-9]|[2-9]\d)|pt-(?:1[2-9]|[2-9]\d)|pb-(?:1[2-9]|[2-9]\d))\b/i;
+const LIGHT_THEME_CLASS_REGEX =
+  /\b(?:bg-(?:white|slate-(?:50|100|200)|gray-(?:50|100|200)|zinc-(?:50|100|200)|neutral-(?:50|100|200)|stone-(?:50|100|200))|text-(?:slate|gray|zinc|neutral|stone)-950)\b/i;
 
 function addNamedImport(content: string, moduleName: string, symbol: string): string {
   const escaped = moduleName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
@@ -257,6 +266,53 @@ function updateFile(file: FileNode, content: string): FileNode {
   };
 }
 
+function visualConsistencyErrorNeedsRepair(error: { file?: string; message?: string; raw?: string }): boolean {
+  const text = `${error.message ?? ''}\n${error.raw ?? ''}`;
+  return VISUAL_CONSISTENCY_REGEX.test(text);
+}
+
+function darkenLargeLightClassName(className: string): string {
+  return className
+    .replace(
+      /(^|\s)((?:[a-z][\w-]*:)*)bg-(?:white|slate-(?:50|100|200)|gray-(?:50|100|200)|zinc-(?:50|100|200)|neutral-(?:50|100|200)|stone-(?:50|100|200))(?=\s|$)/gi,
+      '$1$2bg-slate-950'
+    )
+    .replace(
+      /(^|\s)((?:[a-z][\w-]*:)*)text-(?:slate|gray|zinc|neutral|stone)-950(?=\s|$)/gi,
+      '$1$2text-white'
+    );
+}
+
+function repairLargeLightThemeSurfaces(content: string): { content: string; reason?: string } {
+  let changed = false;
+  const next = content.replace(
+    JSX_CLASS_ATTRIBUTE_REGEX,
+    (match, tagName: string, prefix: string, _attr: string, doubleQuoted?: string, singleQuoted?: string, templateQuoted?: string, bracedTemplate?: string) => {
+      const className = doubleQuoted ?? singleQuoted ?? templateQuoted ?? bracedTemplate ?? '';
+      if (!LIGHT_THEME_CLASS_REGEX.test(className)) return match;
+      if (tagName.toLowerCase() !== 'main' && !LARGE_LAYOUT_CLASS_REGEX.test(className)) {
+        return match;
+      }
+
+      const fixedClassName = darkenLargeLightClassName(className);
+      if (fixedClassName === className) return match;
+      changed = true;
+
+      if (doubleQuoted !== undefined) return `<${tagName}${prefix}"${fixedClassName}"`;
+      if (singleQuoted !== undefined) return `<${tagName}${prefix}'${fixedClassName}'`;
+      if (templateQuoted !== undefined) return `<${tagName}${prefix}\`${fixedClassName}\``;
+      return `<${tagName}${prefix}{\`${fixedClassName}\`}`;
+    }
+  );
+
+  return changed
+    ? {
+        content: next,
+        reason: 'normalized large light sections to the app dark theme',
+      }
+    : { content };
+}
+
 function routeSlugFromQualityError(error: { file?: string; message?: string }): {
   slug: string;
   path: string;
@@ -295,6 +351,135 @@ function titleFromSlug(slug: string): string {
 function identifierFromSlug(slug: string): string {
   const title = titleFromSlug(slug).replace(/[^A-Za-z0-9]/g, '');
   return title ? `${title}Page` : 'GeneratedRoutePage';
+}
+
+function clientIdentifierFromSlug(slug: string): string {
+  const title = titleFromSlug(slug).replace(/[^A-Za-z0-9]/g, '');
+  return title ? `${title}Client` : 'GeneratedRouteClient';
+}
+
+function hasTopClientDirective(content: string): boolean {
+  return /^\s*(?:\/\/[^\n]*\n|\/\*[\s\S]*?\*\/\s*)*['"]use client['"];?/.test(content);
+}
+
+function removeTopClientDirective(content: string): string {
+  return content.replace(
+    /^\s*((?:\/\/[^\n]*\n|\/\*[\s\S]*?\*\/\s*)*)['"]use client['"];?\s*/,
+    '$1'
+  );
+}
+
+function isAppRoutePagePath(path: string): boolean {
+  return APP_ROUTE_PAGE_REGEX.test(path.replace(/\\/g, '/'));
+}
+
+function routeSlugFromPagePath(path: string): string {
+  const normalized = path.replace(/\\/g, '/');
+  const match = normalized.match(APP_ROUTE_PAGE_REGEX);
+  if (!match?.[1]) return 'home';
+  const segments = match[1].split('/').filter((segment) => !/^\(.+\)$/.test(segment));
+  return segments[segments.length - 1] || 'home';
+}
+
+function inferClientComponentDirectory(byPath: Map<string, FileNode>): string {
+  const dirs = new Set<string>();
+  for (const path of byPath.keys()) {
+    const match = path.match(/^src\/components\/([^/]+)\//);
+    if (match) dirs.add(match[1]);
+  }
+  const preferred = Array.from(dirs).filter((dir) => !['ui', 'common', 'shared'].includes(dir));
+  return (preferred[0] ?? Array.from(dirs)[0]) || '';
+}
+
+function removeMetadataExports(content: string): string {
+  return content
+    .replace(/import\s+type\s+\{\s*Metadata\s*\}\s+from\s+['"]next['"];?\s*/g, '')
+    .replace(/export\s+const\s+metadata(?:\s*:\s*Metadata)?\s*=\s*\{[\s\S]*?\};?\s*/g, '');
+}
+
+function renameDefaultExport(content: string, componentName: string): string {
+  if (/export\s+default\s+function\s+[A-Za-z_$][\w$]*\s*\(/.test(content)) {
+    return content.replace(
+      /export\s+default\s+function\s+[A-Za-z_$][\w$]*\s*\(/,
+      `export default function ${componentName}(`
+    );
+  }
+  if (/export\s+default\s+function\s*\(/.test(content)) {
+    return content.replace(
+      /export\s+default\s+function\s*\(/,
+      `export default function ${componentName}(`
+    );
+  }
+  return content;
+}
+
+function splitClientRoutePage(
+  file: FileNode,
+  byPath: Map<string, FileNode>
+): { page: FileNode; client: FileNode; clientIsNew: boolean; reason: string } | null {
+  if (!file.content || !isAppRoutePagePath(file.path) || !hasTopClientDirective(file.content)) {
+    return null;
+  }
+
+  const slug = routeSlugFromPagePath(file.path);
+  const title = titleFromSlug(slug === 'home' ? 'home' : slug);
+  const pageName = identifierFromSlug(slug);
+  const clientName = clientIdentifierFromSlug(slug);
+  const componentDir = inferClientComponentDirectory(byPath);
+  const clientPath = componentDir
+    ? `src/components/${componentDir}/${clientName}.tsx`
+    : `src/components/${clientName}.tsx`;
+  const clientImportPath = componentDir
+    ? `@/components/${componentDir}/${clientName}`
+    : `@/components/${clientName}`;
+
+  const originalClientBody = renameDefaultExport(
+    removeMetadataExports(removeTopClientDirective(file.content)).trimStart(),
+    clientName
+  );
+  const clientContent = `'use client';\n\n${originalClientBody}`;
+  const existingClient = byPath.get(clientPath);
+  const clientFile = existingClient
+    ? updateFile(existingClient, clientContent)
+    : {
+        id: `deterministic-client-${slug}`,
+        name: `${clientName}.tsx`,
+        path: clientPath,
+        parentPath: clientPath.split('/').slice(0, -1).join('/'),
+        type: 'file' as const,
+        language: 'typescript' as const,
+        content: clientContent,
+        size: clientContent.length,
+        lastModified: new Date().toISOString(),
+        isNew: true,
+      };
+
+  const pageContent = `import ${clientName} from '${clientImportPath}';
+
+export const metadata = {
+  title: '${title}',
+  description: 'Interactive ${title.toLowerCase()} workspace.',
+};
+
+export default function ${pageName}() {
+  return <${clientName} />;
+}
+`;
+
+  return {
+    page: updateFile(file, pageContent),
+    client: clientFile,
+    clientIsNew: !existingClient,
+    reason: `split ${file.path} into a Server Component page and ${clientPath}`,
+  };
+}
+
+function routePageClientBoundaryNeedsSplit(error: { file?: string; message?: string; raw?: string }): boolean {
+  const text = `${error.message ?? ''}\n${error.raw ?? ''}`;
+  return (
+    /Client Component route page/i.test(text) ||
+    /prerender|Export encountered an error|Missing workStore|createPrerenderParams|client\/server boundary/i.test(text)
+  );
 }
 
 function createLinkedRoutePage(slug: string, path: string): FileNode {
@@ -443,6 +628,44 @@ export function applyDeterministicFixes(
     }
 
     if (!file?.content) continue;
+
+    if (visualConsistencyErrorNeedsRepair(error)) {
+      const repaired = repairLargeLightThemeSurfaces(file.content);
+      if (repaired.reason && repaired.content !== file.content) {
+        const nextFile = updateFile(file, repaired.content);
+        updates.set(file.path, {
+          file: nextFile,
+          reason: repaired.reason,
+        });
+        byPath.set(file.path, nextFile);
+        continue;
+      }
+    }
+
+    if (routePageClientBoundaryNeedsSplit(error)) {
+      const split = splitClientRoutePage(file, byPath);
+      if (split) {
+        updates.set(split.page.path, {
+          file: split.page,
+          reason: split.reason,
+        });
+        byPath.set(split.page.path, split.page);
+
+        if (split.clientIsNew) {
+          creates.set(split.client.path, {
+            file: split.client,
+            reason: `created route-specific Client Component ${split.client.path}`,
+          });
+        } else {
+          updates.set(split.client.path, {
+            file: split.client,
+            reason: `updated route-specific Client Component ${split.client.path}`,
+          });
+        }
+        byPath.set(split.client.path, split.client);
+        continue;
+      }
+    }
 
     if (/misplaced 'use client' directive|import statement after executable code/i.test(error.message)) {
       const normalized = normalizeModulePreamble(file.content);

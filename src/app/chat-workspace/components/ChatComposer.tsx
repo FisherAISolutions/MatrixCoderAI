@@ -328,9 +328,11 @@ OUTPUT QUALITY BAR FOR EVERY GENERATED FILE:
   rendering logic, and Tailwind styling for its batch scope.
 - A lib/storage file must export working functions used by pages/components,
   not comments describing future work.
-- A route page must import and render real components or implement the
-  requested workflow directly. Bare <div>History</div>, "coming soon",
-  TODO, or placeholder text is not acceptable.
+- A route page must stay a Server Component. If the route is interactive,
+  it must import and render a route-specific child component from
+  \`src/components/<domain>/...Client.tsx\`; hooks, event handlers,
+  forms, effects, browser APIs, and localStorage belong in that child,
+  not in \`src/app/**/page.tsx\`.
 - When a later batch owns part of the workflow, still make the current
   files coherent and compilable with the files emitted so far.
 
@@ -542,7 +544,14 @@ workspace ships with):
          \`Export encountered an error on /<route>/page\` build
          failures in Next.js 15.
 
-8. Prerender / export errors are CLIENT-SERVER BOUNDARY bugs.
+8. HARD ROUTE-PAGE RULE: never emit \`'use client'\` in
+   \`src/app/**/page.tsx\` or \`app/**/page.tsx\`. If a route needs hooks,
+   state, forms, effects, browser APIs, \`localStorage\`, event handlers,
+   \`useParams\`, or \`useSearchParams\`, create
+   \`src/components/<domain>/<RouteName>Client.tsx\` with \`'use client'\`
+   as the first line, then have the route page import and render it.
+
+9. Prerender / export errors are CLIENT-SERVER BOUNDARY bugs.
    If \`next build\` fails with \`Error occurred prerendering page\`,
    \`Export encountered an error on /<route>/page\`, or
    \`Invariant: Missing workStore …\`, fix the boundary — never weaken
@@ -719,6 +728,9 @@ BEFORE-RESPOND VALIDATOR — run this checklist once before sending
   unless the user explicitly asked.
 □ Every Client-side feature (\`onClick\`, hooks, browser APIs) lives
   in a file whose FIRST line is \`'use client';\`.
+â–¡ No \`app/**/page.tsx\` or \`src/app/**/page.tsx\` file contains
+  \`'use client'\`; interactive route code lives in a route-specific
+  child Client Component instead.
 □ No route \`page.tsx\` contains a second pasted client block after the
   server page. If a page needs hooks, create a separate child component
   file with \`'use client';\` as its first statement and import it.
@@ -921,13 +933,13 @@ const LARGE_APP_BATCHES: GenerationBatch[] = [
     id: 3,
     title: 'primary feature routes and shared components',
     scope:
-      'Create only the root experience, primary requested feature routes, and shared UI components needed by the product domain. Use route names from the user request; do not invent notes-style add/edit/history routes unless they are explicitly requested. For CRUD-heavy apps, implement one route workflow at a time and keep client components route-specific.',
+      'Create only the root experience, primary requested feature routes, and shared UI components needed by the product domain. Use route names from the user request; do not invent notes-style add/edit/history routes unless they are explicitly requested. Every interactive route must be a Server Component page that renders a route-specific Client Component under src/components/<domain>/. For CRUD-heavy apps, implement one route workflow at a time and keep client components route-specific.',
   },
   {
     id: 4,
     title: 'secondary feature routes and workflows',
     scope:
-      'Create only secondary requested feature routes and their immediate workflow components. Preserve exact route names from the request, such as /add-note, /history, /workouts, /progress, /timer, /settings, or CRM/SaaS domain routes. Include search, filter, edit, delete, and localStorage wiring where the requested workflow naturally needs them, without forcing a history route. For CRUD-heavy apps, implement one route workflow at a time and keep client components route-specific.',
+      'Create only secondary requested feature routes and their immediate workflow components. Preserve exact route names from the request, such as /add-note, /history, /workouts, /progress, /timer, /settings, or CRM/SaaS domain routes. Include search, filter, edit, delete, and localStorage wiring where the requested workflow naturally needs them, without forcing a history route. Every interactive route must be a Server Component page that renders a route-specific Client Component under src/components/<domain>/. For CRUD-heavy apps, implement one route workflow at a time and keep client components route-specific.',
   },
   {
     id: 5,
@@ -1018,6 +1030,7 @@ function buildBatchPrompt(
     'Hard limits for this response:',
     `- Emit at most ${BATCH_MAX_FILES} files.`,
     `- Target ${BATCH_TARGET_FILE_LINES} lines or fewer per file; never exceed about ${BATCH_HARD_FILE_LINES} lines in a single file.`,
+    "- Never emit 'use client' in src/app/**/page.tsx or app/**/page.tsx. Route pages are Server Components that import and render route-specific Client Components.",
     '- Never put multiple requested route workflows into one giant client component. Use route-specific client files, for example src/components/<domain>/ContactsClient.tsx, CompaniesClient.tsx, TasksClient.tsx, or PipelineClient.tsx.',
     '- For CRUD-heavy pages, finish one complete route workflow first. If another route would make a file or response too large, leave it for the next automatic continuation instead of starting it.',
     '- Emit only complete, closed code fences.',

@@ -770,6 +770,61 @@ function AddNoteClient() {
     expect(result.errors.some((error) => /misplaced 'use client'|import statement after executable code/i.test(error.message))).toBe(true);
   });
 
+  it('fails route pages that are generated as Client Components', () => {
+    const result = runGeneratedQualityAudit([
+      pkg,
+      tsconfig,
+      file(
+        'src/app/workouts/page.tsx',
+        `'use client';
+import { useState } from 'react';
+
+export default function WorkoutsPage() {
+  const [count, setCount] = useState(0);
+  return <button onClick={() => setCount(count + 1)}>{count}</button>;
+}
+`
+      ),
+    ]);
+
+    expect(result.ok).toBe(false);
+    expect(result.errors.some((error) =>
+      error.file === 'src/app/workouts/page.tsx' &&
+      /Client Component route page/.test(error.message)
+    )).toBe(true);
+  });
+
+  it('passes interactive routes when page.tsx is a Server Component rendering a client child', () => {
+    const result = runGeneratedQualityAudit([
+      pkg,
+      tsconfig,
+      file(
+        'src/app/workouts/page.tsx',
+        `import WorkoutsClient from '@/components/fitness/WorkoutsClient';
+
+export const metadata = { title: 'Workouts' };
+
+export default function WorkoutsPage() {
+  return <WorkoutsClient />;
+}
+`
+      ),
+      file(
+        'src/components/fitness/WorkoutsClient.tsx',
+        `'use client';
+import { useState } from 'react';
+
+export default function WorkoutsClient() {
+  const [count, setCount] = useState(0);
+  return <button onClick={() => setCount(count + 1)}>{count}</button>;
+}
+`
+      ),
+    ]);
+
+    expect(result.ok).toBe(true);
+  });
+
   it('does not flag valid multi-line import blocks as late imports', () => {
     const result = runGeneratedQualityAudit([
       pkg,

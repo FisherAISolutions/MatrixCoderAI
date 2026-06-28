@@ -196,10 +196,18 @@ STRICT RULES (violations make the auto-fix loop misfire):
    page \`async\`, and \`await\` the prop before reading it. Do NOT patch
    files under \`.next/\`.
 
-10. Do NOT emit explanatory prose between fences. A short final
+10. App Router route pages must stay Server Components. Never add
+   \`'use client'\` to \`app/**/page.tsx\` or \`src/app/**/page.tsx\`.
+   If a route needs hooks, state, forms, effects, \`localStorage\`,
+   browser APIs, \`useParams\`, \`useSearchParams\`, or event handlers,
+   move that code into a separate \`'use client'\` child component under
+   \`src/components/<domain>/<RouteName>Client.tsx\` and render it from
+   the route page.
+
+11. Do NOT emit explanatory prose between fences. A short final
    bulleted summary (max 5 bullets) is allowed.
 
-11. Never invent symbols. If you cannot determine the correct fix from
+12. Never invent symbols. If you cannot determine the correct fix from
    the provided file contents, emit a SHORT \`SKIP:\` comment with the
    reason instead of guessing.
 
@@ -520,7 +528,7 @@ export function buildAutoFixPromptWithDiagnostics(opts: BuildPromptOptions): {
     : '';
 
   const oneRouteBlock = oneRouteRepair
-    ? `\n\n## One-route compact repair\n\nRepair ONLY route \`/${normalizeRouteSlug(oneRouteRepair.route)}\`. Do not edit unrelated routes, layouts, theme files, generated benchmark files, model config, preview code, or WebContainer code.\n\n${oneRouteRepair.reason === 'primary-fallback' ? `This route is a deterministic fallback page. Replace the fallback with a real app screen for this route only, remove the \`MATRIX_CODER_FALLBACK_ROUTE\` marker, and keep the page connected to the user's app domain.` : `This route failed static prerender. Keep \`src/app/${normalizeRouteSlug(oneRouteRepair.route)}/page.tsx\` as a Server Component. Move hooks, \`localStorage\`, browser APIs, \`useParams\`, \`useSearchParams\`, and event handlers into a separate \`'use client'\` child component under \`src/components/\` if interactivity is needed. Patch only this route and that route-specific child component.`}\n`
+    ? `\n\n## One-route compact repair\n\nRepair ONLY route \`/${normalizeRouteSlug(oneRouteRepair.route)}\`. Do not edit unrelated routes, layouts, theme files, generated benchmark files, model config, preview code, or WebContainer code.\n\nKeep \`src/app/${normalizeRouteSlug(oneRouteRepair.route)}/page.tsx\` as a Server Component. Never add \`'use client'\` to the route page. If this route needs hooks, \`localStorage\`, browser APIs, \`useParams\`, \`useSearchParams\`, forms, or event handlers, create or patch a separate \`'use client'\` child component under \`src/components/\` and render that child from the page.\n\n${oneRouteRepair.reason === 'primary-fallback' ? `This route is a deterministic fallback page. Replace the fallback with a real app screen for this route only, remove the \`MATRIX_CODER_FALLBACK_ROUTE\` marker, and keep the page connected to the user's app domain.` : `This route failed static prerender. Fix the Server/Client boundary by patching only this route and that route-specific child component.`}\n`
     : '';
 
   // When the structured parser came up empty, the raw log is the only
@@ -561,8 +569,10 @@ The project compiled (\`tsc\` + \`next build\` both succeeded), but the
 dev server's root route returned an error or rendered a Next.js error
 overlay. Almost always this is one of:
 
-  - A page or layout uses \`useState\` / \`useEffect\` / \`onClick\` /
-    browser APIs without \`'use client'\` at the top.
+  - A component uses \`useState\` / \`useEffect\` / \`onClick\` /
+    browser APIs without \`'use client'\` at the top. If that code is
+    in \`app/**/page.tsx\`, move it into a route-specific Client
+    Component instead of making the page itself a Client Component.
   - A \`<Link>\` wraps an \`<a>\` child (the legacy syntax). Use
     \`<Link href="...">text</Link>\` or
     \`<Link href="..." className="...">text</Link>\` instead.
@@ -635,6 +645,11 @@ stubs with functional implementations.
 
 Rules for this repair:
 
+  - If a generated \`app/**/page.tsx\` or \`src/app/**/page.tsx\` file
+    is a Client Component, split it: keep the route page as a Server
+    Component and move hooks/state/forms/effects/\`localStorage\` into
+    a route-specific \`'use client'\` child component under
+    \`src/components/<domain>/\`.
   - If \`package.json\` is missing, create a real package.json with
     scripts for \`dev\`, \`build\`, \`start\`, and \`type-check\`, plus
     the required Next/React/Tailwind/TypeScript dependencies.

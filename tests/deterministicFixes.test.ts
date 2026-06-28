@@ -117,6 +117,54 @@ export default function Page() {
     expect(repairedAudit.errors.some((error) => /Generated navigation links/.test(error.message))).toBe(false);
   });
 
+  it('normalizes obvious large light sections in dark-themed generated pages', () => {
+    const files = [
+      file('package.json', '{"scripts":{"build":"next build"}}'),
+      file('tsconfig.json', '{"compilerOptions":{"baseUrl":".","paths":{"@/*":["./src/*"]}}}'),
+      file(
+        'src/app/page.tsx',
+        `import Link from 'next/link';
+
+export default function Page() {
+  return (
+    <main className="min-h-screen bg-slate-950 text-white">
+      <Link href="/progress">Progress</Link>
+    </main>
+  );
+}`
+      ),
+      file(
+        'src/app/progress/page.tsx',
+        `export default function ProgressPage() {
+  return (
+    <main className="min-h-screen bg-white text-slate-950">
+      <section className="rounded-xl bg-white p-6 text-slate-950">Progress</section>
+    </main>
+  );
+}`
+      ),
+      file('src/app/globals.css', '@tailwind base;\n@tailwind components;\n@tailwind utilities;\n'),
+    ];
+
+    const before = runGeneratedQualityAudit(files);
+    expect(before.errors.some((error) => /Visual consistency issue/.test(error.message))).toBe(true);
+
+    const report = applyDeterministicFixes(files, qualityValidation(files));
+
+    expect(report.mutated).toBe(true);
+    expect(report.updates).toHaveLength(1);
+    expect(report.updates[0].file.path).toBe('src/app/progress/page.tsx');
+    expect(report.updates[0].reason).toBe('normalized large light sections to the app dark theme');
+    expect(report.updates[0].file.content).toContain('min-h-screen bg-slate-950 text-white');
+    expect(report.updates[0].file.content).toContain('rounded-xl bg-white p-6 text-slate-950');
+
+    const repairedFiles = files.map((item) =>
+      item.path === report.updates[0].file.path ? report.updates[0].file : item
+    );
+    const after = runGeneratedQualityAudit(repairedFiles);
+    expect(after.errors.some((error) => /Visual consistency issue/.test(error.message))).toBe(false);
+  });
+
   it('removes duplicate route aliases from route consistency errors', () => {
     const report = applyDeterministicFixes(
       [

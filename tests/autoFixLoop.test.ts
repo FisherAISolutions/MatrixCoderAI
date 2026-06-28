@@ -694,21 +694,12 @@ ${clean}\`\`\``)
     const files = [
       file('src/app/goals/page.tsx', "'use client';\nexport default function GoalsPage() { return <main>Goals</main>; }"),
       file('src/app/layout.tsx', 'export default function Layout({ children }) { return children; }'),
+      file('src/components/fitness/ProgressClient.tsx', "'use client';\nexport default function ProgressClient() { return <main>Progress</main>; }"),
     ];
 
     mockRunValidation
       .mockResolvedValueOnce(validationPrerenderFail('goals'))
       .mockResolvedValueOnce(validationPass());
-
-    mockGetChatCompletion.mockResolvedValue(
-      aiCompletion(
-        aiPatch(
-          'src/app/goals/page.tsx',
-          "'use client';\nexport default function GoalsPage() { return <main>Goals</main>; }",
-          "import GoalsClient from '@/components/GoalsClient';\n\nexport default function GoalsPage() {\n  return <GoalsClient />;\n}"
-        )
-      )
-    );
 
     const r = makeRecorder();
     const result = await runAutoFixLoop({
@@ -721,12 +712,14 @@ ${clean}\`\`\``)
     });
 
     expect(result.succeeded).toBe(true);
-    const prompt = (mockGetChatCompletion.mock.calls[0][2] as any[])[1].content;
-    expect(prompt).toContain('Repair ONLY route `/goals`');
-    expect(prompt).toContain('Keep `src/app/goals/page.tsx` as a Server Component');
-    expect(prompt).toContain("separate `'use client'` child component");
-    expect(prompt).toContain('// path: src/app/goals/page.tsx');
-    expect(prompt).not.toContain('// path: src/app/layout.tsx');
+    expect(mockGetChatCompletion).not.toHaveBeenCalled();
+    expect(r.fileUpdates).toHaveLength(1);
+    expect(r.fileUpdates[0].path).toBe('src/app/goals/page.tsx');
+    expect(r.fileUpdates[0].content).toContain("import GoalsClient from '@/components/fitness/GoalsClient'");
+    expect(r.fileUpdates[0].content).not.toMatch(/['"]use client['"]/);
+    expect(r.fileAdds).toHaveLength(1);
+    expect(r.fileAdds[0].path).toBe('src/components/fitness/GoalsClient.tsx');
+    expect(r.fileAdds[0].content).toMatch(/^'use client';/);
   });
 
   it('REGRESSION: route output-limit switches to one-route compact repair without repeating the same prompt', async () => {
@@ -989,5 +982,114 @@ export default function Page() {
     expect(r.chatMessages.map((m) => m.content).join('\n')).toContain(
       'deterministic fixes resolved the issue before an AI repair attempt was needed'
     );
+  });
+
+  it('REGRESSION: obvious dark/light theme mismatches are repaired deterministically without GPT', async () => {
+    const files = [
+      file('package.json', '{"scripts":{"build":"next build"}}'),
+      file('tsconfig.json', '{"compilerOptions":{"baseUrl":".","paths":{"@/*":["./src/*"]}}}'),
+      file(
+        'src/app/page.tsx',
+        `import Link from 'next/link';
+
+export default function Page() {
+  return (
+    <main className="min-h-screen bg-slate-950 text-white">
+      <Link href="/progress">Progress</Link>
+    </main>
+  );
+}`
+      ),
+      file(
+        'src/app/progress/page.tsx',
+        `export default function ProgressPage() {
+  return (
+    <main className="min-h-screen bg-white text-slate-950">
+      <section className="rounded-xl bg-white p-6 text-slate-950">Progress</section>
+    </main>
+  );
+}`
+      ),
+      file('src/app/globals.css', '@tailwind base;\n@tailwind components;\n@tailwind utilities;\n'),
+    ];
+
+    mockRunValidation
+      .mockResolvedValueOnce(validationGeneratedQualityFail(files))
+      .mockResolvedValueOnce(validationPass());
+
+    const r = makeRecorder();
+    const result = await runAutoFixLoop({
+      files,
+      onStatus: r.onStatus,
+      onChatMessage: r.onChatMessage,
+      onUpdateFile: r.onUpdateFile,
+      onAddFile: r.onAddFile,
+    });
+
+    expect(result.ran).toBe(true);
+    expect(result.succeeded).toBe(true);
+    expect(result.attempts).toBe(0);
+    expect(mockRunValidation).toHaveBeenCalledTimes(2);
+    expect(mockGetChatCompletion).not.toHaveBeenCalled();
+    expect(r.fileUpdates).toHaveLength(1);
+    expect(r.fileUpdates[0].path).toBe('src/app/progress/page.tsx');
+    expect(r.fileUpdates[0].content).toContain('min-h-screen bg-slate-950 text-white');
+    expect(r.fileUpdates[0].content).toContain('rounded-xl bg-white p-6 text-slate-950');
+    expect(r.chatMessages.map((m) => m.content).join('\n')).toContain(
+      'deterministic fixes resolved the issue before an AI repair attempt was needed'
+    );
+  });
+
+  it('REGRESSION: Client Component route pages are split deterministically without GPT', async () => {
+    const files = [
+      file('package.json', '{"scripts":{"build":"next build"}}'),
+      file('tsconfig.json', '{"compilerOptions":{"baseUrl":".","paths":{"@/*":["./src/*"]}}}'),
+      file(
+        'src/app/workouts/page.tsx',
+        `'use client';
+import { useState } from 'react';
+
+export default function WorkoutsPage() {
+  const [count, setCount] = useState(0);
+  return <button onClick={() => setCount(count + 1)}>Workout {count}</button>;
+}
+`
+      ),
+      file(
+        'src/components/fitness/ProgressClient.tsx',
+        `'use client';
+export default function ProgressClient() {
+  return <main>Progress</main>;
+}
+`
+      ),
+    ];
+
+    mockRunValidation
+      .mockResolvedValueOnce(validationGeneratedQualityFail(files))
+      .mockResolvedValueOnce(validationPass());
+
+    const r = makeRecorder();
+    const result = await runAutoFixLoop({
+      files,
+      onStatus: r.onStatus,
+      onChatMessage: r.onChatMessage,
+      onUpdateFile: r.onUpdateFile,
+      onAddFile: r.onAddFile,
+    });
+
+    expect(result.ran).toBe(true);
+    expect(result.succeeded).toBe(true);
+    expect(result.attempts).toBe(0);
+    expect(mockRunValidation).toHaveBeenCalledTimes(2);
+    expect(mockGetChatCompletion).not.toHaveBeenCalled();
+    expect(r.fileUpdates).toHaveLength(1);
+    expect(r.fileUpdates[0].path).toBe('src/app/workouts/page.tsx');
+    expect(r.fileUpdates[0].content).not.toMatch(/['"]use client['"]/);
+    expect(r.fileUpdates[0].content).toContain("import WorkoutsClient from '@/components/fitness/WorkoutsClient'");
+    expect(r.fileAdds).toHaveLength(1);
+    expect(r.fileAdds[0].path).toBe('src/components/fitness/WorkoutsClient.tsx');
+    expect(r.fileAdds[0].content).toMatch(/^'use client';/);
+    expect(r.fileAdds[0].content).toContain('useState');
   });
 });
