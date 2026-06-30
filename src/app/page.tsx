@@ -201,7 +201,7 @@ export default function LandingPage() {
             className="inline-flex items-center gap-2 px-6 py-3 bg-matrix-green text-matrix-bg text-sm font-bold uppercase tracking-[0.18em] hover:bg-matrix-green-bright transition-colors neon-glow"
             data-testid="landing-cta-primary"
           >
-            Start building free
+            Start building
             <ArrowRight size={14} />
           </Link>
           <Link
@@ -216,11 +216,11 @@ export default function LandingPage() {
         <div className="mt-6 flex flex-wrap items-center justify-center gap-x-6 gap-y-2 text-[11px] uppercase tracking-widest text-matrix-green-muted">
           <span className="flex items-center gap-1.5">
             <span className="h-1 w-1 rounded-full bg-matrix-green" />
-            no credit card
+            browser-native builds
           </span>
           <span className="flex items-center gap-1.5">
             <span className="h-1 w-1 rounded-full bg-matrix-green" />
-            free during beta
+            validation included
           </span>
           <span className="flex items-center gap-1.5">
             <span className="h-1 w-1 rounded-full bg-matrix-green" />
@@ -371,7 +371,7 @@ export default function LandingPage() {
             </a>
           </div>
           <p className="mt-6 text-[11px] uppercase tracking-widest text-matrix-green-muted">
-            free during beta · no card required · cancel any time
+            build, validate, preview, and export from one workspace
           </p>
         </div>
       </section>

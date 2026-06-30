@@ -36,6 +36,29 @@ import {
   type VercelReadinessStatus,
 } from '@/lib/deployment/vercelReadiness';
 import {
+  detectVercelEnvironment,
+  getVercelConnectionState,
+  type VercelConnectionStatus,
+} from '@/lib/deployment/vercelIntegration';
+import {
+  clearVercelLocalConfig,
+  getVercelLocalConfigState,
+  loadVercelLocalConfig,
+  saveVercelLocalConfig,
+  type VercelLocalConfig,
+  type VercelLocalConfigStatus,
+} from '@/lib/deployment/vercelConfig';
+import {
+  buildVercelDeploymentDryRun,
+  type VercelDeploymentDryRunSummary,
+} from '@/lib/deployment/vercelDeploymentRequest';
+import {
+  createOrFindVercelProjectForDryRun,
+  runVercelDeploymentFlow,
+  testVercelConnection,
+  type VercelFlowLogEntry,
+} from '@/lib/deployment/vercelDeploymentFlow';
+import {
   getAndroidReadiness,
   type AndroidReadinessStatus,
 } from '@/lib/deployment/androidReadiness';
@@ -71,6 +94,15 @@ const emptySnapshot: DeploymentWorkspaceSnapshot = {
 };
 
 type DownloadStatus = 'Ready' | 'Preparing' | 'Downloaded' | 'Failed';
+type VercelLiveStatus =
+  | 'Not connected'
+  | 'Testing connection'
+  | 'Connection OK'
+  | 'Project ready'
+  | 'Deploying'
+  | 'Ready'
+  | 'Failed'
+  | 'Timed out';
 
 const deploymentOptions = [
   {
@@ -207,6 +239,33 @@ function vercelStatusClasses(status: VercelReadinessStatus): string {
   }
 }
 
+function vercelConnectionStatusClasses(status: VercelConnectionStatus): string {
+  switch (status) {
+    case 'Ready to connect':
+    case 'Connected':
+      return 'border-matrix-green text-matrix-green-bright bg-matrix-green-ghost';
+    case 'Missing Vercel token':
+      return 'border-matrix-amber text-matrix-amber bg-matrix-amber/10';
+    case 'Not connected':
+    default:
+      return 'border-matrix-border text-matrix-green-muted bg-matrix-bg';
+  }
+}
+
+function vercelLocalConfigStatusClasses(status: VercelLocalConfigStatus): string {
+  switch (status) {
+    case 'Ready for future deployment':
+      return 'border-matrix-green text-matrix-green-bright bg-matrix-green-ghost';
+    case 'Configured locally':
+      return 'border-matrix-blue text-matrix-blue bg-matrix-blue/10';
+    case 'Missing token':
+      return 'border-matrix-amber text-matrix-amber bg-matrix-amber/10';
+    case 'Not configured':
+    default:
+      return 'border-matrix-border text-matrix-green-muted bg-matrix-bg';
+  }
+}
+
 function androidStatusClasses(status: AndroidReadinessStatus): string {
   switch (status) {
     case 'Ready to configure':
@@ -271,12 +330,45 @@ export default function DeploymentCenterClient() {
   const [historyEntries, setHistoryEntries] = useState<DeploymentHistoryEntry[]>(
     []
   );
+  const [vercelConfig, setVercelConfig] = useState<VercelLocalConfig | null>(
+    null
+  );
+  const [vercelConfigOpen, setVercelConfigOpen] = useState(false);
+  const [vercelTokenInput, setVercelTokenInput] = useState('');
+  const [vercelTeamIdInput, setVercelTeamIdInput] = useState('');
+  const [vercelProjectNameInput, setVercelProjectNameInput] = useState('');
+  const [vercelDeployDryRun, setVercelDeployDryRun] =
+    useState<VercelDeploymentDryRunSummary | null>(null);
+  const [vercelRuntimeToken, setVercelRuntimeToken] = useState('');
+  const [vercelLiveStatus, setVercelLiveStatus] =
+    useState<VercelLiveStatus>('Not connected');
+  const [vercelLiveMessage, setVercelLiveMessage] = useState<string | null>(
+    null
+  );
+  const [vercelProjectId, setVercelProjectId] = useState<string | null>(null);
+  const [vercelDeploymentUrl, setVercelDeploymentUrl] = useState<string | null>(
+    null
+  );
+  const [vercelProductionUrl, setVercelProductionUrl] = useState<string | null>(
+    null
+  );
+  const [vercelLastDeploymentAt, setVercelLastDeploymentAt] = useState<
+    string | null
+  >(null);
+  const [vercelDeploymentLogs, setVercelDeploymentLogs] = useState<
+    VercelFlowLogEntry[]
+  >([]);
+  const [vercelActionBusy, setVercelActionBusy] = useState(false);
   const readinessHistoryKeys = useRef(new Set<string>());
 
   useEffect(() => {
     const refresh = () => {
       setSnapshot(loadDeploymentWorkspaceSnapshot() ?? emptySnapshot);
       setHistoryEntries(loadDeploymentHistory());
+      const loadedConfig = loadVercelLocalConfig();
+      setVercelConfig(loadedConfig);
+      setVercelTeamIdInput(loadedConfig?.teamId ?? '');
+      setVercelProjectNameInput(loadedConfig?.projectName ?? '');
     };
     refresh();
     window.addEventListener('storage', refresh);
@@ -294,6 +386,26 @@ export default function DeploymentCenterClient() {
     hasProjectFiles: exportFiles.length > 0,
     productionStatus,
   });
+  const vercelEnvironment = detectVercelEnvironment();
+  const runtimeTokenAvailable = Boolean(
+    vercelRuntimeToken.trim() || vercelTokenInput.trim()
+  );
+  const effectiveVercelEnvironment = {
+    ...vercelEnvironment,
+    hasToken:
+      vercelEnvironment.hasToken ||
+      runtimeTokenAvailable ||
+      Boolean(vercelConfig?.tokenConfigured),
+  };
+  const vercelConnection = getVercelConnectionState({
+    environment: effectiveVercelEnvironment,
+    readinessStatus: vercelReadiness.status,
+  });
+  const vercelLocalConfigState = getVercelLocalConfigState({
+    config: vercelConfig,
+    environment: vercelEnvironment,
+    readinessStatus: vercelReadiness.status,
+  });
   const androidReadiness = getAndroidReadiness({
     hasProjectFiles: exportFiles.length > 0,
     framework: snapshot.framework,
@@ -303,9 +415,261 @@ export default function DeploymentCenterClient() {
     snapshot.framework === 'Unknown'
       ? snapshot.projectName
       : `${snapshot.projectName} (${snapshot.framework})`;
+  const canRunVercelAction = !vercelActionBusy;
+  const canDeployToVercel =
+    canRunVercelAction &&
+    Boolean(vercelConfig?.tokenConfigured) &&
+    productionStatus === 'Passed' &&
+    exportFiles.length > 0;
 
   function recordHistory(input: AddDeploymentHistoryEntryInput) {
     setHistoryEntries(addDeploymentHistoryEntry(input));
+  }
+
+  function handleOpenVercelConfig() {
+    setVercelConfigOpen((open) => !open);
+    recordHistory({
+      action: 'Vercel connect opened',
+      status: 'Info',
+      details: 'Opened the local-only Vercel configuration panel.',
+    });
+  }
+
+  function handleSaveVercelConfig() {
+    const token = vercelTokenInput.trim();
+    const tokenPlaceholder =
+      token || vercelRuntimeToken || vercelConfig?.tokenConfigured
+        ? 'configured'
+        : '';
+    const config = saveVercelLocalConfig({
+      tokenPlaceholder,
+      teamId: vercelTeamIdInput,
+      projectName: vercelProjectNameInput || snapshot.projectName,
+    });
+    if (token) {
+      setVercelRuntimeToken(token);
+    }
+    setVercelConfig(config);
+    setVercelTokenInput('');
+    setVercelTeamIdInput(config.teamId ?? '');
+    setVercelProjectNameInput(config.projectName ?? '');
+    setVercelDeployDryRun(null);
+    recordHistory({
+      action: 'Vercel config saved',
+      status: config.tokenConfigured ? 'Ready' : 'Not ready',
+      details:
+        'Saved local Vercel settings. Token text is kept only in memory for this session.',
+    });
+  }
+
+  function handleClearVercelConfig() {
+    clearVercelLocalConfig();
+    setVercelConfig(null);
+    setVercelRuntimeToken('');
+    setVercelTokenInput('');
+    setVercelTeamIdInput('');
+    setVercelProjectNameInput('');
+    setVercelDeployDryRun(null);
+    setVercelLiveStatus('Not connected');
+    setVercelLiveMessage(null);
+    setVercelProjectId(null);
+    setVercelDeploymentUrl(null);
+    setVercelProductionUrl(null);
+    setVercelLastDeploymentAt(null);
+    setVercelDeploymentLogs([]);
+    recordHistory({
+      action: 'Vercel config cleared',
+      status: 'Info',
+      details: 'Removed local Vercel settings from this browser session.',
+    });
+  }
+
+  function createAndStoreVercelDryRun() {
+    const dryRun = buildVercelDeploymentDryRun({
+      snapshot,
+      config: vercelConfig,
+      productionStatus,
+    });
+    setVercelDeployDryRun(dryRun);
+    return dryRun;
+  }
+
+  function handlePreviewVercelDeployRequest() {
+    const dryRun = createAndStoreVercelDryRun();
+    recordHistory({
+      action: 'Vercel deploy request previewed',
+      status: dryRun.deploymentAllowed ? 'Ready' : 'Not ready',
+      details: dryRun.deploymentAllowed
+        ? `${dryRun.fileCount} files prepared for ${dryRun.projectName}. No upload was performed.`
+        : dryRun.blockingReasons.join(' '),
+    });
+  }
+
+  function getVercelActionToken(action: string): string | null {
+    const token = vercelRuntimeToken.trim() || vercelTokenInput.trim();
+    if (token) {
+      setVercelRuntimeToken(token);
+      setVercelTokenInput('');
+      return token;
+    }
+
+    const details =
+      'Enter and save a Vercel token in this session before running this action.';
+    setVercelLiveStatus('Failed');
+    setVercelLiveMessage(details);
+    recordHistory({
+      action,
+      status: 'Failed',
+      details,
+    });
+    return null;
+  }
+
+  async function handleTestVercelConnection() {
+    if (vercelActionBusy) return;
+    const token = getVercelActionToken('Vercel connection test failed');
+    if (!token) return;
+
+    setVercelActionBusy(true);
+    setVercelLiveStatus('Testing connection');
+    setVercelLiveMessage('Testing Vercel connection...');
+    recordHistory({
+      action: 'Vercel connection test started',
+      status: 'Running',
+      details: 'Checking the configured Vercel token.',
+    });
+
+    const result = await testVercelConnection({ token });
+    setVercelDeploymentLogs(result.logs);
+    setVercelLiveStatus(result.success ? 'Connection OK' : 'Failed');
+    setVercelLiveMessage(
+      result.success
+        ? `Connected as ${result.user?.email ?? result.user?.username ?? result.user?.id}.`
+        : result.error ?? 'Vercel connection failed.'
+    );
+    recordHistory({
+      action: result.success
+        ? 'Vercel connection test passed'
+        : 'Vercel connection test failed',
+      status: result.success ? 'Passed' : 'Failed',
+      details: result.success
+        ? 'Vercel token was accepted.'
+        : result.error ?? 'Vercel connection failed.',
+    });
+    setVercelActionBusy(false);
+  }
+
+  async function handleCreateOrFindVercelProject() {
+    if (vercelActionBusy) return;
+    const token = getVercelActionToken('Vercel project preparation failed');
+    if (!token) return;
+
+    const dryRun = createAndStoreVercelDryRun();
+    if (!dryRun.deploymentAllowed) {
+      const details = dryRun.blockingReasons.join(' ');
+      setVercelLiveStatus('Failed');
+      setVercelLiveMessage(details);
+      recordHistory({
+        action: 'Vercel project preparation failed',
+        status: 'Failed',
+        details,
+      });
+      return;
+    }
+
+    setVercelActionBusy(true);
+    setVercelLiveStatus('Deploying');
+    setVercelLiveMessage('Creating or finding Vercel project...');
+    recordHistory({
+      action: 'Vercel project preparation started',
+      status: 'Running',
+      details: `Preparing project ${dryRun.projectName}.`,
+    });
+
+    const result = await createOrFindVercelProjectForDryRun({ dryRun, token });
+    setVercelDeploymentLogs(result.logs);
+    setVercelLiveStatus(result.success ? 'Project ready' : 'Failed');
+    setVercelLiveMessage(
+      result.success
+        ? `Project ready: ${result.project?.name}.`
+        : result.error ?? 'Vercel project preparation failed.'
+    );
+    setVercelProjectId(result.project?.id ?? null);
+    recordHistory({
+      action: result.success
+        ? 'Vercel project ready'
+        : 'Vercel project preparation failed',
+      status: result.success ? 'Ready' : 'Failed',
+      details: result.success
+        ? `Project ${result.project?.name} is ready.`
+        : result.error ?? 'Vercel project preparation failed.',
+    });
+    setVercelActionBusy(false);
+  }
+
+  async function handleDeployToVercel() {
+    if (vercelActionBusy) return;
+    const token = getVercelActionToken('Vercel deployment failed');
+    if (!token) return;
+
+    const dryRun = createAndStoreVercelDryRun();
+    if (!dryRun.deploymentAllowed) {
+      const details = dryRun.blockingReasons.join(' ');
+      setVercelLiveStatus('Failed');
+      setVercelLiveMessage(details);
+      recordHistory({
+        action: 'Vercel deployment blocked',
+        status: 'Failed',
+        details,
+      });
+      return;
+    }
+
+    setVercelActionBusy(true);
+    setVercelLiveStatus('Deploying');
+    setVercelLiveMessage('Deploying to Vercel...');
+    setVercelDeploymentLogs([]);
+    recordHistory({
+      action: 'Vercel deployment started',
+      status: 'Running',
+      details: `${dryRun.fileCount} files will be uploaded for ${dryRun.projectName}.`,
+    });
+
+    const result = await runVercelDeploymentFlow({
+      dryRun,
+      token,
+      onLog: (entry) =>
+        setVercelDeploymentLogs((logs) => [...logs, entry].slice(-20)),
+    });
+    setVercelDeploymentLogs(result.logs);
+    setVercelLiveStatus(
+      result.status === 'ready'
+        ? 'Ready'
+        : result.status === 'timeout'
+          ? 'Timed out'
+          : 'Failed'
+    );
+    setVercelLiveMessage(
+      result.success
+        ? 'Vercel deployment is ready.'
+        : result.error ?? 'Vercel deployment failed.'
+    );
+    setVercelProjectId(result.projectId ?? vercelProjectId);
+    setVercelDeploymentUrl(result.deploymentUrl ?? null);
+    setVercelProductionUrl(result.productionUrl ?? null);
+    setVercelLastDeploymentAt(result.lastDeploymentTime);
+    recordHistory({
+      action: result.success ? 'Vercel deployment ready' : 'Vercel deployment failed',
+      status: result.success
+        ? 'Passed'
+        : result.status === 'timeout'
+          ? 'Not ready'
+          : 'Failed',
+      details: result.success
+        ? result.productionUrl ?? 'Vercel deployment completed.'
+        : result.error ?? 'Vercel deployment failed.',
+    });
+    setVercelActionBusy(false);
   }
 
   useEffect(() => {
@@ -437,8 +801,8 @@ export default function DeploymentCenterClient() {
                 Deployment Center
               </h1>
               <p className="mt-3 max-w-2xl text-sm leading-6 text-matrix-green-muted">
-                Deployment readiness for {projectDescriptor}. Real deployment
-                integrations are still disabled.
+                Deployment readiness for {projectDescriptor}. Vercel deployment
+                is guarded by local config and production checks.
               </p>
             </div>
           </div>
@@ -609,6 +973,17 @@ export default function DeploymentCenterClient() {
               <p className="mt-2 max-w-2xl text-sm leading-6 text-matrix-green-muted">
                 {vercelReadiness.message}
               </p>
+              <p className="mt-2 max-w-2xl text-xs leading-5 text-matrix-green-muted">
+                {vercelConnection.message}
+              </p>
+              <p className="mt-2 max-w-2xl text-xs leading-5 text-matrix-green-muted">
+                {vercelLocalConfigState.message}
+              </p>
+              {vercelLiveMessage && (
+                <p className="mt-2 max-w-2xl text-xs leading-5 text-matrix-green-bright">
+                  {vercelLiveMessage}
+                </p>
+              )}
             </div>
             <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
               <span
@@ -616,23 +991,219 @@ export default function DeploymentCenterClient() {
               >
                 {vercelReadiness.status}
               </span>
+              <span
+                className={`inline-flex items-center border px-2.5 py-1 text-[10px] uppercase tracking-[0.22em] ${vercelConnectionStatusClasses(vercelConnection.status)}`}
+              >
+                {vercelConnection.status}
+              </span>
+              <span
+                className={`inline-flex items-center border px-2.5 py-1 text-[10px] uppercase tracking-[0.22em] ${vercelLocalConfigStatusClasses(vercelLocalConfigState.status)}`}
+              >
+                {vercelLocalConfigState.status}
+              </span>
               <button
                 type="button"
-                disabled
-                className="inline-flex cursor-not-allowed items-center justify-center gap-2 border border-matrix-border bg-matrix-bg px-3 py-2 text-xs font-semibold uppercase tracking-[0.22em] text-matrix-green-muted"
+                onClick={handleOpenVercelConfig}
+                disabled={!canRunVercelAction}
+                className="inline-flex items-center justify-center gap-2 border border-matrix-green bg-matrix-green-ghost px-3 py-2 text-xs font-semibold uppercase tracking-[0.22em] text-matrix-green-bright transition-colors hover:bg-matrix-green/20"
               >
                 <Cloud size={14} />
-                Connect Vercel - Coming next
+                Connect Vercel
+              </button>
+              <button
+                type="button"
+                onClick={handlePreviewVercelDeployRequest}
+                disabled={!canRunVercelAction}
+                className="inline-flex items-center justify-center gap-2 border border-matrix-border bg-matrix-bg px-3 py-2 text-xs font-semibold uppercase tracking-[0.22em] text-matrix-green-muted transition-colors hover:border-matrix-green hover:text-matrix-green-bright"
+              >
+                <Archive size={14} />
+                Preview Deploy Request
+              </button>
+              <button
+                type="button"
+                onClick={handleTestVercelConnection}
+                disabled={!canRunVercelAction}
+                className="inline-flex items-center justify-center gap-2 border border-matrix-blue bg-matrix-blue/10 px-3 py-2 text-xs font-semibold uppercase tracking-[0.22em] text-matrix-blue transition-colors hover:bg-matrix-blue/20 disabled:cursor-not-allowed disabled:border-matrix-border disabled:bg-matrix-bg disabled:text-matrix-green-muted"
+              >
+                Test Connection
+              </button>
+              <button
+                type="button"
+                onClick={handleCreateOrFindVercelProject}
+                disabled={!canRunVercelAction}
+                className="inline-flex items-center justify-center gap-2 border border-matrix-border bg-matrix-bg px-3 py-2 text-xs font-semibold uppercase tracking-[0.22em] text-matrix-green-muted transition-colors hover:border-matrix-green hover:text-matrix-green-bright disabled:cursor-not-allowed disabled:border-matrix-border disabled:bg-matrix-bg disabled:text-matrix-green-muted"
+              >
+                Create / Find Project
+              </button>
+              <button
+                type="button"
+                onClick={handleDeployToVercel}
+                disabled={!canDeployToVercel}
+                className="inline-flex items-center justify-center gap-2 border border-matrix-green bg-matrix-green-ghost px-3 py-2 text-xs font-semibold uppercase tracking-[0.22em] text-matrix-green-bright transition-colors hover:bg-matrix-green/20 disabled:cursor-not-allowed disabled:border-matrix-border disabled:bg-matrix-bg disabled:text-matrix-green-muted"
+              >
+                Deploy to Vercel
               </button>
             </div>
           </div>
 
-          <div className="grid gap-3 md:grid-cols-2 lg:grid-cols-4">
+          {vercelConfigOpen && (
+            <div className="mb-5 border border-matrix-border bg-matrix-bg/70 p-4">
+              <div className="mb-4">
+                <p className="text-[10px] uppercase tracking-[0.3em] text-matrix-green-muted">
+                  Local Vercel Config
+                </p>
+                <p className="mt-2 text-sm leading-6 text-matrix-green-muted">
+                  This stores settings in this browser session only. Matrix Coder
+                  keeps token text in memory only and sends it only to Vercel
+                  when you run a guarded Vercel action.
+                </p>
+              </div>
+              <div className="grid gap-3 md:grid-cols-3">
+                <label className="block">
+                  <span className="mb-2 block text-[10px] uppercase tracking-[0.24em] text-matrix-green-muted">
+                    Vercel token
+                  </span>
+                  <input
+                    type="password"
+                    value={vercelTokenInput}
+                    onChange={(event) => setVercelTokenInput(event.target.value)}
+                    placeholder={
+                      vercelConfig?.tokenConfigured
+                        ? 'Token configured for this session'
+                        : 'Paste Vercel token'
+                    }
+                    className="w-full border border-matrix-border bg-matrix-card px-3 py-2 text-sm text-matrix-green-bright outline-none transition-colors placeholder:text-matrix-green-muted/70 focus:border-matrix-green"
+                  />
+                </label>
+                <label className="block">
+                  <span className="mb-2 block text-[10px] uppercase tracking-[0.24em] text-matrix-green-muted">
+                    Team ID
+                  </span>
+                  <input
+                    type="text"
+                    value={vercelTeamIdInput}
+                    onChange={(event) => setVercelTeamIdInput(event.target.value)}
+                    placeholder="team_..."
+                    className="w-full border border-matrix-border bg-matrix-card px-3 py-2 text-sm text-matrix-green-bright outline-none transition-colors placeholder:text-matrix-green-muted/70 focus:border-matrix-green"
+                  />
+                </label>
+                <label className="block">
+                  <span className="mb-2 block text-[10px] uppercase tracking-[0.24em] text-matrix-green-muted">
+                    Project name
+                  </span>
+                  <input
+                    type="text"
+                    value={vercelProjectNameInput}
+                    onChange={(event) =>
+                      setVercelProjectNameInput(event.target.value)
+                    }
+                    placeholder={snapshot.projectName}
+                    className="w-full border border-matrix-border bg-matrix-card px-3 py-2 text-sm text-matrix-green-bright outline-none transition-colors placeholder:text-matrix-green-muted/70 focus:border-matrix-green"
+                  />
+                </label>
+              </div>
+              <div className="mt-4 flex flex-col gap-3 sm:flex-row sm:items-center">
+                <button
+                  type="button"
+                  onClick={handleSaveVercelConfig}
+                  className="inline-flex items-center justify-center gap-2 border border-matrix-green bg-matrix-green-ghost px-3 py-2 text-xs font-semibold uppercase tracking-[0.22em] text-matrix-green-bright transition-colors hover:bg-matrix-green/20"
+                >
+                  Save local config
+                </button>
+                <button
+                  type="button"
+                  onClick={handleClearVercelConfig}
+                  className="inline-flex items-center justify-center gap-2 border border-matrix-border bg-matrix-bg px-3 py-2 text-xs font-semibold uppercase tracking-[0.22em] text-matrix-green-muted transition-colors hover:border-red-400/60 hover:text-red-200"
+                >
+                  Clear Vercel config
+                </button>
+              </div>
+            </div>
+          )}
+
+          {vercelDeployDryRun && (
+            <div className="mb-5 border border-matrix-border bg-matrix-bg/70 p-4">
+              <div className="mb-4 flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+                <div>
+                  <p className="text-[10px] uppercase tracking-[0.3em] text-matrix-green-muted">
+                    Vercel Deploy Request Dry Run
+                  </p>
+                  <p className="mt-2 text-sm leading-6 text-matrix-green-muted">
+                    This is the package Matrix Coder would prepare for Vercel.
+                    No files were uploaded and no Vercel API call was made.
+                  </p>
+                </div>
+                <span
+                  className={`inline-flex w-fit items-center border px-2.5 py-1 text-[10px] uppercase tracking-[0.22em] ${
+                    vercelDeployDryRun.deploymentAllowed
+                      ? 'border-matrix-green text-matrix-green-bright bg-matrix-green-ghost'
+                      : 'border-matrix-amber text-matrix-amber bg-matrix-amber/10'
+                  }`}
+                >
+                  {vercelDeployDryRun.deploymentAllowed
+                    ? 'Would deploy'
+                    : 'Blocked'}
+                </span>
+              </div>
+
+              <div className="grid gap-3 md:grid-cols-3 lg:grid-cols-6">
+                {[
+                  ['Project', vercelDeployDryRun.projectName],
+                  ['Files', String(vercelDeployDryRun.fileCount)],
+                  ['Routes', String(vercelDeployDryRun.routeCount)],
+                  ['Framework', vercelDeployDryRun.framework],
+                  ['Production check', vercelDeployDryRun.productionCheckStatus],
+                  [
+                    'Allowed',
+                    vercelDeployDryRun.deploymentAllowed ? 'Yes' : 'No',
+                  ],
+                ].map(([label, value]) => (
+                  <div
+                    key={label}
+                    className="border border-matrix-border bg-matrix-card p-3"
+                  >
+                    <p className="mb-2 text-[10px] uppercase tracking-[0.2em] text-matrix-green-muted">
+                      {label}
+                    </p>
+                    <p className="text-sm font-semibold leading-6 text-matrix-green-bright">
+                      {value}
+                    </p>
+                  </div>
+                ))}
+              </div>
+
+              {vercelDeployDryRun.blockingReasons.length > 0 && (
+                <div className="mt-4 border border-matrix-amber/60 bg-matrix-amber/10 p-3">
+                  <p className="mb-2 text-[10px] uppercase tracking-[0.24em] text-matrix-amber">
+                    Blocking reasons
+                  </p>
+                  <ul className="space-y-1 text-sm leading-6 text-matrix-green-muted">
+                    {vercelDeployDryRun.blockingReasons.map((reason) => (
+                      <li key={reason}>{reason}</li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+            </div>
+          )}
+
+          <div className="grid gap-3 md:grid-cols-2 lg:grid-cols-3">
             {[
-              ['Vercel project name', 'Not connected yet'],
-              ['Production URL', 'Not available yet'],
-              ['Last deployment time', 'No deployments yet'],
-              ['Deployment logs', 'Logs will appear after first deployment'],
+              ['Vercel project name', vercelConfig?.projectName ?? 'Not configured yet'],
+              ['Vercel project ID', vercelProjectId ?? 'Not available yet'],
+              ['Team ID', vercelConfig?.teamId ?? 'Not configured yet'],
+              ['Deployment status', vercelLiveStatus],
+              ['Production URL', vercelProductionUrl ?? 'Not available yet'],
+              ['Deployment URL', vercelDeploymentUrl ?? 'Not available yet'],
+              ['Last deployment time', formatDate(vercelLastDeploymentAt ?? undefined)],
+              [
+                'Token status',
+                vercelRuntimeToken
+                  ? 'Token available in this session'
+                  : vercelConfig?.tokenConfigured || vercelEnvironment.hasToken
+                    ? 'Token metadata configured; re-enter token after refresh'
+                  : 'Missing token',
+              ],
             ].map(([label, value]) => (
               <div
                 key={label}
@@ -647,6 +1218,30 @@ export default function DeploymentCenterClient() {
               </div>
             ))}
           </div>
+
+          {vercelDeploymentLogs.length > 0 && (
+            <div className="mt-5 border border-matrix-border bg-matrix-bg/70 p-4">
+              <p className="mb-3 text-[10px] uppercase tracking-[0.3em] text-matrix-green-muted">
+                Deployment logs
+              </p>
+              <div className="space-y-2">
+                {vercelDeploymentLogs.slice(-8).map((entry, index) => (
+                  <div
+                    key={`${entry.timestamp}-${index}`}
+                    className="grid gap-2 border border-matrix-border bg-matrix-card p-3 text-xs leading-5 md:grid-cols-[150px_80px_1fr]"
+                  >
+                    <span className="text-matrix-green-muted">
+                      {formatDate(entry.timestamp)}
+                    </span>
+                    <span className="uppercase tracking-[0.18em] text-matrix-green-bright">
+                      {entry.level}
+                    </span>
+                    <span className="text-matrix-green-muted">{entry.message}</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
         </section>
 
         <section className="mb-6 border border-matrix-border bg-matrix-card p-5 shadow-neon-sm">

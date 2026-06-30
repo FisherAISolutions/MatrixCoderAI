@@ -48,7 +48,7 @@ export default function LandingFooter() {
             className="text-matrix-green hover:text-matrix-green-bright transition-colors"
             data-testid="footer-signup-link"
           >
-            start free
+            start building
           </Link>
         </nav>
       </div>
