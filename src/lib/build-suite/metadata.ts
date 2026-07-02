@@ -34,8 +34,10 @@ const metadataById: Record<string, MetadataPatch> = {
     estimatedGenerationImpact: 'high',
     relatedItemIds: [
       'data-tables',
+      'search-filters',
       'forms-crud',
       'kanban-board',
+      'notifications',
       'natural-language-search',
       'smart-summaries',
       'local-storage',

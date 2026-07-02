@@ -41,6 +41,72 @@ describe('build suite catalog', () => {
     expect(new Set(ids).size).toBe(ids.length);
   });
 
+  it('includes the expanded marketplace enhancement catalog', () => {
+    const ids = getAllBuildSuiteItems().map((item) => item.id);
+
+    expect(ids).toEqual(
+      expect.arrayContaining([
+        'accordions',
+        'tabs',
+        'drawers',
+        'modals',
+        'toasts',
+        'pricing-tables',
+        'command-palettes',
+        'file-uploaders',
+        'rich-text-editors',
+        'chat-windows',
+        'neo-brutalism',
+        'skeuomorphic',
+        'aurora',
+        'minimal',
+        'luxury',
+        'fintech',
+        'medical',
+        'gaming',
+        'admin-dashboard',
+        'crm-layout',
+        'analytics-layout',
+        'ecommerce-layout',
+        'documentation-layout',
+        'knowledge-base-layout',
+        'ide-layout',
+        'kanban-workspace',
+        'framer-motion-style',
+        'scroll-reveal',
+        'page-transitions',
+        'confetti',
+        'loading-skeletons',
+        'shimmer',
+        'lottie-support',
+        'line-charts',
+        'area-charts',
+        'pie-charts',
+        'bar-charts',
+        'heatmaps',
+        'treemaps',
+        'sankey-charts',
+        'radar-charts',
+        'timeline-charts',
+        'financial-charts',
+        'stripe-ready',
+        'clerk-ready',
+        'firebase-ready',
+        'supabase-ready',
+        'openai-ready',
+        'anthropic-ready',
+        'gemini-ready',
+        'resend-ready',
+        'uploadthing-ready',
+        'cloudinary-ready',
+        'algolia-ready',
+        'meilisearch-ready',
+        'google-maps-ready',
+        'twilio-ready',
+      ])
+    );
+  });
+
   it('filters color palettes by selected appearance', () => {
     const lightPalettes = filterPalettesByAppearance('light');
     const darkPalettes = filterPalettesByAppearance('dark');
@@ -83,6 +149,24 @@ describe('build suite catalog', () => {
         'blur-navigation',
         'soft-shadows',
         'animated-gradients',
+      ])
+    );
+  });
+
+  it('returns CRM marketplace recommendations from catalog metadata', () => {
+    const selection: BuildSuiteSelection = {
+      componentIds: [],
+      aiFeatureIds: [],
+      integrationIds: [],
+      appTypeId: 'personal-crm',
+    };
+
+    expect(getRelatedBuildSuiteItems(selection).map((item) => item.id)).toEqual(
+      expect.arrayContaining([
+        'data-tables',
+        'search-filters',
+        'kanban-board',
+        'notifications',
       ])
     );
   });
