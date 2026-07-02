@@ -32,6 +32,10 @@ import type {
   BuildSuiteSelection,
 } from '@/lib/build-suite/types';
 import { emptyBuildSuiteSelection } from '@/lib/build-suite/types';
+import {
+  BuildSuiteAppearancePreview,
+  BuildSuiteCardPreview,
+} from './BuildSuitePreviews';
 
 const steps = [
   'App Type',
@@ -223,6 +227,8 @@ function OptionCard({
         </div>
       </div>
 
+      <BuildSuiteCardPreview item={item} />
+
       <div className="relative mt-5">
         <p className="text-xl font-bold tracking-normal text-emerald-50">
           {item.label}
@@ -397,6 +403,7 @@ function AppearanceCard({
           Recommended
         </span>
       </div>
+      <BuildSuiteAppearancePreview appearance={id} />
       <p className="mt-7 text-3xl font-bold text-emerald-50">{label}</p>
       <p className="mt-4 max-w-md text-sm leading-6 text-emerald-50/72">
         {description}
