@@ -69,10 +69,10 @@ export const paletteItems: BuildSuiteItem[] = [
   },
 ];
 
-export function filterPalettesByAppearance(
+export function filterPalettesByAppearance<T extends BuildSuiteItem>(
   appearance: BuildSuiteAppearance,
-  palettes: BuildSuiteItem[] = paletteItems
-): BuildSuiteItem[] {
+  palettes: T[] = paletteItems as T[]
+): T[] {
   return palettes.filter((palette) =>
     palette.compatibleWith?.appearances?.includes(appearance)
   );

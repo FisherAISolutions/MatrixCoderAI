@@ -7,18 +7,23 @@ import { layoutItems } from './layouts';
 import { mobileItems } from './mobile';
 import { paletteItems } from './palettes';
 import { styleItems } from './styles';
-import type { BuildSuiteCatalog, BuildSuiteItem } from './types';
+import { enhanceBuildSuiteItems } from './metadata';
+import type {
+  BuildSuiteCatalog,
+  BuildSuiteEnhancedItem,
+  BuildSuiteItem,
+} from './types';
 
 export const buildSuiteCatalog: BuildSuiteCatalog = {
-  appTypes: appTypeItems,
-  palettes: paletteItems,
-  styles: styleItems,
-  layouts: layoutItems,
-  components: componentItems,
-  aiFeatures: aiFeatureItems,
-  integrations: integrationItems,
-  animations: animationItems,
-  mobile: mobileItems,
+  appTypes: enhanceBuildSuiteItems(appTypeItems),
+  palettes: enhanceBuildSuiteItems(paletteItems),
+  styles: enhanceBuildSuiteItems(styleItems),
+  layouts: enhanceBuildSuiteItems(layoutItems),
+  components: enhanceBuildSuiteItems(componentItems),
+  aiFeatures: enhanceBuildSuiteItems(aiFeatureItems),
+  integrations: enhanceBuildSuiteItems(integrationItems),
+  animations: enhanceBuildSuiteItems(animationItems),
+  mobile: enhanceBuildSuiteItems(mobileItems),
 };
 
 export type BuildSuiteCatalogKey = keyof BuildSuiteCatalog;
@@ -37,7 +42,7 @@ export const buildSuiteCatalogOrder: BuildSuiteCatalogKey[] = [
 
 export function getAllBuildSuiteItems(
   catalog: BuildSuiteCatalog = buildSuiteCatalog
-): BuildSuiteItem[] {
+): BuildSuiteEnhancedItem[] {
   return buildSuiteCatalogOrder.flatMap((key) => catalog[key]);
 }
 
@@ -52,8 +57,8 @@ export function findBuildSuiteItem(
 export function findBuildSuiteItems(
   ids: string[],
   catalog: BuildSuiteCatalog = buildSuiteCatalog
-): BuildSuiteItem[] {
+): BuildSuiteEnhancedItem[] {
   return ids
-    .map((id) => findBuildSuiteItem(id, catalog))
-    .filter((item): item is BuildSuiteItem => Boolean(item));
+    .map((id) => findBuildSuiteItem(id, catalog) as BuildSuiteEnhancedItem | undefined)
+    .filter((item): item is BuildSuiteEnhancedItem => Boolean(item));
 }

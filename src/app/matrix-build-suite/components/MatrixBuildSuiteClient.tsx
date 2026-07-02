@@ -10,7 +10,6 @@ import {
   BrainCircuit,
   Check,
   Component,
-  Layers3,
   LayoutDashboard,
   Moon,
   Palette,
@@ -24,11 +23,18 @@ import {
   Zap,
 } from 'lucide-react';
 import { buildSuiteCatalog } from '@/lib/build-suite/catalog';
+import {
+  featuredBuildSuiteCollections,
+  getBuildSuiteCollectionItems,
+  getRelatedBuildSuiteItems,
+  type BuildSuiteFeaturedCollection,
+} from '@/lib/build-suite/collections';
 import { filterPalettesByAppearance } from '@/lib/build-suite/palettes';
 import { buildMatrixBuildSuitePrompt } from '@/lib/build-suite/promptBuilder';
 import type {
   BuildSuiteAppearance,
-  BuildSuiteItem,
+  BuildSuiteEnhancedItem,
+  BuildSuiteIcon,
   BuildSuiteSelection,
 } from '@/lib/build-suite/types';
 import { emptyBuildSuiteSelection } from '@/lib/build-suite/types';
@@ -81,27 +87,58 @@ const stepIcons: LucideIcon[] = [
 
 const multiSelectStepKeys = new Set([5, 6, 7]);
 
-const recommendedItemIds = new Set([
-  'personal-crm',
-  'fitness-tracker',
-  'expense-tracker',
-  'dark-matrix-green',
-  'dark-slate-cyan',
-  'quiet-saas',
-  'operational-dashboard',
-  'top-nav-dashboard',
-  'sidebar-workspace',
-  'forms-crud',
-  'data-tables',
-  'local-storage',
-  'minimal-motion',
-  'responsive-web',
-]);
-
 const complexityClasses = {
   low: 'border-emerald-400/35 bg-emerald-400/10 text-emerald-100',
   medium: 'border-cyan-300/35 bg-cyan-300/10 text-cyan-100',
   high: 'border-fuchsia-300/35 bg-fuchsia-300/10 text-fuchsia-100',
+};
+
+const difficultyClasses = {
+  easy: 'border-emerald-400/35 bg-emerald-400/10 text-emerald-100',
+  medium: 'border-cyan-300/35 bg-cyan-300/10 text-cyan-100',
+  advanced: 'border-fuchsia-300/35 bg-fuchsia-300/10 text-fuchsia-100',
+};
+
+const impactClasses = {
+  low: 'border-lime-300/35 bg-lime-300/10 text-lime-100',
+  medium: 'border-blue-300/35 bg-blue-300/10 text-blue-100',
+  high: 'border-amber-300/35 bg-amber-300/10 text-amber-100',
+};
+
+const accentClasses = {
+  amber: 'from-amber-300/20 to-orange-500/5',
+  blue: 'from-blue-300/20 to-cyan-500/5',
+  cyan: 'from-cyan-300/20 to-blue-500/5',
+  emerald: 'from-emerald-300/20 to-green-500/5',
+  fuchsia: 'from-fuchsia-300/20 to-purple-500/5',
+  lime: 'from-lime-300/20 to-emerald-500/5',
+  slate: 'from-slate-300/20 to-slate-500/5',
+  violet: 'from-violet-300/20 to-fuchsia-500/5',
+};
+
+const iconMap: Record<BuildSuiteIcon, LucideIcon> = {
+  'app-window': AppWindow,
+  'badge-check': BadgeCheck,
+  blocks: Blocks,
+  boxes: Boxes,
+  'brain-circuit': BrainCircuit,
+  calendar: BadgeCheck,
+  chart: LayoutDashboard,
+  component: Component,
+  form: Component,
+  kanban: Blocks,
+  'layout-dashboard': LayoutDashboard,
+  moon: Moon,
+  palette: Palette,
+  'plug-zap': PlugZap,
+  search: Search,
+  smartphone: Smartphone,
+  sparkles: Sparkles,
+  star: Star,
+  sun: Sun,
+  table: Blocks,
+  wand: Wand2,
+  zap: Zap,
 };
 
 function cloneSelection(): BuildSuiteSelection {
@@ -123,27 +160,8 @@ function toggleId(ids: string[], id: string): string[] {
     : [...ids, id];
 }
 
-function getOptionIcon(item: BuildSuiteItem): LucideIcon {
-  const searchable = `${item.id} ${item.category} ${item.tags.join(' ')}`;
-  if (/ai|assistant|draft|search/.test(searchable)) return BrainCircuit;
-  if (/integration|storage|api|auth|csv/.test(searchable)) return PlugZap;
-  if (/mobile|capacitor|android|touch/.test(searchable)) return Smartphone;
-  if (/palette|light|dark|matrix|slate|emerald/.test(searchable)) return Palette;
-  if (/layout|nav|dashboard|sidebar|split|tabs/.test(searchable)) {
-    return LayoutDashboard;
-  }
-  if (/component|table|form|chart|calendar|kanban/.test(searchable)) {
-    return Blocks;
-  }
-  if (/animation|motion|transition/.test(searchable)) return Zap;
-  if (/crm|fitness|expense|inventory|booking|saas/.test(searchable)) {
-    return AppWindow;
-  }
-  return Boxes;
-}
-
 function matchesItem(
-  item: BuildSuiteItem,
+  item: BuildSuiteEnhancedItem,
   query: string,
   category: string,
   complexity: string
@@ -156,6 +174,8 @@ function matchesItem(
     item.category,
     item.description,
     item.promptInstruction,
+    ...item.badges,
+    ...item.recommendedFor,
     ...item.tags,
   ]
     .join(' ')
@@ -168,7 +188,7 @@ function matchesItem(
   );
 }
 
-function getCategories(items: BuildSuiteItem[]): string[] {
+function getCategories(items: BuildSuiteEnhancedItem[]): string[] {
   return Array.from(new Set(items.map((item) => item.category))).sort();
 }
 
@@ -177,13 +197,14 @@ function OptionCard({
   selected,
   onSelect,
 }: {
-  item: BuildSuiteItem;
+  item: BuildSuiteEnhancedItem;
   selected: boolean;
   onSelect: () => void;
 }) {
-  const Icon = getOptionIcon(item);
+  const Icon = iconMap[item.icon] ?? Boxes;
   const complexity = item.complexity ?? 'low';
-  const recommended = recommendedItemIds.has(item.id);
+  const isRecommended = item.badges.includes('Popular') || item.popularity >= 5;
+  const popularityLabel = `${'★'.repeat(item.popularity)} Popular`;
 
   return (
     <button
@@ -197,7 +218,7 @@ function OptionCard({
     >
       <span className="pointer-events-none absolute inset-x-0 top-0 h-px bg-gradient-to-r from-transparent via-emerald-300/75 to-transparent opacity-0 transition group-hover:opacity-100" />
       <span
-        className={`pointer-events-none absolute right-4 top-4 h-16 w-16 rounded-full blur-2xl transition ${
+        className={`pointer-events-none absolute right-4 top-4 h-16 w-16 rounded-full bg-gradient-to-br ${accentClasses[item.accentColor]} blur-2xl transition ${
           selected ? 'bg-emerald-300/25 opacity-100' : 'bg-emerald-300/0 opacity-0'
         }`}
       />
@@ -213,7 +234,7 @@ function OptionCard({
           <Icon size={22} strokeWidth={1.8} />
         </div>
         <div className="flex flex-wrap justify-end gap-2">
-          {recommended ? (
+          {isRecommended ? (
             <span className="inline-flex items-center gap-1 border border-amber-300/45 bg-amber-300/10 px-2 py-1 text-xs font-semibold uppercase tracking-[0.18em] text-amber-100">
               <Star size={12} />
               Recommended
@@ -223,6 +244,11 @@ function OptionCard({
             className={`border px-2 py-1 text-xs font-semibold uppercase tracking-[0.18em] ${complexityClasses[complexity]}`}
           >
             {complexity}
+          </span>
+          <span
+            className={`border px-2 py-1 text-xs font-semibold uppercase tracking-[0.18em] ${difficultyClasses[item.difficulty]}`}
+          >
+            {item.difficulty}
           </span>
         </div>
       </div>
@@ -242,6 +268,22 @@ function OptionCard({
       </div>
 
       <div className="relative mt-5 flex flex-wrap gap-2">
+        <span className="border border-amber-300/35 bg-amber-300/10 px-2 py-1 text-xs text-amber-100">
+          {popularityLabel}
+        </span>
+        <span
+          className={`border px-2 py-1 text-xs uppercase tracking-[0.16em] ${impactClasses[item.estimatedGenerationImpact]}`}
+        >
+          {item.estimatedGenerationImpact} impact
+        </span>
+        {item.badges.slice(0, 3).map((badge) => (
+          <span
+            key={badge}
+            className="border border-cyan-300/25 bg-cyan-300/10 px-2 py-1 text-xs text-cyan-100"
+          >
+            {badge}
+          </span>
+        ))}
         {item.tags.slice(0, 5).map((tag) => (
           <span
             key={tag}
@@ -275,31 +317,121 @@ function OptionBrowser({
   selectedId,
   selectedIds,
   onSelect,
+  relatedItems,
   searchQuery,
   setSearchQuery,
   categoryFilter,
   setCategoryFilter,
   complexityFilter,
   setComplexityFilter,
+  collectionFilter,
+  setCollectionFilter,
 }: {
-  items: BuildSuiteItem[];
+  items: BuildSuiteEnhancedItem[];
   selectedId?: string;
   selectedIds?: string[];
   onSelect: (id: string) => void;
+  relatedItems: BuildSuiteEnhancedItem[];
   searchQuery: string;
   setSearchQuery: (value: string) => void;
   categoryFilter: string;
   setCategoryFilter: (value: string) => void;
   complexityFilter: string;
   setComplexityFilter: (value: string) => void;
+  collectionFilter: BuildSuiteFeaturedCollection['id'] | 'all';
+  setCollectionFilter: (value: BuildSuiteFeaturedCollection['id'] | 'all') => void;
 }) {
   const categories = getCategories(items);
-  const filteredItems = items.filter((item) =>
-    matchesItem(item, searchQuery, categoryFilter, complexityFilter)
+  const collectionItems =
+    collectionFilter === 'all'
+      ? []
+      : getBuildSuiteCollectionItems(collectionFilter)
+          .map((item) => item.id)
+          .filter((id) => items.some((item) => item.id === id));
+  const collectionItemIds = new Set(collectionItems);
+  const filteredItems = items.filter(
+    (item) =>
+      (collectionFilter === 'all' || collectionItemIds.has(item.id)) &&
+      matchesItem(item, searchQuery, categoryFilter, complexityFilter)
+  );
+  const relatedItemIds = new Set(relatedItems.map((item) => item.id));
+  const relatedOptions = items.filter(
+    (item) =>
+      relatedItemIds.has(item.id) &&
+      selectedId !== item.id &&
+      !selectedIds?.includes(item.id)
   );
 
   return (
     <div className="grid gap-5">
+      <div className="grid gap-3">
+        <div className="flex flex-wrap items-center gap-2">
+          <button
+            type="button"
+            onClick={() => setCollectionFilter('all')}
+            className={`border px-3 py-2 text-xs uppercase tracking-[0.18em] transition ${
+              collectionFilter === 'all'
+                ? 'border-emerald-300 bg-emerald-300 text-black'
+                : 'border-emerald-500/25 bg-black/35 text-emerald-100/70 hover:border-emerald-300'
+            }`}
+          >
+            All
+          </button>
+          {featuredBuildSuiteCollections.map((collection) => {
+            const count = getBuildSuiteCollectionItems(collection.id).filter(
+              (item) => items.some((candidate) => candidate.id === item.id)
+            ).length;
+            if (count === 0) return null;
+
+            return (
+              <button
+                key={collection.id}
+                type="button"
+                onClick={() => setCollectionFilter(collection.id)}
+                className={`group border px-3 py-2 text-left transition hover:-translate-y-0.5 ${
+                  collectionFilter === collection.id
+                    ? 'border-emerald-300 bg-emerald-300 text-black'
+                    : 'border-emerald-500/25 bg-black/35 text-emerald-100/75 hover:border-emerald-300 hover:bg-emerald-400/10'
+                }`}
+                title={collection.description}
+              >
+                <span className="block text-xs font-semibold uppercase tracking-[0.18em]">
+                  {collection.label}
+                </span>
+                <span className="mt-1 block text-[10px] uppercase tracking-[0.18em] opacity-70">
+                  {collection.badge} · {count}
+                </span>
+              </button>
+            );
+          })}
+        </div>
+      </div>
+
+      {relatedOptions.length ? (
+        <div className="border border-cyan-300/25 bg-cyan-300/10 p-4">
+          <div className="mb-3 flex items-center gap-2 text-xs uppercase tracking-[0.24em] text-cyan-100">
+            <Sparkles size={14} />
+            People also add
+          </div>
+          <div className="flex flex-wrap gap-2">
+            {relatedOptions.slice(0, 6).map((item) => {
+              const Icon = iconMap[item.icon] ?? Boxes;
+              return (
+                <button
+                  key={item.id}
+                  type="button"
+                  onClick={() => onSelect(item.id)}
+                  className="inline-flex items-center gap-2 border border-cyan-300/35 bg-black/30 px-3 py-2 text-sm text-cyan-50 transition hover:-translate-y-0.5 hover:border-cyan-200 hover:bg-cyan-300/15"
+                >
+                  <Icon size={14} />
+                  {item.label}
+                </button>
+              );
+            })}
+          </div>
+        </div>
+      ) : null}
+
       <div className="grid gap-3 border border-emerald-500/20 bg-black/25 p-3 md:grid-cols-[1fr_auto_auto]">
         <label className="relative block">
           <Search
@@ -519,6 +651,9 @@ export default function MatrixBuildSuiteClient() {
   const [searchQuery, setSearchQuery] = useState('');
   const [categoryFilter, setCategoryFilter] = useState('all');
   const [complexityFilter, setComplexityFilter] = useState('all');
+  const [collectionFilter, setCollectionFilter] = useState<
+    BuildSuiteFeaturedCollection['id'] | 'all'
+  >('all');
   const [selection, setSelection] = useState<BuildSuiteSelection>(() =>
     cloneSelection()
   );
@@ -539,12 +674,21 @@ export default function MatrixBuildSuiteClient() {
     setSearchQuery('');
     setCategoryFilter('all');
     setComplexityFilter('all');
+    setCollectionFilter('all');
   }, [activeStep]);
 
   const availablePalettes = useMemo(() => {
     if (!selection.appearance) return [];
-    return filterPalettesByAppearance(selection.appearance);
+    return filterPalettesByAppearance(
+      selection.appearance,
+      buildSuiteCatalog.palettes
+    );
   }, [selection.appearance]);
+
+  const relatedItems = useMemo(
+    () => getRelatedBuildSuiteItems(selection),
+    [selection]
+  );
 
   const promptResult = useMemo(
     () => buildMatrixBuildSuitePrompt(selection),
@@ -571,7 +715,10 @@ export default function MatrixBuildSuiteClient() {
 
   const selectAppearance = (appearance: BuildSuiteAppearance) => {
     setSelection((current) => {
-      const palettes = filterPalettesByAppearance(appearance);
+      const palettes = filterPalettesByAppearance(
+        appearance,
+        buildSuiteCatalog.palettes
+      );
       const currentPalette = palettes.some(
         (palette) => palette.id === current.paletteId
       )
@@ -606,7 +753,7 @@ export default function MatrixBuildSuiteClient() {
   };
 
   const renderItems = (
-    items: BuildSuiteItem[],
+    items: BuildSuiteEnhancedItem[],
     selectedId: string | undefined,
     onSelect: (id: string) => void
   ) => (
@@ -614,17 +761,20 @@ export default function MatrixBuildSuiteClient() {
       items={items}
       selectedId={selectedId}
       onSelect={onSelect}
+      relatedItems={relatedItems}
       searchQuery={searchQuery}
       setSearchQuery={setSearchQuery}
       categoryFilter={categoryFilter}
       setCategoryFilter={setCategoryFilter}
       complexityFilter={complexityFilter}
       setComplexityFilter={setComplexityFilter}
+      collectionFilter={collectionFilter}
+      setCollectionFilter={setCollectionFilter}
     />
   );
 
   const renderMultiItems = (
-    items: BuildSuiteItem[],
+    items: BuildSuiteEnhancedItem[],
     selectedIds: string[],
     onSelect: (id: string) => void
   ) => (
@@ -632,12 +782,15 @@ export default function MatrixBuildSuiteClient() {
       items={items}
       selectedIds={selectedIds}
       onSelect={onSelect}
+      relatedItems={relatedItems}
       searchQuery={searchQuery}
       setSearchQuery={setSearchQuery}
       categoryFilter={categoryFilter}
       setCategoryFilter={setCategoryFilter}
       complexityFilter={complexityFilter}
       setComplexityFilter={setComplexityFilter}
+      collectionFilter={collectionFilter}
+      setCollectionFilter={setCollectionFilter}
     />
   );
 
@@ -761,7 +914,8 @@ export default function MatrixBuildSuiteClient() {
         )}
         <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
           {promptResult.selectedItems.map((item) => {
-            const Icon = getOptionIcon(item);
+            const enhancedItem = item as BuildSuiteEnhancedItem;
+            const Icon = iconMap[enhancedItem.icon] ?? Boxes;
             return (
               <div
                 key={item.id}
@@ -776,6 +930,10 @@ export default function MatrixBuildSuiteClient() {
                   </p>
                   <p className="mt-1 text-xs uppercase tracking-[0.22em] text-emerald-300/70">
                     {item.category}
+                  </p>
+                  <p className="mt-2 text-[11px] uppercase tracking-[0.18em] text-amber-100/80">
+                    {'\u2605'.repeat(enhancedItem.popularity)} ·{' '}
+                    {enhancedItem.difficulty}
                   </p>
                 </span>
               </div>

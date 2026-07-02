@@ -41,4 +41,24 @@ export const layoutItems: BuildSuiteItem[] = [
       'Use a mobile-first tabbed layout with touch-friendly tabs, stacked cards on small screens, and wider multi-column panels on desktop.',
     complexity: 'medium',
   },
+  {
+    id: 'bento-dashboard',
+    label: 'Bento Dashboard',
+    category: 'Dashboard',
+    description: 'Modular dashboard blocks arranged as a polished bento grid.',
+    tags: ['bento', 'dashboard', 'cards'],
+    promptInstruction:
+      'Use a bento dashboard layout with modular metric blocks, asymmetrical but stable grid areas, and clear responsive stacking.',
+    complexity: 'medium',
+  },
+  {
+    id: 'landing-page',
+    label: 'Landing Page',
+    category: 'Marketing',
+    description: 'A strong first screen with direct entry into the app workflow.',
+    tags: ['landing', 'hero', 'cta'],
+    promptInstruction:
+      'Use a landing-page layout with a polished first screen, clear primary calls-to-action, and visible links into the real app routes.',
+    complexity: 'medium',
+  },
 ];

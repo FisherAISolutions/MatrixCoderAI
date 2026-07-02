@@ -41,4 +41,64 @@ export const styleItems: BuildSuiteItem[] = [
       'Use mobile-app polish with touch-friendly controls, strong spacing, sticky actions where useful, and responsive mobile-first layout.',
     complexity: 'medium',
   },
+  {
+    id: 'glassmorphism',
+    label: 'Glassmorphism',
+    category: 'Premium',
+    description: 'Layered translucent surfaces, soft blur, and floating depth.',
+    tags: ['glass', 'blur', 'premium', 'floating'],
+    promptInstruction:
+      'Use glassmorphism styling with translucent panels, subtle backdrop blur, floating cards, soft borders, and strong text contrast.',
+    complexity: 'medium',
+  },
+  {
+    id: 'cyberpunk',
+    label: 'Cyberpunk',
+    category: 'Expressive',
+    description: 'High-energy neon contrast with sharp futuristic interface details.',
+    tags: ['cyberpunk', 'neon', 'futuristic'],
+    promptInstruction:
+      'Use cyberpunk styling with restrained neon accents, high-contrast dark surfaces, sharp interface details, and readable controls.',
+    complexity: 'high',
+  },
+  {
+    id: 'apple-inspired',
+    label: 'Apple Inspired',
+    category: 'Premium',
+    description: 'Soft minimal surfaces, calm hierarchy, and refined product polish.',
+    tags: ['apple', 'minimal', 'premium'],
+    promptInstruction:
+      'Use Apple-inspired styling with soft surfaces, generous spacing, refined typography, careful hierarchy, and elegant controls.',
+    complexity: 'medium',
+  },
+  {
+    id: 'material',
+    label: 'Material',
+    category: 'System',
+    description: 'Familiar elevation, clear actions, and structured component rhythm.',
+    tags: ['material', 'system', 'elevation'],
+    promptInstruction:
+      'Use Material-inspired styling with clear elevation, familiar component rhythm, accessible buttons, and structured forms.',
+    complexity: 'low',
+  },
+  {
+    id: 'fluent',
+    label: 'Fluent',
+    category: 'System',
+    description: 'Enterprise-friendly panels with subtle depth and clean controls.',
+    tags: ['fluent', 'enterprise', 'system'],
+    promptInstruction:
+      'Use Fluent-inspired styling with clean enterprise panels, subtle depth, practical controls, and consistent spacing.',
+    complexity: 'medium',
+  },
+  {
+    id: 'matrix-interface',
+    label: 'Matrix Interface',
+    category: 'Matrix',
+    description: 'Terminal-inspired command surfaces with luminous system feedback.',
+    tags: ['matrix', 'terminal', 'command'],
+    promptInstruction:
+      'Use Matrix interface styling with terminal-inspired surfaces, luminous borders, compact controls, and precise system feedback.',
+    complexity: 'medium',
+  },
 ];

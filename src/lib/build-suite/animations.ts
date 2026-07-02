@@ -31,4 +31,14 @@ export const animationItems: BuildSuiteItem[] = [
       'Use expressive but tasteful motion for key interactions, selected states, and onboarding-style moments without hurting usability.',
     complexity: 'medium',
   },
+  {
+    id: 'animated-gradients',
+    label: 'Animated Gradients',
+    category: 'Rich',
+    description: 'Subtle gradient movement for premium hero and status surfaces.',
+    tags: ['gradient', 'animated', 'premium'],
+    promptInstruction:
+      'Use subtle animated gradients only in contained hero or status surfaces, with reduced-motion-friendly fallbacks and no distracting background blobs.',
+    complexity: 'medium',
+  },
 ];

@@ -1,5 +1,10 @@
 import type { ReactNode } from 'react';
-import type { BuildSuiteAppearance, BuildSuiteItem } from '@/lib/build-suite/types';
+import type {
+  BuildSuiteAccentColor,
+  BuildSuiteAppearance,
+  BuildSuiteEnhancedItem,
+  BuildSuitePreviewType,
+} from '@/lib/build-suite/types';
 
 function MiniBars({ tone = 'emerald' }: { tone?: 'emerald' | 'cyan' | 'purple' | 'blue' | 'amber' }) {
   const color =
@@ -77,20 +82,19 @@ function AppearanceMockup({ appearance }: { appearance: BuildSuiteAppearance }) 
   );
 }
 
-function PaletteMockup({ item }: { item: BuildSuiteItem }) {
-  const id = item.id;
-  const palette =
-    id === 'light-saas-blue'
-      ? ['bg-blue-500', 'bg-sky-200', 'bg-white', 'bg-slate-200']
-      : id === 'light-emerald-office'
-        ? ['bg-emerald-500', 'bg-teal-100', 'bg-white', 'bg-slate-200']
-        : id === 'light-warm-product'
-          ? ['bg-amber-400', 'bg-orange-100', 'bg-white', 'bg-stone-200']
-          : id === 'dark-matrix-green'
-            ? ['bg-emerald-300', 'bg-green-700', 'bg-black', 'bg-slate-900']
-            : id === 'dark-slate-cyan'
-              ? ['bg-cyan-300', 'bg-slate-700', 'bg-slate-950', 'bg-blue-950']
-              : ['bg-lime-300', 'bg-fuchsia-500', 'bg-slate-950', 'bg-purple-950'];
+const accentSwatches: Record<BuildSuiteAccentColor, string[]> = {
+  amber: ['bg-amber-400', 'bg-orange-100', 'bg-white', 'bg-stone-200'],
+  blue: ['bg-blue-500', 'bg-sky-200', 'bg-white', 'bg-slate-200'],
+  cyan: ['bg-cyan-300', 'bg-slate-700', 'bg-slate-950', 'bg-blue-950'],
+  emerald: ['bg-emerald-300', 'bg-green-700', 'bg-black', 'bg-slate-900'],
+  fuchsia: ['bg-fuchsia-400', 'bg-purple-900', 'bg-slate-950', 'bg-pink-950'],
+  lime: ['bg-lime-300', 'bg-fuchsia-500', 'bg-slate-950', 'bg-purple-950'],
+  slate: ['bg-slate-300', 'bg-slate-600', 'bg-slate-950', 'bg-slate-800'],
+  violet: ['bg-violet-400', 'bg-indigo-800', 'bg-slate-950', 'bg-purple-950'],
+};
+
+function PaletteMockup({ item }: { item: BuildSuiteEnhancedItem }) {
+  const palette = accentSwatches[item.accentColor];
 
   return (
     <PreviewFrame>
@@ -107,10 +111,12 @@ function PaletteMockup({ item }: { item: BuildSuiteItem }) {
   );
 }
 
-function StyleMockup({ item }: { item: BuildSuiteItem }) {
-  const text = `${item.id} ${item.label} ${item.tags.join(' ')}`.toLowerCase();
-
-  if (/glass/.test(text)) {
+function StyleMockup({
+  previewType,
+}: {
+  previewType: BuildSuitePreviewType;
+}) {
+  if (previewType === 'style-glass') {
     return (
       <PreviewFrame className="bg-gradient-to-br from-cyan-500/15 via-white/5 to-fuchsia-500/15">
         <div className="mx-auto mt-2 h-20 w-4/5 border border-white/30 bg-white/15 shadow-[0_18px_50px_rgba(255,255,255,0.12)] backdrop-blur">
@@ -121,7 +127,7 @@ function StyleMockup({ item }: { item: BuildSuiteItem }) {
     );
   }
 
-  if (/cyber|matrix/.test(text)) {
+  if (previewType === 'style-cyber' || previewType === 'style-matrix') {
     return (
       <PreviewFrame className="bg-black">
         <div className="grid h-full grid-cols-4 gap-1 opacity-70">
@@ -134,7 +140,7 @@ function StyleMockup({ item }: { item: BuildSuiteItem }) {
     );
   }
 
-  if (/apple|editorial|mobile/.test(text)) {
+  if (previewType === 'style-apple') {
     return (
       <PreviewFrame className="bg-slate-100">
         <div className="mx-auto h-full w-3/5 rounded-[24px] border border-slate-200 bg-white p-3 shadow-xl">
@@ -149,7 +155,7 @@ function StyleMockup({ item }: { item: BuildSuiteItem }) {
     );
   }
 
-  if (/material/.test(text)) {
+  if (previewType === 'style-material') {
     return (
       <PreviewFrame className="bg-slate-100">
         <div className="grid h-full gap-2">
@@ -163,7 +169,7 @@ function StyleMockup({ item }: { item: BuildSuiteItem }) {
     );
   }
 
-  if (/fluent/.test(text)) {
+  if (previewType === 'style-fluent') {
     return (
       <PreviewFrame className="bg-gradient-to-br from-slate-100 to-blue-100">
         <div className="grid h-full grid-cols-[44px_1fr] gap-2">
@@ -193,10 +199,12 @@ function StyleMockup({ item }: { item: BuildSuiteItem }) {
   );
 }
 
-function LayoutMockup({ item }: { item: BuildSuiteItem }) {
-  const text = `${item.id} ${item.label} ${item.tags.join(' ')}`.toLowerCase();
-
-  if (/sidebar/.test(text)) {
+function LayoutMockup({
+  previewType,
+}: {
+  previewType: BuildSuitePreviewType;
+}) {
+  if (previewType === 'layout-sidebar') {
     return (
       <PreviewFrame>
         <div className="grid h-full grid-cols-[44px_1fr] gap-2">
@@ -214,7 +222,7 @@ function LayoutMockup({ item }: { item: BuildSuiteItem }) {
     );
   }
 
-  if (/top|landing/.test(text)) {
+  if (previewType === 'layout-top-nav' || previewType === 'layout-landing') {
     return (
       <PreviewFrame>
         <div className="grid h-full grid-rows-[28px_1fr] gap-2">
@@ -231,7 +239,7 @@ function LayoutMockup({ item }: { item: BuildSuiteItem }) {
     );
   }
 
-  if (/bottom|mobile|tabs/.test(text)) {
+  if (previewType === 'layout-bottom-nav') {
     return (
       <PreviewFrame>
         <div className="mx-auto grid h-full w-20 grid-rows-[1fr_18px] gap-2 rounded-2xl border border-white/20 bg-white/8 p-2">
@@ -249,7 +257,7 @@ function LayoutMockup({ item }: { item: BuildSuiteItem }) {
     );
   }
 
-  if (/bento|dashboard/.test(text)) {
+  if (previewType === 'layout-bento' || previewType === 'layout-dashboard') {
     return (
       <PreviewFrame>
         <div className="grid h-full grid-cols-3 grid-rows-2 gap-2">
@@ -272,10 +280,12 @@ function LayoutMockup({ item }: { item: BuildSuiteItem }) {
   );
 }
 
-function ComponentMockup({ item }: { item: BuildSuiteItem }) {
-  const text = `${item.id} ${item.label} ${item.tags.join(' ')}`.toLowerCase();
-
-  if (/table/.test(text)) {
+function ComponentMockup({
+  previewType,
+}: {
+  previewType: BuildSuitePreviewType;
+}) {
+  if (previewType === 'component-tables') {
     return (
       <PreviewFrame>
         <div className="grid gap-2">
@@ -291,7 +301,7 @@ function ComponentMockup({ item }: { item: BuildSuiteItem }) {
     );
   }
 
-  if (/chart|metric/.test(text)) {
+  if (previewType === 'component-charts') {
     return (
       <PreviewFrame>
         <div className="flex h-full items-end gap-2">
@@ -307,7 +317,7 @@ function ComponentMockup({ item }: { item: BuildSuiteItem }) {
     );
   }
 
-  if (/form|crud/.test(text)) {
+  if (previewType === 'component-forms') {
     return (
       <PreviewFrame>
         <div className="grid gap-2">
@@ -320,7 +330,7 @@ function ComponentMockup({ item }: { item: BuildSuiteItem }) {
     );
   }
 
-  if (/calendar|schedule/.test(text)) {
+  if (previewType === 'component-calendar') {
     return (
       <PreviewFrame>
         <div className="grid h-full grid-cols-7 gap-1">
@@ -335,7 +345,7 @@ function ComponentMockup({ item }: { item: BuildSuiteItem }) {
     );
   }
 
-  if (/kanban/.test(text)) {
+  if (previewType === 'component-kanban') {
     return (
       <PreviewFrame>
         <div className="grid h-full grid-cols-3 gap-2">
@@ -351,7 +361,7 @@ function ComponentMockup({ item }: { item: BuildSuiteItem }) {
     );
   }
 
-  if (/notification/.test(text)) {
+  if (previewType === 'component-notifications') {
     return (
       <PreviewFrame>
         <div className="grid gap-2">
@@ -377,7 +387,7 @@ function ComponentMockup({ item }: { item: BuildSuiteItem }) {
   );
 }
 
-function AppTypeMockup({ item }: { item: BuildSuiteItem }) {
+function AppTypeMockup({ item }: { item: BuildSuiteEnhancedItem }) {
   return (
     <PreviewFrame>
       <div className="grid h-full grid-cols-[1.1fr_0.9fr] gap-3">
@@ -398,10 +408,12 @@ function AppTypeMockup({ item }: { item: BuildSuiteItem }) {
   );
 }
 
-function UtilityMockup({ item }: { item: BuildSuiteItem }) {
-  const text = `${item.id} ${item.label} ${item.tags.join(' ')}`.toLowerCase();
-
-  if (/ai|assistant|search|draft/.test(text)) {
+function UtilityMockup({
+  previewType,
+}: {
+  previewType: BuildSuitePreviewType;
+}) {
+  if (previewType === 'ai-assistant') {
     return (
       <PreviewFrame>
         <div className="grid h-full grid-cols-[38px_1fr] gap-3">
@@ -418,7 +430,7 @@ function UtilityMockup({ item }: { item: BuildSuiteItem }) {
     );
   }
 
-  if (/integration|storage|api|auth|csv/.test(text)) {
+  if (previewType === 'integration-flow') {
     return (
       <PreviewFrame>
         <div className="flex h-full items-center justify-center gap-3">
@@ -430,7 +442,7 @@ function UtilityMockup({ item }: { item: BuildSuiteItem }) {
     );
   }
 
-  if (/animation|motion|transition/.test(text)) {
+  if (previewType === 'animation-motion') {
     return (
       <PreviewFrame>
         <div className="relative h-full">
@@ -454,27 +466,34 @@ function UtilityMockup({ item }: { item: BuildSuiteItem }) {
   );
 }
 
-export function BuildSuiteCardPreview({ item }: { item: BuildSuiteItem }) {
-  const text = `${item.id} ${item.category} ${item.tags.join(' ')}`.toLowerCase();
-
-  if (/light|dark|matrix|slate|emerald|purple|palette/.test(text)) {
+export function BuildSuiteCardPreview({
+  item,
+}: {
+  item: BuildSuiteEnhancedItem;
+}) {
+  if (item.previewType === 'palette-swatches') {
     return <PaletteMockup item={item} />;
   }
 
-  if (/style|saas|editorial|operational|glass|cyber|apple|material|fluent/.test(text)) {
-    return <StyleMockup item={item} />;
+  if (item.previewType.startsWith('style-')) {
+    return <StyleMockup previewType={item.previewType} />;
   }
 
-  if (/layout|nav|sidebar|split|tabs|bento|landing/.test(text)) {
-    return <LayoutMockup item={item} />;
+  if (item.previewType.startsWith('layout-')) {
+    return <LayoutMockup previewType={item.previewType} />;
   }
 
-  if (/component|table|form|chart|calendar|kanban|notification|crud/.test(text)) {
-    return <ComponentMockup item={item} />;
+  if (item.previewType.startsWith('component-')) {
+    return <ComponentMockup previewType={item.previewType} />;
   }
 
-  if (/ai|integration|storage|api|auth|csv|animation|motion|mobile|capacitor/.test(text)) {
-    return <UtilityMockup item={item} />;
+  if (
+    item.previewType === 'ai-assistant' ||
+    item.previewType === 'integration-flow' ||
+    item.previewType === 'animation-motion' ||
+    item.previewType === 'mobile-device'
+  ) {
+    return <UtilityMockup previewType={item.previewType} />;
   }
 
   return <AppTypeMockup item={item} />;
