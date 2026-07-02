@@ -1,10 +1,10 @@
 'use client';
 
+import type { ReactNode } from 'react';
 import { useEffect, useMemo, useState } from 'react';
 import type { LucideIcon } from 'lucide-react';
 import {
   AppWindow,
-  ArrowLeft,
   BadgeCheck,
   Blocks,
   Boxes,
@@ -24,6 +24,7 @@ import {
   Star,
   Sun,
   Wand2,
+  X,
   Zap,
 } from 'lucide-react';
 import {
@@ -39,10 +40,16 @@ import {
   getRelatedBuildSuiteItems,
   type BuildSuiteFeaturedCollection,
 } from '@/lib/build-suite/collections';
+import {
+  getBuildSuiteAdvisorReport,
+  type BuildSuiteAdvisorRecommendation,
+  type BuildSuiteAdvisorSection,
+} from '@/lib/build-suite/advisor';
 import { filterPalettesByAppearance } from '@/lib/build-suite/palettes';
 import { buildMatrixBuildSuitePrompt } from '@/lib/build-suite/promptBuilder';
 import type {
   BuildSuiteAppearance,
+  BuildSuiteAccentColor,
   BuildSuiteDifficulty,
   BuildSuiteEnhancedItem,
   BuildSuiteGenerationImpact,
@@ -99,7 +106,7 @@ const stepIcons: LucideIcon[] = [
 
 const multiSelectStepKeys = new Set([5, 6, 7]);
 
-type MarketplaceView = 'home' | 'browse' | 'detail' | 'wizard';
+type MarketplaceView = 'home' | 'browse' | 'wizard';
 type MarketplaceSort = 'popularity' | 'newest' | 'alphabetical' | 'impact';
 type CatalogBucket =
   | BuildSuiteCatalogKey
@@ -135,6 +142,17 @@ const impactClasses: Record<BuildSuiteGenerationImpact, string> = {
   low: 'border-lime-300/35 bg-lime-300/10 text-lime-100',
   medium: 'border-blue-300/35 bg-blue-300/10 text-blue-100',
   high: 'border-amber-300/35 bg-amber-300/10 text-amber-100',
+};
+
+const accentClasses: Record<BuildSuiteAccentColor, string> = {
+  amber: 'border-amber-300/45 bg-amber-300/15 text-amber-100',
+  blue: 'border-blue-300/45 bg-blue-300/15 text-blue-100',
+  cyan: 'border-cyan-300/45 bg-cyan-300/15 text-cyan-100',
+  emerald: 'border-emerald-300/45 bg-emerald-300/15 text-emerald-100',
+  fuchsia: 'border-fuchsia-300/45 bg-fuchsia-300/15 text-fuchsia-100',
+  lime: 'border-lime-300/45 bg-lime-300/15 text-lime-100',
+  slate: 'border-slate-300/45 bg-slate-300/15 text-slate-100',
+  violet: 'border-violet-300/45 bg-violet-300/15 text-violet-100',
 };
 
 const complexityClasses = {
@@ -304,6 +322,381 @@ function itemIsSelected(
   selection: BuildSuiteSelection
 ): boolean {
   return getSelectedIds(selection).has(item.id);
+}
+
+function uniqueList(values: Array<string | undefined>): string[] {
+  return Array.from(
+    new Set(values.filter((value): value is string => Boolean(value?.trim())))
+  );
+}
+
+function friendlyId(id: string): string {
+  return id
+    .split('-')
+    .filter(Boolean)
+    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+    .join(' ');
+}
+
+function itemLabelsForIds(ids: string[] = []): string[] {
+  return ids.map((id) => findBuildSuiteItems([id])[0]?.label ?? friendlyId(id));
+}
+
+function relatedCatalogItems(
+  item: BuildSuiteEnhancedItem,
+  catalogKey: BuildSuiteCatalogKey
+): BuildSuiteEnhancedItem[] {
+  const appTypes = item.compatibleWith?.appTypes ?? [];
+  const recommendationText = [...item.recommendedFor, ...item.tags, item.category]
+    .join(' ')
+    .toLowerCase();
+
+  return buildSuiteCatalog[catalogKey]
+    .filter((candidate) => {
+      if (candidate.id === item.id) return false;
+      const candidateText = [
+        candidate.id,
+        candidate.label,
+        candidate.category,
+        ...candidate.tags,
+        ...candidate.recommendedFor,
+      ]
+        .join(' ')
+        .toLowerCase();
+      const candidateAppTypes = candidate.compatibleWith?.appTypes ?? [];
+
+      return (
+        item.relatedItemIds.includes(candidate.id) ||
+        candidate.relatedItemIds.includes(item.id) ||
+        appTypes.some((appType) => candidateAppTypes.includes(appType)) ||
+        item.tags.some((tag) => candidate.tags.includes(tag)) ||
+        candidate.recommendedFor.some((value) =>
+          recommendationText.includes(value.toLowerCase())
+        ) ||
+        candidateText.includes(item.category.toLowerCase())
+      );
+    })
+    .sort((a, b) => b.popularity - a.popularity || a.label.localeCompare(b.label))
+    .slice(0, 6);
+}
+
+function detailUseCases(item: BuildSuiteEnhancedItem): string[] {
+  return uniqueList([
+    ...item.recommendedFor,
+    ...item.tags.slice(0, 6),
+    ...(item.compatibleWith?.appTypes ?? []).map(friendlyId),
+  ]).slice(0, 10);
+}
+
+function DetailStat({
+  label,
+  value,
+  className = '',
+}: {
+  label: string;
+  value: string;
+  className?: string;
+}) {
+  return (
+    <div className={`border border-emerald-500/20 bg-black/30 p-4 ${className}`}>
+      <p className="text-xs uppercase tracking-[0.24em] text-emerald-300/70">
+        {label}
+      </p>
+      <p className="mt-2 text-lg font-bold capitalize text-emerald-50">{value}</p>
+    </div>
+  );
+}
+
+function ChipList({
+  values,
+  empty,
+  tone = 'emerald',
+}: {
+  values: string[];
+  empty: string;
+  tone?: 'emerald' | 'cyan' | 'amber' | 'rose';
+}) {
+  const classes =
+    tone === 'cyan'
+      ? 'border-cyan-300/25 bg-cyan-300/10 text-cyan-100'
+      : tone === 'amber'
+        ? 'border-amber-300/35 bg-amber-300/10 text-amber-100'
+        : tone === 'rose'
+          ? 'border-rose-300/35 bg-rose-300/10 text-rose-100'
+          : 'border-emerald-500/20 bg-black/20 text-emerald-100/75';
+
+  if (!values.length) {
+    return <p className="text-sm text-emerald-100/55">{empty}</p>;
+  }
+
+  return (
+    <div className="flex flex-wrap gap-2">
+      {values.map((value) => (
+        <span key={value} className={`border px-2 py-1 text-xs ${classes}`}>
+          {value}
+        </span>
+      ))}
+    </div>
+  );
+}
+
+function DetailSection({
+  title,
+  children,
+}: {
+  title: string;
+  children: ReactNode;
+}) {
+  return (
+    <section className="grid gap-3 border border-emerald-500/20 bg-black/25 p-4">
+      <p className="text-xs uppercase tracking-[0.28em] text-emerald-300">
+        {title}
+      </p>
+      {children}
+    </section>
+  );
+}
+
+function EnhancementDetailPanel({
+  item,
+  selected,
+  favorite,
+  onClose,
+  onAdd,
+  onToggleFavorite,
+  onOpenRelated,
+}: {
+  item: BuildSuiteEnhancedItem;
+  selected: boolean;
+  favorite: boolean;
+  onClose: () => void;
+  onAdd: () => void;
+  onToggleFavorite: () => void;
+  onOpenRelated: (id: string) => void;
+}) {
+  const Icon = iconMap[item.icon] ?? Boxes;
+  const related = relatedItemsFor(item);
+  const useCases = detailUseCases(item);
+  const compatibleAppTypes = compatibilityLabels(item);
+  const compatibleStyles = relatedCatalogItems(item, 'styles').map(
+    (candidate) => candidate.label
+  );
+  const compatibleLayouts = relatedCatalogItems(item, 'layouts').map(
+    (candidate) => candidate.label
+  );
+  const dependencies = itemLabelsForIds(item.compatibleWith?.categories ?? []);
+  const conflicts = itemLabelsForIds(item.conflictsWith ?? []);
+  const pairings = uniqueList([
+    ...related.map((candidate) => candidate.label),
+    ...item.relatedItemIds.map((id) => findBuildSuiteItems([id])[0]?.label),
+  ]).slice(0, 8);
+
+  return (
+    <div
+      className="fixed inset-0 z-50 grid bg-black/72 p-4 backdrop-blur-sm lg:place-items-end"
+      role="dialog"
+      aria-modal="true"
+      aria-label={`${item.label} enhancement details`}
+    >
+      <button
+        type="button"
+        aria-label="Close enhancement details"
+        className="absolute inset-0 cursor-default"
+        onClick={onClose}
+      />
+      <aside className="relative ml-auto flex max-h-[calc(100vh-2rem)] w-full max-w-6xl flex-col overflow-hidden border border-emerald-400/35 bg-black shadow-[0_0_70px_rgba(16,185,129,0.22)]">
+        <div className="flex flex-wrap items-start justify-between gap-4 border-b border-emerald-500/25 bg-emerald-400/5 p-5">
+          <div className="flex items-center gap-4">
+            <span className="grid h-14 w-14 shrink-0 place-items-center border border-emerald-500/40 bg-emerald-400/10 text-emerald-200">
+              <Icon size={24} />
+            </span>
+            <div>
+              <p className="text-xs uppercase tracking-[0.32em] text-emerald-300">
+                {item.category}
+              </p>
+              <h2 className="mt-2 text-3xl font-bold text-emerald-50 sm:text-4xl">
+                {item.label}
+              </h2>
+            </div>
+          </div>
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={onToggleFavorite}
+              className={`grid h-11 w-11 place-items-center border transition hover:-translate-y-0.5 ${
+                favorite
+                  ? 'border-rose-300 bg-rose-300/15 text-rose-100'
+                  : 'border-emerald-500/30 text-emerald-100/60 hover:border-rose-300 hover:text-rose-100'
+              }`}
+            >
+              <Heart size={18} fill={favorite ? 'currentColor' : 'none'} />
+            </button>
+            <button
+              type="button"
+              onClick={onClose}
+              className="grid h-11 w-11 place-items-center border border-emerald-500/30 text-emerald-100/75 transition hover:-translate-y-0.5 hover:border-emerald-300 hover:text-emerald-50"
+            >
+              <X size={18} />
+            </button>
+          </div>
+        </div>
+
+        <div className="overflow-y-auto p-5">
+          <div className="grid gap-6 xl:grid-cols-[0.95fr_1.05fr]">
+            <div className="grid gap-4">
+              <div className="[&>div]:mt-0 [&>div]:h-64">
+                <BuildSuiteCardPreview item={item} />
+              </div>
+              <div className="grid gap-3 md:grid-cols-3">
+                <div className="[&>div]:mt-0">
+                  <BuildSuiteCardPreview item={item} />
+                  <p className="mt-2 text-xs uppercase tracking-[0.2em] text-emerald-300/65">
+                    Primary preview
+                  </p>
+                </div>
+                {related.slice(0, 2).map((relatedItem) => (
+                  <button
+                    key={relatedItem.id}
+                    type="button"
+                    onClick={() => onOpenRelated(relatedItem.id)}
+                    className="text-left [&>div]:mt-0"
+                  >
+                    <BuildSuiteCardPreview item={relatedItem} />
+                    <p className="mt-2 text-xs uppercase tracking-[0.2em] text-emerald-300/65">
+                      Pairing preview
+                    </p>
+                  </button>
+                ))}
+              </div>
+
+              <DetailSection title="What this adds">
+                <p className="text-sm leading-7 text-emerald-50/72">
+                  {item.promptInstruction}
+                </p>
+              </DetailSection>
+
+              <DetailSection title="Tags">
+                <ChipList values={item.tags} empty="No tags listed yet." />
+              </DetailSection>
+            </div>
+
+            <div className="grid gap-5">
+              <p className="text-sm leading-7 text-emerald-50/75">
+                {item.description}
+              </p>
+
+              <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+                <DetailStat label="Difficulty" value={item.difficulty} />
+                <DetailStat label="Popularity" value={ratingText(item)} />
+                <DetailStat
+                  label="AI impact"
+                  value={`${item.estimatedGenerationImpact} generation`}
+                />
+                <DetailStat
+                  label="Complexity"
+                  value={item.complexity ?? item.difficulty}
+                />
+              </div>
+
+              <div className="grid gap-4 lg:grid-cols-2">
+                <DetailSection title="Best use cases">
+                  <ChipList
+                    values={useCases}
+                    empty="This enhancement is broadly useful."
+                    tone="amber"
+                  />
+                </DetailSection>
+                <DetailSection title="Compatible app categories">
+                  <ChipList
+                    values={compatibleAppTypes}
+                    empty="Broad app compatibility."
+                    tone="cyan"
+                  />
+                </DetailSection>
+                <DetailSection title="Compatible UI styles">
+                  <ChipList
+                    values={compatibleStyles}
+                    empty="Works with most UI styles."
+                  />
+                </DetailSection>
+                <DetailSection title="Compatible layouts">
+                  <ChipList
+                    values={compatibleLayouts}
+                    empty="Works with most layout systems."
+                  />
+                </DetailSection>
+              </div>
+
+              <div className="grid gap-4 lg:grid-cols-2">
+                <DetailSection title="Recommended pairings">
+                  <ChipList
+                    values={pairings}
+                    empty="No pairings listed yet."
+                    tone="cyan"
+                  />
+                </DetailSection>
+                <DetailSection title="People also installed">
+                  {related.length ? (
+                    <div className="grid gap-2">
+                      {related.map((relatedItem) => (
+                        <button
+                          key={relatedItem.id}
+                          type="button"
+                          onClick={() => onOpenRelated(relatedItem.id)}
+                          className="flex items-center justify-between border border-cyan-300/20 bg-cyan-300/10 p-3 text-left text-cyan-50 transition hover:-translate-y-0.5 hover:border-cyan-200"
+                        >
+                          <span>{relatedItem.label}</span>
+                          <Sparkles size={14} />
+                        </button>
+                      ))}
+                    </div>
+                  ) : (
+                    <p className="text-sm text-emerald-100/55">
+                      No linked installs yet.
+                    </p>
+                  )}
+                </DetailSection>
+              </div>
+
+              <div className="grid gap-4 lg:grid-cols-2">
+                <DetailSection title="Dependencies">
+                  <ChipList
+                    values={dependencies}
+                    empty="No dependencies listed."
+                    tone="emerald"
+                  />
+                </DetailSection>
+                <DetailSection title="Conflicts">
+                  <ChipList
+                    values={conflicts}
+                    empty="No conflicts listed."
+                    tone="rose"
+                  />
+                </DetailSection>
+              </div>
+
+              <div className="sticky bottom-0 -mx-5 -mb-5 flex flex-wrap items-center justify-between gap-3 border-t border-emerald-500/25 bg-black/92 p-5 backdrop-blur">
+                <p className="text-xs uppercase tracking-[0.24em] text-emerald-300/70">
+                  {selected ? 'Already added to this build' : 'Ready to add'}
+                </p>
+                <button
+                  type="button"
+                  onClick={onAdd}
+                  className={`border px-5 py-3 text-sm font-semibold uppercase tracking-[0.22em] transition hover:-translate-y-0.5 ${
+                    selected
+                      ? 'border-emerald-200 bg-emerald-300 text-black'
+                      : 'border-emerald-300 bg-emerald-300 text-black hover:shadow-[0_16px_42px_rgba(16,185,129,0.24)]'
+                  }`}
+                >
+                  {selected ? 'Added to Build' : 'Add to Build'}
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      </aside>
+    </div>
+  );
 }
 
 function MarketplaceCard({
@@ -518,6 +911,173 @@ function MarketplaceShelf({
             onAdd={() => onAdd(item)}
             onToggleFavorite={() => onToggleFavorite(item.id)}
           />
+        ))}
+      </div>
+    </section>
+  );
+}
+
+function AdvisorRecommendationCard({
+  recommendation,
+  selected,
+  onOpen,
+  onAdd,
+}: {
+  recommendation: BuildSuiteAdvisorRecommendation;
+  selected: boolean;
+  onOpen: () => void;
+  onAdd: () => void;
+}) {
+  const item = recommendation.item;
+  const Icon = iconMap[item.icon] ?? Boxes;
+
+  return (
+    <article className="group grid gap-4 border border-emerald-500/20 bg-black/35 p-4 transition hover:-translate-y-0.5 hover:border-emerald-300/60 hover:bg-emerald-400/10">
+      <div className="flex items-start justify-between gap-3">
+        <div className="flex min-w-0 items-start gap-3">
+          <span
+            className={`grid h-11 w-11 shrink-0 place-items-center border ${accentClasses[item.accentColor]}`}
+          >
+            <Icon size={20} />
+          </span>
+          <div className="min-w-0">
+            <p className="text-xs uppercase tracking-[0.22em] text-emerald-300/70">
+              {item.category}
+            </p>
+            <h3 className="mt-1 text-lg font-bold text-emerald-50">
+              {item.label}
+            </h3>
+          </div>
+        </div>
+        <span className="border border-cyan-300/30 bg-cyan-300/10 px-2 py-1 text-xs uppercase tracking-[0.16em] text-cyan-100">
+          {recommendation.estimatedImplementationImpact} impact
+        </span>
+      </div>
+
+      <p className="text-sm leading-6 text-emerald-50/70">
+        {recommendation.reason}
+      </p>
+
+      <div className="grid gap-2 sm:grid-cols-2">
+        <div className="border border-emerald-500/20 bg-black/25 p-3">
+          <p className="text-xs uppercase tracking-[0.18em] text-emerald-300/60">
+            Confidence
+          </p>
+          <p className="mt-1 text-xl font-bold text-emerald-50">
+            {recommendation.confidenceScore}%
+          </p>
+        </div>
+        <div className="border border-emerald-500/20 bg-black/25 p-3">
+          <p className="text-xs uppercase tracking-[0.18em] text-emerald-300/60">
+            Compatibility
+          </p>
+          <p className="mt-1 text-xl font-bold text-emerald-50">
+            {recommendation.compatibilityScore}%
+          </p>
+        </div>
+      </div>
+
+      <div className="flex flex-wrap gap-2">
+        {item.badges.slice(0, 2).map((badge) => (
+          <span
+            key={badge}
+            className="border border-amber-300/25 bg-amber-300/10 px-2 py-1 text-xs text-amber-100"
+          >
+            {badge}
+          </span>
+        ))}
+        {item.tags.slice(0, 3).map((tag) => (
+          <span
+            key={tag}
+            className="border border-emerald-500/20 bg-black/20 px-2 py-1 text-xs text-emerald-100/70"
+          >
+            {tag}
+          </span>
+        ))}
+      </div>
+
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <button
+          type="button"
+          onClick={onOpen}
+          className="text-xs uppercase tracking-[0.22em] text-emerald-300/80 transition hover:text-emerald-100"
+        >
+          View details
+        </button>
+        <button
+          type="button"
+          onClick={onAdd}
+          className={`border px-4 py-2 text-xs font-semibold uppercase tracking-[0.2em] transition hover:-translate-y-0.5 ${
+            selected
+              ? 'border-emerald-200 bg-emerald-300 text-black'
+              : 'border-emerald-400/50 text-emerald-100 hover:border-emerald-200 hover:bg-emerald-300 hover:text-black'
+          }`}
+        >
+          {selected ? 'Added' : 'Add to Build'}
+        </button>
+      </div>
+    </article>
+  );
+}
+
+function BuildAdvisorPanel({
+  sections,
+  selection,
+  onOpen,
+  onAdd,
+}: {
+  sections: BuildSuiteAdvisorSection[];
+  selection: BuildSuiteSelection;
+  onOpen: (id: string) => void;
+  onAdd: (item: BuildSuiteEnhancedItem) => void;
+}) {
+  const visibleSections = sections.slice(0, 9);
+
+  if (!visibleSections.length) return null;
+
+  return (
+    <section className="grid gap-5 border border-cyan-300/25 bg-[linear-gradient(135deg,rgba(34,211,238,0.1),rgba(16,185,129,0.06),rgba(0,0,0,0.35))] p-5">
+      <div className="flex flex-wrap items-end justify-between gap-3">
+        <div>
+          <p className="text-xs uppercase tracking-[0.38em] text-cyan-200">
+            Intelligent Build Advisor
+          </p>
+          <h2 className="mt-2 text-3xl font-bold text-emerald-50">
+            Metadata-driven recommendations for this build
+          </h2>
+          <p className="mt-2 max-w-3xl text-sm leading-7 text-emerald-50/68">
+            The advisor studies selected app types, styles, layouts, tags,
+            compatibility, and related add-ons. No model calls are made here.
+          </p>
+        </div>
+        <span className="border border-emerald-400/40 bg-emerald-400/10 px-3 py-2 text-xs uppercase tracking-[0.22em] text-emerald-100">
+          {getSelectedIds(selection).size} selected
+        </span>
+      </div>
+
+      <div className="grid gap-6">
+        {visibleSections.map((section) => (
+          <div key={section.id} className="grid gap-3">
+            <div>
+              <h3 className="text-xl font-bold text-emerald-50">
+                {section.title}
+              </h3>
+              <p className="mt-1 text-sm text-emerald-50/58">
+                {section.description}
+              </p>
+            </div>
+            <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
+              {section.recommendations.slice(0, 3).map((recommendation) => (
+                <AdvisorRecommendationCard
+                  key={`${section.id}-${recommendation.item.id}`}
+                  recommendation={recommendation}
+                  selected={itemIsSelected(recommendation.item, selection)}
+                  onOpen={() => onOpen(recommendation.item.id)}
+                  onAdd={() => onAdd(recommendation.item)}
+                />
+              ))}
+            </div>
+          </div>
         ))}
       </div>
     </section>
@@ -1153,6 +1713,11 @@ export default function MatrixBuildSuiteClient() {
     [selection]
   );
 
+  const advisorReport = useMemo(
+    () => getBuildSuiteAdvisorReport(selection),
+    [selection]
+  );
+
   const promptResult = useMemo(
     () => buildMatrixBuildSuitePrompt(selection),
     [selection]
@@ -1262,7 +1827,6 @@ export default function MatrixBuildSuiteClient() {
   const openMarketplaceItem = (id: string) => {
     setDetailItemId(id);
     setRecentIds((current) => [id, ...current.filter((value) => value !== id)].slice(0, 8));
-    setMarketplaceView('detail');
   };
 
   const toggleFavorite = (id: string) => {
@@ -1386,6 +1950,13 @@ export default function MatrixBuildSuiteClient() {
           </div>
         </section>
 
+        <BuildAdvisorPanel
+          sections={advisorReport.sections}
+          selection={selection}
+          onOpen={openMarketplaceItem}
+          onAdd={addMarketplaceItem}
+        />
+
         <MarketplaceShelf
           title="Featured Enhancements"
           subtitle="A curated starting shelf from the full typed catalog."
@@ -1467,6 +2038,13 @@ export default function MatrixBuildSuiteClient() {
         count={filteredMarketplaceItems.length}
       />
 
+      <BuildAdvisorPanel
+        sections={advisorReport.sections.slice(0, 3)}
+        selection={selection}
+        onOpen={openMarketplaceItem}
+        onAdd={addMarketplaceItem}
+      />
+
       {filteredMarketplaceItems.length ? (
         <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
           {filteredMarketplaceItems.map((item) => (
@@ -1488,167 +2066,6 @@ export default function MatrixBuildSuiteClient() {
       )}
     </div>
   );
-
-  const renderMarketplaceDetail = () => {
-    if (!detailItem) return null;
-    const Icon = iconMap[detailItem.icon] ?? Boxes;
-    const related = relatedItemsFor(detailItem);
-    const compatible = compatibilityLabels(detailItem);
-
-    return (
-      <div className="grid gap-6">
-        <button
-          type="button"
-          onClick={() => setMarketplaceView('home')}
-          className="inline-flex w-fit items-center gap-2 border border-emerald-500/35 px-3 py-2 text-xs uppercase tracking-[0.22em] text-emerald-200 transition hover:border-emerald-300 hover:bg-emerald-400/10"
-        >
-          <ArrowLeft size={14} />
-          Marketplace
-        </button>
-
-        <section className="grid gap-6 border border-emerald-500/25 bg-black/35 p-5 lg:grid-cols-[0.9fr_1.1fr]">
-          <div>
-            <BuildSuiteCardPreview item={detailItem} />
-            <div className="mt-4 grid gap-3 border border-emerald-500/20 bg-black/30 p-4">
-              <p className="text-xs uppercase tracking-[0.28em] text-emerald-300">
-                Features
-              </p>
-              <div className="flex flex-wrap gap-2">
-                {detailItem.tags.map((tag) => (
-                  <span
-                    key={tag}
-                    className="border border-emerald-500/20 bg-black/20 px-2 py-1 text-xs text-emerald-100/75"
-                  >
-                    {tag}
-                  </span>
-                ))}
-              </div>
-            </div>
-          </div>
-
-          <div className="grid gap-5">
-            <div className="flex items-start justify-between gap-4">
-              <div className="flex items-center gap-4">
-                <span className="grid h-14 w-14 place-items-center border border-emerald-500/35 bg-emerald-400/10 text-emerald-200">
-                  <Icon size={24} />
-                </span>
-                <div>
-                  <p className="text-xs uppercase tracking-[0.32em] text-emerald-300">
-                    {detailItem.category}
-                  </p>
-                  <h2 className="mt-2 text-4xl font-bold text-emerald-50">
-                    {detailItem.label}
-                  </h2>
-                </div>
-              </div>
-              <button
-                type="button"
-                onClick={() => toggleFavorite(detailItem.id)}
-                className={`grid h-11 w-11 place-items-center border ${
-                  favoriteIds.includes(detailItem.id)
-                    ? 'border-rose-300 bg-rose-300/15 text-rose-100'
-                    : 'border-emerald-500/25 text-emerald-100/55 hover:border-rose-300 hover:text-rose-100'
-                }`}
-              >
-                <Heart
-                  size={18}
-                  fill={favoriteIds.includes(detailItem.id) ? 'currentColor' : 'none'}
-                />
-              </button>
-            </div>
-
-            <p className="text-sm leading-7 text-emerald-50/72">
-              {detailItem.description}
-            </p>
-
-            <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
-              <div className="border border-emerald-500/20 bg-black/25 p-4">
-                <p className="text-xs uppercase tracking-[0.24em] text-emerald-300/70">
-                  Difficulty
-                </p>
-                <p className="mt-2 text-lg font-bold capitalize text-emerald-50">
-                  {detailItem.difficulty}
-                </p>
-              </div>
-              <div className="border border-emerald-500/20 bg-black/25 p-4">
-                <p className="text-xs uppercase tracking-[0.24em] text-emerald-300/70">
-                  Popularity
-                </p>
-                <p className="mt-2 text-lg font-bold text-emerald-50">
-                  {ratingText(detailItem)}
-                </p>
-              </div>
-              <div className="border border-emerald-500/20 bg-black/25 p-4">
-                <p className="text-xs uppercase tracking-[0.24em] text-emerald-300/70">
-                  Impact
-                </p>
-                <p className="mt-2 text-lg font-bold capitalize text-emerald-50">
-                  {detailItem.estimatedGenerationImpact}
-                </p>
-              </div>
-              <div className="border border-emerald-500/20 bg-black/25 p-4">
-                <p className="text-xs uppercase tracking-[0.24em] text-emerald-300/70">
-                  Status
-                </p>
-                <p className="mt-2 text-lg font-bold text-emerald-50">
-                  {itemIsSelected(detailItem, selection) ? 'Added' : 'Available'}
-                </p>
-              </div>
-            </div>
-
-            <div className="grid gap-3">
-              <p className="text-xs uppercase tracking-[0.24em] text-emerald-300">
-                Compatible app types
-              </p>
-              <div className="flex flex-wrap gap-2">
-                {compatible.length ? (
-                  compatible.map((label) => (
-                    <span
-                      key={label}
-                      className="border border-cyan-300/25 bg-cyan-300/10 px-2 py-1 text-xs text-cyan-100"
-                    >
-                      {label}
-                    </span>
-                  ))
-                ) : (
-                  <span className="text-sm text-emerald-100/60">
-                    Broad compatibility
-                  </span>
-                )}
-              </div>
-            </div>
-
-            <div className="grid gap-3">
-              <p className="text-xs uppercase tracking-[0.24em] text-emerald-300">
-                People also added
-              </p>
-              <div className="grid gap-3 sm:grid-cols-2">
-                {related.map((item) => (
-                  <button
-                    key={item.id}
-                    type="button"
-                    onClick={() => openMarketplaceItem(item.id)}
-                    className="flex items-center justify-between border border-cyan-300/20 bg-cyan-300/10 p-3 text-left text-cyan-50 transition hover:-translate-y-0.5 hover:border-cyan-200"
-                  >
-                    <span>{item.label}</span>
-                    <Sparkles size={14} />
-                  </button>
-                ))}
-              </div>
-            </div>
-
-            <button
-              type="button"
-              onClick={() => addMarketplaceItem(detailItem)}
-              className="w-fit border border-emerald-300 bg-emerald-300 px-5 py-3 text-sm font-semibold uppercase tracking-[0.22em] text-black transition hover:-translate-y-0.5"
-            >
-              {itemIsSelected(detailItem, selection) ? 'Added to Build' : 'Add to Build'}
-            </button>
-          </div>
-        </section>
-      </div>
-    );
-  };
 
   const renderCurrentStep = () => {
     if (activeStep === 0) {
@@ -1855,7 +2272,6 @@ export default function MatrixBuildSuiteClient() {
         <div className="mt-8">
           {marketplaceView === 'home' ? renderMarketplaceHome() : null}
           {marketplaceView === 'browse' ? renderMarketplaceBrowse() : null}
-          {marketplaceView === 'detail' ? renderMarketplaceDetail() : null}
           {marketplaceView === 'wizard' ? (
             <div className="grid gap-6 lg:grid-cols-[300px_1fr]">
               <StepRail activeStep={activeStep} setActiveStep={setActiveStep} />
@@ -1898,6 +2314,17 @@ export default function MatrixBuildSuiteClient() {
             </div>
           ) : null}
         </div>
+        {detailItem ? (
+          <EnhancementDetailPanel
+            item={detailItem}
+            selected={itemIsSelected(detailItem, selection)}
+            favorite={favoriteIds.includes(detailItem.id)}
+            onClose={() => setDetailItemId(undefined)}
+            onAdd={() => addMarketplaceItem(detailItem)}
+            onToggleFavorite={() => toggleFavorite(detailItem.id)}
+            onOpenRelated={openMarketplaceItem}
+          />
+        ) : null}
       </div>
     </main>
   );
