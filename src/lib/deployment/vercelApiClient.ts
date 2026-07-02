@@ -82,6 +82,20 @@ function safeJson(value: unknown): string {
   }
 }
 
+function normalizeRootDirectory(value?: string): string | undefined {
+  const trimmed = value?.trim();
+  if (!trimmed || trimmed === '.') return undefined;
+  const withoutDotSlash = trimmed.replace(/^\.\//, '');
+  if (
+    !withoutDotSlash ||
+    withoutDotSlash.startsWith('/') ||
+    withoutDotSlash.includes('../')
+  ) {
+    return undefined;
+  }
+  return withoutDotSlash;
+}
+
 export function redactToken(token?: string | null): string {
   if (!token) return '[no-token]';
   return `[redacted-token:${token.length}]`;
@@ -169,7 +183,7 @@ export function createVercelApiClient({
       body: safeJson({
         name: config.projectName,
         framework: config.framework === 'nextjs' ? 'nextjs' : undefined,
-        rootDirectory: config.rootDirectory,
+        rootDirectory: normalizeRootDirectory(config.rootDirectory),
         buildCommand: config.buildCommand,
         outputDirectory: config.outputDirectory,
       }),
@@ -218,7 +232,7 @@ export function createVercelApiClient({
           framework: project.framework,
           buildCommand: project.buildCommand,
           outputDirectory: project.outputDirectory,
-          rootDirectory: project.rootDirectory,
+          rootDirectory: normalizeRootDirectory(project.rootDirectory),
         },
       }),
     }, { teamId });

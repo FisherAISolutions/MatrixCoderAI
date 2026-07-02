@@ -53,11 +53,15 @@ import {
   type VercelDeploymentDryRunSummary,
 } from '@/lib/deployment/vercelDeploymentRequest';
 import {
-  createOrFindVercelProjectForDryRun,
-  runVercelDeploymentFlow,
-  testVercelConnection,
-  type VercelFlowLogEntry,
-} from '@/lib/deployment/vercelDeploymentFlow';
+  createOrFindVercelProjectViaServer,
+  deployToVercelViaServer,
+  testVercelConnectionViaServer,
+} from '@/lib/deployment/vercelDeploymentApi';
+import {
+  loadVercelDeploymentMetadata,
+  saveVercelDeploymentMetadata,
+} from '@/lib/deployment/vercelDeploymentMetadata';
+import type { VercelFlowLogEntry } from '@/lib/deployment/vercelDeploymentFlow';
 import {
   getAndroidReadiness,
   type AndroidReadinessStatus,
@@ -363,12 +367,28 @@ export default function DeploymentCenterClient() {
 
   useEffect(() => {
     const refresh = () => {
-      setSnapshot(loadDeploymentWorkspaceSnapshot() ?? emptySnapshot);
+      const currentSnapshot = loadDeploymentWorkspaceSnapshot() ?? emptySnapshot;
+      setSnapshot(currentSnapshot);
       setHistoryEntries(loadDeploymentHistory());
       const loadedConfig = loadVercelLocalConfig();
       setVercelConfig(loadedConfig);
       setVercelTeamIdInput(loadedConfig?.teamId ?? '');
       setVercelProjectNameInput(loadedConfig?.projectName ?? '');
+      const metadata = loadVercelDeploymentMetadata(currentSnapshot.projectName);
+      if (metadata) {
+        setVercelProjectId(metadata.projectId ?? null);
+        setVercelDeploymentUrl(metadata.deploymentUrl ?? null);
+        setVercelProductionUrl(metadata.productionUrl ?? null);
+        setVercelLastDeploymentAt(metadata.lastDeploymentTime);
+        setVercelDeploymentLogs(metadata.logs);
+        setVercelLiveStatus(
+          metadata.status === 'ready'
+            ? 'Ready'
+            : metadata.status === 'timeout'
+              ? 'Timed out'
+              : 'Failed'
+        );
+      }
     };
     refresh();
     window.addEventListener('storage', refresh);
@@ -525,6 +545,18 @@ export default function DeploymentCenterClient() {
     return null;
   }
 
+  function handleVercelActionError(action: string, error: unknown) {
+    const details =
+      error instanceof Error ? error.message : 'Vercel action failed.';
+    setVercelLiveStatus('Failed');
+    setVercelLiveMessage(details);
+    recordHistory({
+      action,
+      status: 'Failed',
+      details,
+    });
+  }
+
   async function handleTestVercelConnection() {
     if (vercelActionBusy) return;
     const token = getVercelActionToken('Vercel connection test failed');
@@ -539,24 +571,29 @@ export default function DeploymentCenterClient() {
       details: 'Checking the configured Vercel token.',
     });
 
-    const result = await testVercelConnection({ token });
-    setVercelDeploymentLogs(result.logs);
-    setVercelLiveStatus(result.success ? 'Connection OK' : 'Failed');
-    setVercelLiveMessage(
-      result.success
-        ? `Connected as ${result.user?.email ?? result.user?.username ?? result.user?.id}.`
-        : result.error ?? 'Vercel connection failed.'
-    );
-    recordHistory({
-      action: result.success
-        ? 'Vercel connection test passed'
-        : 'Vercel connection test failed',
-      status: result.success ? 'Passed' : 'Failed',
-      details: result.success
-        ? 'Vercel token was accepted.'
-        : result.error ?? 'Vercel connection failed.',
-    });
-    setVercelActionBusy(false);
+    try {
+      const result = await testVercelConnectionViaServer(token);
+      setVercelDeploymentLogs(result.logs);
+      setVercelLiveStatus(result.success ? 'Connection OK' : 'Failed');
+      setVercelLiveMessage(
+        result.success
+          ? `Connected as ${result.user?.email ?? result.user?.username ?? result.user?.id}.`
+          : result.error ?? 'Vercel connection failed.'
+      );
+      recordHistory({
+        action: result.success
+          ? 'Vercel connection test passed'
+          : 'Vercel connection test failed',
+        status: result.success ? 'Passed' : 'Failed',
+        details: result.success
+          ? 'Vercel token was accepted.'
+          : result.error ?? 'Vercel connection failed.',
+      });
+    } catch (error) {
+      handleVercelActionError('Vercel connection test failed', error);
+    } finally {
+      setVercelActionBusy(false);
+    }
   }
 
   async function handleCreateOrFindVercelProject() {
@@ -586,25 +623,30 @@ export default function DeploymentCenterClient() {
       details: `Preparing project ${dryRun.projectName}.`,
     });
 
-    const result = await createOrFindVercelProjectForDryRun({ dryRun, token });
-    setVercelDeploymentLogs(result.logs);
-    setVercelLiveStatus(result.success ? 'Project ready' : 'Failed');
-    setVercelLiveMessage(
-      result.success
-        ? `Project ready: ${result.project?.name}.`
-        : result.error ?? 'Vercel project preparation failed.'
-    );
-    setVercelProjectId(result.project?.id ?? null);
-    recordHistory({
-      action: result.success
-        ? 'Vercel project ready'
-        : 'Vercel project preparation failed',
-      status: result.success ? 'Ready' : 'Failed',
-      details: result.success
-        ? `Project ${result.project?.name} is ready.`
-        : result.error ?? 'Vercel project preparation failed.',
-    });
-    setVercelActionBusy(false);
+    try {
+      const result = await createOrFindVercelProjectViaServer(token, dryRun);
+      setVercelDeploymentLogs(result.logs);
+      setVercelLiveStatus(result.success ? 'Project ready' : 'Failed');
+      setVercelLiveMessage(
+        result.success
+          ? `Project ready: ${result.project?.name}.`
+          : result.error ?? 'Vercel project preparation failed.'
+      );
+      setVercelProjectId(result.project?.id ?? null);
+      recordHistory({
+        action: result.success
+          ? 'Vercel project ready'
+          : 'Vercel project preparation failed',
+        status: result.success ? 'Ready' : 'Failed',
+        details: result.success
+          ? `Project ${result.project?.name} is ready.`
+          : result.error ?? 'Vercel project preparation failed.',
+      });
+    } catch (error) {
+      handleVercelActionError('Vercel project preparation failed', error);
+    } finally {
+      setVercelActionBusy(false);
+    }
   }
 
   async function handleDeployToVercel() {
@@ -635,41 +677,53 @@ export default function DeploymentCenterClient() {
       details: `${dryRun.fileCount} files will be uploaded for ${dryRun.projectName}.`,
     });
 
-    const result = await runVercelDeploymentFlow({
-      dryRun,
-      token,
-      onLog: (entry) =>
-        setVercelDeploymentLogs((logs) => [...logs, entry].slice(-20)),
-    });
-    setVercelDeploymentLogs(result.logs);
-    setVercelLiveStatus(
-      result.status === 'ready'
-        ? 'Ready'
-        : result.status === 'timeout'
-          ? 'Timed out'
-          : 'Failed'
-    );
-    setVercelLiveMessage(
-      result.success
-        ? 'Vercel deployment is ready.'
-        : result.error ?? 'Vercel deployment failed.'
-    );
-    setVercelProjectId(result.projectId ?? vercelProjectId);
-    setVercelDeploymentUrl(result.deploymentUrl ?? null);
-    setVercelProductionUrl(result.productionUrl ?? null);
-    setVercelLastDeploymentAt(result.lastDeploymentTime);
-    recordHistory({
-      action: result.success ? 'Vercel deployment ready' : 'Vercel deployment failed',
-      status: result.success
-        ? 'Passed'
-        : result.status === 'timeout'
-          ? 'Not ready'
-          : 'Failed',
-      details: result.success
-        ? result.productionUrl ?? 'Vercel deployment completed.'
-        : result.error ?? 'Vercel deployment failed.',
-    });
-    setVercelActionBusy(false);
+    try {
+      const result = await deployToVercelViaServer(token, dryRun);
+      setVercelDeploymentLogs(result.logs);
+      setVercelLiveStatus(
+        result.status === 'ready'
+          ? 'Ready'
+          : result.status === 'timeout'
+            ? 'Timed out'
+            : 'Failed'
+      );
+      setVercelLiveMessage(
+        result.success
+          ? 'Vercel deployment is ready.'
+          : result.error ?? 'Vercel deployment failed.'
+      );
+      setVercelProjectId(result.projectId ?? vercelProjectId);
+      setVercelDeploymentUrl(result.deploymentUrl ?? null);
+      setVercelProductionUrl(result.productionUrl ?? null);
+      setVercelLastDeploymentAt(result.lastDeploymentTime);
+      saveVercelDeploymentMetadata({
+        projectName: result.projectName,
+        projectId: result.projectId,
+        deploymentId: result.deploymentId,
+        deploymentUrl: result.deploymentUrl,
+        productionUrl: result.productionUrl,
+        status: result.status,
+        lastDeploymentTime: result.lastDeploymentTime,
+        logs: result.logs,
+      });
+      recordHistory({
+        action: result.success
+          ? 'Vercel deployment ready'
+          : 'Vercel deployment failed',
+        status: result.success
+          ? 'Passed'
+          : result.status === 'timeout'
+            ? 'Not ready'
+            : 'Failed',
+        details: result.success
+          ? result.productionUrl ?? 'Vercel deployment completed.'
+          : result.error ?? 'Vercel deployment failed.',
+      });
+    } catch (error) {
+      handleVercelActionError('Vercel deployment failed', error);
+    } finally {
+      setVercelActionBusy(false);
+    }
   }
 
   useEffect(() => {

@@ -40,7 +40,6 @@ function createProjectConfig(
   return {
     projectName,
     framework: 'nextjs',
-    rootDirectory: '.',
     buildCommand: 'npm run build',
     teamId,
   };

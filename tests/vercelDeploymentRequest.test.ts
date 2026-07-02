@@ -66,9 +66,9 @@ describe('Vercel deployment dry-run request builder', () => {
     expect(dryRun.request?.project).toMatchObject({
       projectName: 'matrix-demo',
       framework: 'nextjs',
-      rootDirectory: '.',
       teamId: 'team_123',
     });
+    expect(dryRun.request?.project.rootDirectory).toBeUndefined();
     expect(JSON.stringify(dryRun.request)).not.toContain('token');
   });
 

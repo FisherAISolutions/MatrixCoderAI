@@ -87,6 +87,7 @@ describe('Vercel API client foundation', () => {
       'https://mock.vercel.test/v10/projects?teamId=team_1'
     );
     expect(createCall[1]?.method).toBe('POST');
+    expect(JSON.parse(String(createCall[1]?.body)).rootDirectory).toBeUndefined();
   });
 
   it('shapes upload, deployment, and polling requests with mocked responses', async () => {
@@ -128,6 +129,7 @@ describe('Vercel API client foundation', () => {
       id: 'dpl_1',
       state: 'READY',
     });
+    const deploymentBody = JSON.parse(String(fetchMock.mock.calls[1][1]?.body));
 
     expect(String(fetchMock.mock.calls[0][0])).toBe(
       'https://mock.vercel.test/v2/files?teamId=team_1'
@@ -138,6 +140,7 @@ describe('Vercel API client foundation', () => {
     expect(String(fetchMock.mock.calls[2][0])).toBe(
       'https://mock.vercel.test/v13/deployments/dpl_1?teamId=team_1'
     );
+    expect(deploymentBody.projectSettings.rootDirectory).toBeUndefined();
   });
 
   it('redacts tokens from API error details', async () => {

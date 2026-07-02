@@ -17,7 +17,7 @@ export interface VercelEnvironmentStatus {
 export interface VercelProjectConfig {
   projectName: string;
   framework: 'nextjs' | 'unknown';
-  rootDirectory: string;
+  rootDirectory?: string;
   buildCommand?: string;
   outputDirectory?: string;
   projectId?: string;
