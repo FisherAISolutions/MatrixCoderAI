@@ -45,6 +45,7 @@ import {
   createGenerationCancellationScope,
   type GenerationCancellationScope,
 } from '@/lib/generation/cancellation';
+import { readMatrixBuildSuiteChatHandoff } from '@/lib/build-suite/chatHandoff';
 
 function logGenerationConsistency(
   label: string,
@@ -1077,6 +1078,7 @@ export default function ChatComposer({
   const [selectedAgent, setSelectedAgent] = useState<AgentType | 'auto'>('auto');
   const [showAgentMenu, setShowAgentMenu] = useState(false);
   const [generationPipelineActive, setGenerationPipelineActive] = useState(false);
+  const [chatHandoffNotice, setChatHandoffNotice] = useState<string | null>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const streamMsgIdRef = useRef<string>('');
   const accumulatedRef = useRef<string>('');
@@ -1098,6 +1100,17 @@ export default function ChatComposer({
     consumedInitialPromptRef.current = true;
     setInput((current) => (current.trim() ? current : initialPrompt.trim()));
   }, [initialPrompt]);
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    const handoff = readMatrixBuildSuiteChatHandoff(window.sessionStorage);
+    if (!handoff) return;
+
+    consumedInitialPromptRef.current = true;
+    setInput(handoff.prompt);
+    setChatHandoffNotice(handoff.message);
+    textareaRef.current?.focus();
+  }, []);
 
   useEffect(() => {
     pushTerminalLog({
@@ -2489,6 +2502,11 @@ export default function ChatComposer({
   return (
     <div className="workspace-composer flex-shrink-0 border-t border-matrix-border bg-matrix-bg px-4 py-3">
       <div className="workspace-composer-frame neon-border-muted border rounded-sm bg-matrix-surface transition-all duration-150">
+        {chatHandoffNotice ? (
+          <div className="border-b border-matrix-border bg-matrix-green-ghost px-4 py-2 text-xs font-mono text-matrix-green">
+            {chatHandoffNotice}
+          </div>
+        ) : null}
         <textarea
           ref={textareaRef}
           value={input}

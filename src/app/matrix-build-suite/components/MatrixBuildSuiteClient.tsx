@@ -2,6 +2,7 @@
 
 import type { ReactNode } from 'react';
 import { useEffect, useMemo, useState } from 'react';
+import { useRouter } from 'next/navigation';
 import type { LucideIcon } from 'lucide-react';
 import {
   AppWindow,
@@ -45,6 +46,10 @@ import {
   type BuildSuiteAdvisorRecommendation,
   type BuildSuiteAdvisorSection,
 } from '@/lib/build-suite/advisor';
+import {
+  MATRIX_BUILD_SUITE_CHAT_HANDOFF_MESSAGE,
+  writeMatrixBuildSuiteChatHandoff,
+} from '@/lib/build-suite/chatHandoff';
 import { filterPalettesByAppearance } from '@/lib/build-suite/palettes';
 import { buildMatrixBuildSuitePrompt } from '@/lib/build-suite/promptBuilder';
 import type {
@@ -1632,6 +1637,7 @@ function OptionBrowser({
 }
 
 export default function MatrixBuildSuiteClient() {
+  const router = useRouter();
   const [activeStep, setActiveStep] = useState(0);
   const [marketplaceView, setMarketplaceView] =
     useState<MarketplaceView>('home');
@@ -1639,6 +1645,9 @@ export default function MatrixBuildSuiteClient() {
   const [favoriteIds, setFavoriteIds] = useState<string[]>([]);
   const [recentIds, setRecentIds] = useState<string[]>([]);
   const [marketplaceQuery, setMarketplaceQuery] = useState('');
+  const [chatHandoffStatus, setChatHandoffStatus] = useState<string | null>(
+    null
+  );
   const [marketplaceCategory, setMarketplaceCategory] = useState('all');
   const [marketplaceDifficulty, setMarketplaceDifficulty] = useState('all');
   const [marketplaceImpact, setMarketplaceImpact] = useState('all');
@@ -1722,6 +1731,24 @@ export default function MatrixBuildSuiteClient() {
     () => buildMatrixBuildSuitePrompt(selection),
     [selection]
   );
+
+  const insertPromptIntoChat = () => {
+    try {
+      if (typeof window === 'undefined') return;
+      writeMatrixBuildSuiteChatHandoff(
+        window.sessionStorage,
+        promptResult.prompt
+      );
+      setChatHandoffStatus(MATRIX_BUILD_SUITE_CHAT_HANDOFF_MESSAGE);
+      router.push('/chat-workspace');
+    } catch (error) {
+      setChatHandoffStatus(
+        error instanceof Error
+          ? error.message
+          : 'Could not prepare the prompt for chat.'
+      );
+    }
+  };
 
   const canAdvance = useMemo(() => {
     if (activeStep === 0) return Boolean(selection.appTypeId);
@@ -2212,6 +2239,30 @@ export default function MatrixBuildSuiteClient() {
               </div>
             );
           })}
+        </div>
+        <div className="flex flex-wrap items-center justify-between gap-3 border border-emerald-500/25 bg-black/35 p-4">
+          <div>
+            <p className="text-sm font-semibold text-emerald-100">
+              Ready to use this prompt?
+            </p>
+            <p className="mt-1 text-xs text-emerald-100/65">
+              Insert it into Chat Workspace, review it, then press Send when
+              ready.
+            </p>
+            {chatHandoffStatus ? (
+              <p className="mt-2 text-xs text-emerald-300">
+                {chatHandoffStatus}
+              </p>
+            ) : null}
+          </div>
+          <button
+            type="button"
+            onClick={insertPromptIntoChat}
+            disabled={promptResult.missingSelection.length > 0}
+            className="border border-emerald-300 bg-emerald-300 px-5 py-3 text-xs font-bold uppercase tracking-[0.24em] text-black transition hover:-translate-y-0.5 hover:bg-emerald-200 disabled:cursor-not-allowed disabled:border-emerald-500/25 disabled:bg-emerald-500/10 disabled:text-emerald-100/35"
+          >
+            Insert into Chat
+          </button>
         </div>
         <textarea
           value={promptResult.prompt}
