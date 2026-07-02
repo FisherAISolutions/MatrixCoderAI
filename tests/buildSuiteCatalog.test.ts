@@ -122,17 +122,36 @@ describe('build suite catalog', () => {
   it('defines featured collections with matching catalog items', () => {
     expect(featuredBuildSuiteCollections.map((collection) => collection.id)).toEqual([
       'trending',
+      'new-additions',
       'most-popular',
       'beginner',
       'best-saas',
       'best-mobile',
       'best-ai',
+      'popular-dashboards',
+      'popular-ecommerce',
+      'popular-crm',
       'production-ready',
     ]);
 
     for (const collection of featuredBuildSuiteCollections) {
       expect(getBuildSuiteCollectionItems(collection.id).length).toBeGreaterThan(0);
     }
+  });
+
+  it('derives marketplace shelves for domain browsing', () => {
+    expect(
+      getBuildSuiteCollectionItems('popular-crm').map((item) => item.id)
+    ).toEqual(expect.arrayContaining(['personal-crm', 'crm-layout']));
+    expect(
+      getBuildSuiteCollectionItems('popular-ecommerce').map((item) => item.id)
+    ).toEqual(expect.arrayContaining(['ecommerce-layout', 'stripe-ready']));
+    expect(
+      getBuildSuiteCollectionItems('popular-dashboards').map((item) => item.id)
+    ).toEqual(expect.arrayContaining(['saas-dashboard', 'charts-metrics']));
+    expect(getBuildSuiteCollectionItems('new-additions').length).toBeGreaterThan(
+      0
+    );
   });
 
   it('returns data-driven recommendations from selected enhancement metadata', () => {
