@@ -1,7 +1,7 @@
 'use client';
 
-import type { ReactNode } from 'react';
-import { useEffect, useMemo, useState } from 'react';
+import type { ChangeEvent, ReactNode } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import type { LucideIcon } from 'lucide-react';
 import {
@@ -50,8 +50,28 @@ import {
   MATRIX_BUILD_SUITE_CHAT_HANDOFF_MESSAGE,
   writeMatrixBuildSuiteChatHandoff,
 } from '@/lib/build-suite/chatHandoff';
+import {
+  buildSuiteTemplatePacks,
+  cloneBuildSuiteTemplateSelection,
+  type BuildSuiteTemplatePack,
+} from '@/lib/build-suite/templates';
 import { filterPalettesByAppearance } from '@/lib/build-suite/palettes';
 import { buildMatrixBuildSuitePrompt } from '@/lib/build-suite/promptBuilder';
+import {
+  createBuildSuiteSavedBuild,
+  deleteBuildSuiteSavedBuild,
+  duplicateBuildSuiteSavedBuild,
+  exportBuildSuiteSavedBuild,
+  importBuildSuiteSavedBuild,
+  loadBuildSuiteSavedBuilds,
+  renameBuildSuiteSavedBuild,
+  saveBuildSuiteSavedBuild,
+  searchSortAndFilterBuildSuiteSavedBuilds,
+  toggleBuildSuiteSavedBuildFavorite,
+  type BuildSuiteSavedBuild,
+  type BuildSuiteSavedBuildFilters,
+  type BuildSuiteSavedBuildSort,
+} from '@/lib/build-suite/savedBuilds';
 import type {
   BuildSuiteAppearance,
   BuildSuiteAccentColor,
@@ -341,6 +361,16 @@ function friendlyId(id: string): string {
     .filter(Boolean)
     .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
     .join(' ');
+}
+
+function formatSavedBuildDate(value: string): string {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return 'Unknown';
+  return date.toLocaleDateString(undefined, {
+    month: 'short',
+    day: 'numeric',
+    year: 'numeric',
+  });
 }
 
 function itemLabelsForIds(ids: string[] = []): string[] {
@@ -1654,6 +1684,25 @@ export default function MatrixBuildSuiteClient() {
   const [marketplaceAppType, setMarketplaceAppType] = useState('all');
   const [marketplaceSort, setMarketplaceSort] =
     useState<MarketplaceSort>('popularity');
+  const [previewTemplateId, setPreviewTemplateId] = useState<string>(
+    buildSuiteTemplatePacks[0]?.id ?? ''
+  );
+  const [templateStatus, setTemplateStatus] = useState(
+    'Template Packs ready.'
+  );
+  const [savedBuilds, setSavedBuilds] = useState<BuildSuiteSavedBuild[]>([]);
+  const [savedBuildSource, setSavedBuildSource] = useState<'supabase' | 'local'>(
+    'local'
+  );
+  const [savedBuildStatus, setSavedBuildStatus] = useState(
+    'Build Library ready.'
+  );
+  const [buildLibraryQuery, setBuildLibraryQuery] = useState('');
+  const [buildLibrarySort, setBuildLibrarySort] =
+    useState<BuildSuiteSavedBuildSort>('updated');
+  const [buildLibraryFilters, setBuildLibraryFilters] =
+    useState<BuildSuiteSavedBuildFilters>({});
+  const importBuildInputRef = useRef<HTMLInputElement>(null);
   const [searchQuery, setSearchQuery] = useState('');
   const [categoryFilter, setCategoryFilter] = useState('all');
   const [complexityFilter, setComplexityFilter] = useState('all');
@@ -1673,6 +1722,26 @@ export default function MatrixBuildSuiteClient() {
     return () => {
       document.documentElement.style.overflow = previousHtmlOverflow;
       document.body.style.overflow = previousBodyOverflow;
+    };
+  }, []);
+
+  useEffect(() => {
+    let active = true;
+    loadBuildSuiteSavedBuilds().then((result) => {
+      if (!active) return;
+      setSavedBuilds(result.builds);
+      setSavedBuildSource(result.source);
+      setSavedBuildStatus(
+        result.warning
+          ? `Using local Build Library fallback. ${result.warning}`
+          : result.source === 'supabase'
+            ? 'Build Library synced with Supabase.'
+            : 'Build Library using local storage fallback.'
+      );
+    });
+
+    return () => {
+      active = false;
     };
   }, []);
 
@@ -1731,6 +1800,208 @@ export default function MatrixBuildSuiteClient() {
     () => buildMatrixBuildSuitePrompt(selection),
     [selection]
   );
+
+  const visibleSavedBuilds = useMemo(
+    () =>
+      searchSortAndFilterBuildSuiteSavedBuilds(savedBuilds, {
+        query: buildLibraryQuery,
+        sort: buildLibrarySort,
+        filters: buildLibraryFilters,
+      }),
+    [savedBuilds, buildLibraryQuery, buildLibrarySort, buildLibraryFilters]
+  );
+  const previewTemplate = useMemo(
+    () =>
+      buildSuiteTemplatePacks.find(
+        (template) => template.id === previewTemplateId
+      ) ?? buildSuiteTemplatePacks[0],
+    [previewTemplateId]
+  );
+
+  const applySavedBuildResult = (
+    result: Awaited<ReturnType<typeof saveBuildSuiteSavedBuild>>,
+    successMessage: string
+  ) => {
+    setSavedBuilds(result.builds);
+    setSavedBuildSource(result.source);
+    setSavedBuildStatus(
+      result.warning
+        ? `${successMessage} ${result.warning}`
+        : `${successMessage} ${
+            result.source === 'supabase'
+              ? 'Synced with Supabase.'
+              : 'Saved locally.'
+          }`
+    );
+  };
+
+  const restoreSavedSelection = (build: BuildSuiteSavedBuild) => {
+    setSelection({
+      ...build.selection,
+      componentIds: [...build.selection.componentIds],
+      aiFeatureIds: [...build.selection.aiFeatureIds],
+      integrationIds: [...build.selection.integrationIds],
+    });
+    setMarketplaceView('wizard');
+    setActiveStep(steps.length - 1);
+    setSavedBuildStatus(`Loaded "${build.name}" into the Build Wizard.`);
+  };
+
+  const applyTemplateSelection = (template: BuildSuiteTemplatePack) => {
+    setSelection(cloneBuildSuiteTemplateSelection(template));
+    setMarketplaceView('wizard');
+    setActiveStep(steps.length - 1);
+    setTemplateStatus(`Applied "${template.label}". Review and adjust before sending.`);
+  };
+
+  const saveCurrentBuild = async () => {
+    const defaultName =
+      promptResult.selectedItems[0]?.label ?? 'Matrix Build Suite Build';
+    const name = window.prompt('Name this saved build', defaultName);
+    if (!name) return;
+
+    try {
+      const build = createBuildSuiteSavedBuild({
+        name,
+        selection,
+        advisorReport,
+        finalPrompt: promptResult.prompt,
+      });
+      const result = await saveBuildSuiteSavedBuild(build, savedBuilds);
+      applySavedBuildResult(result, `Saved "${build.name}".`);
+    } catch (error) {
+      setSavedBuildStatus(
+        error instanceof Error ? error.message : 'Could not save this build.'
+      );
+    }
+  };
+
+  const updateSavedBuild = async (
+    build: BuildSuiteSavedBuild,
+    successMessage: string
+  ) => {
+    const result = await saveBuildSuiteSavedBuild(build, savedBuilds);
+    applySavedBuildResult(result, successMessage);
+  };
+
+  const renameSavedBuild = async (build: BuildSuiteSavedBuild) => {
+    const name = window.prompt('Rename saved build', build.name);
+    if (!name) return;
+    try {
+      await updateSavedBuild(
+        renameBuildSuiteSavedBuild(build, name),
+        `Renamed "${build.name}".`
+      );
+    } catch (error) {
+      setSavedBuildStatus(
+        error instanceof Error ? error.message : 'Could not rename this build.'
+      );
+    }
+  };
+
+  const duplicateSavedBuild = async (build: BuildSuiteSavedBuild) => {
+    const duplicate = duplicateBuildSuiteSavedBuild(build);
+    await updateSavedBuild(duplicate, `Duplicated "${build.name}".`);
+  };
+
+  const toggleSavedBuildFavorite = async (build: BuildSuiteSavedBuild) => {
+    const updated = toggleBuildSuiteSavedBuildFavorite(build);
+    await updateSavedBuild(
+      updated,
+      updated.favorite
+        ? `Favorited "${build.name}".`
+        : `Removed "${build.name}" from favorites.`
+    );
+  };
+
+  const deleteSavedBuild = async (build: BuildSuiteSavedBuild) => {
+    if (!window.confirm(`Delete "${build.name}"?`)) return;
+    const result = await deleteBuildSuiteSavedBuild(build.id, savedBuilds);
+    setSavedBuilds(result.builds);
+    setSavedBuildSource(result.source);
+    setSavedBuildStatus(
+      result.warning
+        ? `Deleted "${build.name}" locally. ${result.warning}`
+        : `Deleted "${build.name}".`
+    );
+  };
+
+  const exportSavedBuild = (build: BuildSuiteSavedBuild) => {
+    const blob = new Blob([exportBuildSuiteSavedBuild(build)], {
+      type: 'application/json',
+    });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = `${build.name.toLowerCase().replace(/[^a-z0-9]+/g, '-') || 'matrix-build'}.json`;
+    link.click();
+    URL.revokeObjectURL(url);
+    setSavedBuildStatus(`Exported "${build.name}" as JSON.`);
+  };
+
+  const importSavedBuild = async (
+    event: ChangeEvent<HTMLInputElement>
+  ) => {
+    const file = event.target.files?.[0];
+    event.target.value = '';
+    if (!file) return;
+
+    try {
+      const text = await file.text();
+      const build = importBuildSuiteSavedBuild(text);
+      const result = await saveBuildSuiteSavedBuild(build, savedBuilds);
+      applySavedBuildResult(result, `Imported "${build.name}".`);
+    } catch (error) {
+      setSavedBuildStatus(
+        error instanceof Error ? error.message : 'Could not import this build.'
+      );
+    }
+  };
+
+  const saveTemplateAsBuild = async (template: BuildSuiteTemplatePack) => {
+    const templateSelection = cloneBuildSuiteTemplateSelection(template);
+    const templatePrompt = buildMatrixBuildSuitePrompt(templateSelection);
+    const templateAdvisorReport = getBuildSuiteAdvisorReport(templateSelection);
+
+    try {
+      const build = createBuildSuiteSavedBuild({
+        name: template.label,
+        selection: templateSelection,
+        advisorReport: templateAdvisorReport,
+        finalPrompt: templatePrompt.prompt,
+      });
+      const result = await saveBuildSuiteSavedBuild(build, savedBuilds);
+      applySavedBuildResult(result, `Saved "${template.label}" as a Build.`);
+      setTemplateStatus(`Saved "${template.label}" to the Build Library.`);
+    } catch (error) {
+      setTemplateStatus(
+        error instanceof Error
+          ? error.message
+          : 'Could not save this template as a build.'
+      );
+    }
+  };
+
+  const insertTemplateIntoChat = (template: BuildSuiteTemplatePack) => {
+    try {
+      if (typeof window === 'undefined') return;
+      const templatePrompt = buildMatrixBuildSuitePrompt(
+        cloneBuildSuiteTemplateSelection(template)
+      );
+      writeMatrixBuildSuiteChatHandoff(
+        window.sessionStorage,
+        templatePrompt.prompt
+      );
+      setChatHandoffStatus(MATRIX_BUILD_SUITE_CHAT_HANDOFF_MESSAGE);
+      router.push('/chat-workspace');
+    } catch (error) {
+      setTemplateStatus(
+        error instanceof Error
+          ? error.message
+          : 'Could not prepare this template prompt for chat.'
+      );
+    }
+  };
 
   const insertPromptIntoChat = () => {
     try {
@@ -1881,6 +2152,456 @@ export default function MatrixBuildSuiteClient() {
   const previousStep = () => {
     setActiveStep((current) => Math.max(current - 1, 0));
   };
+
+  const renderTemplatePacks = () => {
+    const activeTemplate = previewTemplate;
+    const activeTemplatePrompt = activeTemplate
+      ? buildMatrixBuildSuitePrompt(activeTemplate.selection)
+      : undefined;
+    const activeAppType = activeTemplate?.selection.appTypeId
+      ? findBuildSuiteItems([activeTemplate.selection.appTypeId])[0]
+      : undefined;
+
+    return (
+      <section className="mt-8 border border-emerald-500/30 bg-black/35 p-5">
+        <div className="flex flex-wrap items-start justify-between gap-4">
+          <div>
+            <p className="text-xs uppercase tracking-[0.36em] text-emerald-300">
+              Template Packs
+            </p>
+            <h2 className="mt-2 text-2xl font-bold text-emerald-100">
+              Start from a full app blueprint
+            </h2>
+            <p className="mt-2 max-w-3xl text-sm leading-6 text-emerald-50/65">
+              Pick a complete app template to fill the wizard instantly. You can
+              preview, apply, save, or send the generated prompt to chat without
+              changing the prompt builder itself.
+            </p>
+            <p className="mt-2 text-xs text-emerald-300/75">
+              {templateStatus}
+            </p>
+          </div>
+          {activeTemplate ? (
+            <div className="flex flex-wrap gap-2">
+              <button
+                type="button"
+                onClick={() => applyTemplateSelection(activeTemplate)}
+                className="border border-emerald-300 bg-emerald-300 px-4 py-3 text-xs font-bold uppercase tracking-[0.22em] text-black transition hover:-translate-y-0.5"
+              >
+                Apply Template
+              </button>
+              <button
+                type="button"
+                onClick={() => saveTemplateAsBuild(activeTemplate)}
+                className="border border-emerald-500/45 px-4 py-3 text-xs uppercase tracking-[0.22em] text-emerald-100 transition hover:-translate-y-0.5 hover:border-emerald-300"
+              >
+                Save as Build
+              </button>
+              <button
+                type="button"
+                onClick={() => insertTemplateIntoChat(activeTemplate)}
+                className="border border-cyan-300/45 px-4 py-3 text-xs uppercase tracking-[0.22em] text-cyan-100 transition hover:-translate-y-0.5 hover:border-cyan-200"
+              >
+                Insert into Chat
+              </button>
+            </div>
+          ) : null}
+        </div>
+
+        {activeTemplate ? (
+          <div className="mt-5 grid gap-4 lg:grid-cols-[0.85fr_1.15fr]">
+            <article className="border border-emerald-500/25 bg-black/30 p-4">
+              <div className="flex items-start justify-between gap-3">
+                <div>
+                  <p className="text-xs uppercase tracking-[0.28em] text-emerald-300/75">
+                    Preview Template
+                  </p>
+                  <h3 className="mt-2 text-3xl font-bold text-emerald-50">
+                    {activeTemplate.label}
+                  </h3>
+                  <p className="mt-3 text-sm leading-6 text-emerald-50/70">
+                    {activeTemplate.description}
+                  </p>
+                </div>
+                <span className="border border-emerald-500/35 px-3 py-2 text-xs text-emerald-100/75">
+                  {activeTemplate.category}
+                </span>
+              </div>
+
+              {activeAppType ? <BuildSuiteCardPreview item={activeAppType} /> : null}
+
+              <div className="mt-4 grid gap-2 sm:grid-cols-3">
+                {activeTemplate.highlights.map((highlight) => (
+                  <span
+                    key={highlight}
+                    className="border border-emerald-500/25 bg-emerald-300/10 px-3 py-2 text-xs text-emerald-100"
+                  >
+                    {highlight}
+                  </span>
+                ))}
+              </div>
+              <div className="mt-4 flex flex-wrap gap-2">
+                {activeTemplate.tags.map((tag) => (
+                  <span
+                    key={tag}
+                    className="border border-emerald-500/20 px-2 py-1 text-xs text-emerald-100/65"
+                  >
+                    {tag}
+                  </span>
+                ))}
+              </div>
+            </article>
+
+            <article className="border border-emerald-500/25 bg-black/30 p-4">
+              <p className="text-xs uppercase tracking-[0.28em] text-emerald-300/75">
+                Default selections
+              </p>
+              <div className="mt-4 grid gap-3 sm:grid-cols-2">
+                {(activeTemplatePrompt?.selectedItems ?? []).slice(0, 10).map((item) => (
+                  <div
+                    key={item.id}
+                    className="border border-emerald-500/20 bg-black/25 p-3"
+                  >
+                    <p className="text-sm font-semibold text-emerald-50">
+                      {item.label}
+                    </p>
+                    <p className="mt-1 text-xs text-emerald-100/55">
+                      {item.category}
+                    </p>
+                  </div>
+                ))}
+              </div>
+              <div className="mt-4 flex flex-wrap gap-2 text-xs text-emerald-100/65">
+                <span>
+                  Components: {activeTemplate.selection.componentIds.length}
+                </span>
+                <span>
+                  Integrations: {activeTemplate.selection.integrationIds.length}
+                </span>
+                <span>AI: {activeTemplate.selection.aiFeatureIds.length}</span>
+              </div>
+            </article>
+          </div>
+        ) : null}
+
+        <div className="mt-5 grid gap-4 md:grid-cols-2 xl:grid-cols-5">
+          {buildSuiteTemplatePacks.map((template) => {
+            const appType = template.selection.appTypeId
+              ? findBuildSuiteItems([template.selection.appTypeId])[0]
+              : undefined;
+            const selected = template.id === previewTemplateId;
+
+            return (
+              <article
+                key={template.id}
+                className={`grid gap-3 border p-3 transition hover:-translate-y-1 ${
+                  selected
+                    ? 'border-emerald-300 bg-emerald-300/10 shadow-[0_0_28px_rgba(52,211,153,0.16)]'
+                    : 'border-emerald-500/20 bg-black/25 hover:border-emerald-300/70'
+                }`}
+              >
+                <div>
+                  <p className="text-xs uppercase tracking-[0.22em] text-emerald-300/70">
+                    {template.category}
+                  </p>
+                  <h3 className="mt-2 text-lg font-bold text-emerald-50">
+                    {template.label}
+                  </h3>
+                </div>
+                {appType ? <BuildSuiteCardPreview item={appType} /> : null}
+                <p className="text-sm leading-6 text-emerald-50/65">
+                  {template.description}
+                </p>
+                <div className="flex flex-wrap gap-2">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setPreviewTemplateId(template.id);
+                      setTemplateStatus(`Previewing "${template.label}".`);
+                    }}
+                    className="border border-emerald-500/45 px-3 py-2 text-xs uppercase tracking-[0.18em] text-emerald-100 transition hover:border-emerald-300"
+                  >
+                    Preview
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => applyTemplateSelection(template)}
+                    className="border border-emerald-300 bg-emerald-300 px-3 py-2 text-xs font-bold uppercase tracking-[0.18em] text-black transition hover:-translate-y-0.5"
+                  >
+                    Apply
+                  </button>
+                </div>
+              </article>
+            );
+          })}
+        </div>
+      </section>
+    );
+  };
+
+  const renderBuildLibrary = () => (
+    <section className="mt-8 border border-emerald-500/30 bg-black/35 p-5">
+      <div className="flex flex-wrap items-start justify-between gap-4">
+        <div>
+          <p className="text-xs uppercase tracking-[0.36em] text-emerald-300">
+            Build Library
+          </p>
+          <h2 className="mt-2 text-2xl font-bold text-emerald-100">
+            Saved Builds
+          </h2>
+          <p className="mt-2 max-w-3xl text-sm leading-6 text-emerald-50/65">
+            Save complete Build Suite configurations, reload them later, and
+            keep a JSON copy for sharing or backup.
+          </p>
+          <p className="mt-2 text-xs text-emerald-300/75">
+            {savedBuildStatus} Source: {savedBuildSource}.
+          </p>
+        </div>
+        <div className="flex flex-wrap gap-2">
+          <button
+            type="button"
+            onClick={saveCurrentBuild}
+            disabled={promptResult.missingSelection.length > 0}
+            className="border border-emerald-300 bg-emerald-300 px-4 py-3 text-xs font-bold uppercase tracking-[0.22em] text-black transition hover:-translate-y-0.5 disabled:cursor-not-allowed disabled:opacity-35"
+          >
+            Save Current Build
+          </button>
+          <button
+            type="button"
+            onClick={() => importBuildInputRef.current?.click()}
+            className="border border-emerald-500/45 px-4 py-3 text-xs uppercase tracking-[0.22em] text-emerald-100 transition hover:-translate-y-0.5 hover:border-emerald-300"
+          >
+            Import Build JSON
+          </button>
+          <input
+            ref={importBuildInputRef}
+            type="file"
+            accept="application/json,.json"
+            className="hidden"
+            onChange={importSavedBuild}
+          />
+        </div>
+      </div>
+
+      <div className="mt-5 grid gap-3 lg:grid-cols-[1.3fr_repeat(5,minmax(0,1fr))]">
+        <label className="grid gap-2 text-xs uppercase tracking-[0.18em] text-emerald-300/80">
+          Search
+          <input
+            value={buildLibraryQuery}
+            onChange={(event) => setBuildLibraryQuery(event.target.value)}
+            placeholder="Search saved builds..."
+            className="border border-emerald-500/25 bg-black/40 px-3 py-2 text-sm normal-case tracking-normal text-emerald-50 outline-none focus:border-emerald-300"
+          />
+        </label>
+        <label className="grid gap-2 text-xs uppercase tracking-[0.18em] text-emerald-300/80">
+          Sort
+          <select
+            value={buildLibrarySort}
+            onChange={(event) =>
+              setBuildLibrarySort(event.target.value as BuildSuiteSavedBuildSort)
+            }
+            className="border border-emerald-500/25 bg-black/40 px-3 py-2 text-sm normal-case tracking-normal text-emerald-50 outline-none focus:border-emerald-300"
+          >
+            <option value="updated">Recently updated</option>
+            <option value="created">Recently created</option>
+            <option value="name">Name</option>
+            <option value="favorites">Favorites</option>
+          </select>
+        </label>
+        <label className="grid gap-2 text-xs uppercase tracking-[0.18em] text-emerald-300/80">
+          App type
+          <select
+            value={buildLibraryFilters.appTypeId ?? ''}
+            onChange={(event) =>
+              setBuildLibraryFilters((current) => ({
+                ...current,
+                appTypeId: event.target.value || undefined,
+              }))
+            }
+            className="border border-emerald-500/25 bg-black/40 px-3 py-2 text-sm normal-case tracking-normal text-emerald-50 outline-none focus:border-emerald-300"
+          >
+            <option value="">All app types</option>
+            {buildSuiteCatalog.appTypes.map((item) => (
+              <option key={item.id} value={item.id}>
+                {item.label}
+              </option>
+            ))}
+          </select>
+        </label>
+        <label className="grid gap-2 text-xs uppercase tracking-[0.18em] text-emerald-300/80">
+          Theme
+          <select
+            value={buildLibraryFilters.theme ?? ''}
+            onChange={(event) =>
+              setBuildLibraryFilters((current) => ({
+                ...current,
+                theme: (event.target.value || undefined) as
+                  | BuildSuiteAppearance
+                  | undefined,
+              }))
+            }
+            className="border border-emerald-500/25 bg-black/40 px-3 py-2 text-sm normal-case tracking-normal text-emerald-50 outline-none focus:border-emerald-300"
+          >
+            <option value="">All themes</option>
+            <option value="light">Light</option>
+            <option value="dark">Dark</option>
+          </select>
+        </label>
+        <label className="grid gap-2 text-xs uppercase tracking-[0.18em] text-emerald-300/80">
+          Style
+          <select
+            value={buildLibraryFilters.styleId ?? ''}
+            onChange={(event) =>
+              setBuildLibraryFilters((current) => ({
+                ...current,
+                styleId: event.target.value || undefined,
+              }))
+            }
+            className="border border-emerald-500/25 bg-black/40 px-3 py-2 text-sm normal-case tracking-normal text-emerald-50 outline-none focus:border-emerald-300"
+          >
+            <option value="">All styles</option>
+            {buildSuiteCatalog.styles.map((item) => (
+              <option key={item.id} value={item.id}>
+                {item.label}
+              </option>
+            ))}
+          </select>
+        </label>
+        <label className="grid gap-2 text-xs uppercase tracking-[0.18em] text-emerald-300/80">
+          Platform
+          <select
+            value={buildLibraryFilters.platform ?? ''}
+            onChange={(event) =>
+              setBuildLibraryFilters((current) => ({
+                ...current,
+                platform: event.target.value || undefined,
+              }))
+            }
+            className="border border-emerald-500/25 bg-black/40 px-3 py-2 text-sm normal-case tracking-normal text-emerald-50 outline-none focus:border-emerald-300"
+          >
+            <option value="">All platforms</option>
+            {buildSuiteCatalog.mobile.map((item) => (
+              <option key={item.id} value={item.id}>
+                {item.label}
+              </option>
+            ))}
+          </select>
+        </label>
+      </div>
+
+      <div className="mt-5 grid gap-4 lg:grid-cols-2">
+        {visibleSavedBuilds.map((build) => {
+          const selectedItemCount =
+            Number(Boolean(build.selection.appTypeId)) +
+            Number(Boolean(build.selection.paletteId)) +
+            Number(Boolean(build.selection.styleId)) +
+            Number(Boolean(build.selection.layoutId)) +
+            Number(Boolean(build.selection.animationId)) +
+            Number(Boolean(build.selection.mobileId)) +
+            build.selection.componentIds.length +
+            build.selection.integrationIds.length +
+            build.selection.aiFeatureIds.length;
+          const advisorCount = build.advisorRecommendations.sections.reduce(
+            (count, section) => count + section.recommendations.length,
+            0
+          );
+
+          return (
+            <article
+              key={build.id}
+              className="grid gap-4 border border-emerald-500/25 bg-black/30 p-4"
+            >
+              <div className="flex flex-wrap items-start justify-between gap-3">
+                <div>
+                  <div className="flex flex-wrap items-center gap-2">
+                    <h3 className="text-xl font-bold text-emerald-50">
+                      {build.name}
+                    </h3>
+                    {build.favorite ? (
+                      <span className="border border-amber-300/35 bg-amber-300/10 px-2 py-1 text-xs text-amber-100">
+                        Favorite
+                      </span>
+                    ) : null}
+                  </div>
+                  <p className="mt-2 text-sm text-emerald-100/65">
+                    {build.selection.appTypeId
+                      ? friendlyId(build.selection.appTypeId)
+                      : 'No app type'}{' '}
+                    / {build.selection.appearance ?? 'No theme'} /{' '}
+                    {build.selection.styleId
+                      ? friendlyId(build.selection.styleId)
+                      : 'No style'}
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => toggleSavedBuildFavorite(build)}
+                  className={`border px-3 py-2 text-xs uppercase tracking-[0.18em] transition hover:-translate-y-0.5 ${
+                    build.favorite
+                      ? 'border-amber-300 bg-amber-300 text-black'
+                      : 'border-emerald-500/35 text-emerald-100/75 hover:border-amber-300 hover:text-amber-100'
+                  }`}
+                >
+                  Favorite
+                </button>
+              </div>
+
+              <div className="grid gap-2 text-xs text-emerald-100/65 sm:grid-cols-2">
+                <p>Created: {formatSavedBuildDate(build.createdAt)}</p>
+                <p>Modified: {formatSavedBuildDate(build.updatedAt)}</p>
+                <p>Selections: {selectedItemCount}</p>
+                <p>Advisor items: {advisorCount}</p>
+              </div>
+
+              <div className="flex flex-wrap gap-2">
+                <button
+                  type="button"
+                  onClick={() => restoreSavedSelection(build)}
+                  className="border border-emerald-300 bg-emerald-300 px-3 py-2 text-xs font-bold uppercase tracking-[0.18em] text-black transition hover:-translate-y-0.5"
+                >
+                  Load Build
+                </button>
+                <button
+                  type="button"
+                  onClick={() => renameSavedBuild(build)}
+                  className="border border-emerald-500/35 px-3 py-2 text-xs uppercase tracking-[0.18em] text-emerald-100 transition hover:-translate-y-0.5 hover:border-emerald-300"
+                >
+                  Rename
+                </button>
+                <button
+                  type="button"
+                  onClick={() => duplicateSavedBuild(build)}
+                  className="border border-emerald-500/35 px-3 py-2 text-xs uppercase tracking-[0.18em] text-emerald-100 transition hover:-translate-y-0.5 hover:border-emerald-300"
+                >
+                  Duplicate
+                </button>
+                <button
+                  type="button"
+                  onClick={() => exportSavedBuild(build)}
+                  className="border border-cyan-300/40 px-3 py-2 text-xs uppercase tracking-[0.18em] text-cyan-100 transition hover:-translate-y-0.5 hover:border-cyan-200"
+                >
+                  Export JSON
+                </button>
+                <button
+                  type="button"
+                  onClick={() => deleteSavedBuild(build)}
+                  className="border border-rose-300/40 px-3 py-2 text-xs uppercase tracking-[0.18em] text-rose-100 transition hover:-translate-y-0.5 hover:border-rose-200"
+                >
+                  Delete
+                </button>
+              </div>
+            </article>
+          );
+        })}
+      </div>
+
+      {visibleSavedBuilds.length === 0 ? (
+        <div className="mt-5 border border-emerald-500/20 bg-black/25 p-6 text-center text-sm text-emerald-100/65">
+          No saved builds match the current library filters.
+        </div>
+      ) : null}
+    </section>
+  );
 
   const renderItems = (
     items: BuildSuiteEnhancedItem[],
@@ -2319,6 +3040,10 @@ export default function MatrixBuildSuiteClient() {
             ))}
           </div>
         </header>
+
+        {renderTemplatePacks()}
+
+        {renderBuildLibrary()}
 
         <div className="mt-8">
           {marketplaceView === 'home' ? renderMarketplaceHome() : null}

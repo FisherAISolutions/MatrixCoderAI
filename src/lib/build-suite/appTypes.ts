@@ -61,4 +61,54 @@ export const appTypeItems: BuildSuiteItem[] = [
       'Build a SaaS analytics dashboard with metrics, charts, reports, users, activity tables, and settings.',
     complexity: 'medium',
   },
+  {
+    id: 'ecommerce-store',
+    label: 'Ecommerce Store',
+    category: 'Commerce',
+    description: 'Sell products with catalog browsing, carts, checkout readiness, and admin polish.',
+    tags: ['ecommerce', 'store', 'products', 'checkout'],
+    promptInstruction:
+      'Build an ecommerce store with product browsing, product detail cards, cart-ready flows, customer trust sections, and polished commerce navigation.',
+    complexity: 'high',
+  },
+  {
+    id: 'restaurant-pos',
+    label: 'Restaurant POS',
+    category: 'Operations',
+    description: 'Manage orders, tables, menus, kitchen status, and checkout workflows.',
+    tags: ['restaurant', 'pos', 'orders', 'menu'],
+    promptInstruction:
+      'Build a restaurant POS with menu item ordering, table/order status, kitchen queue views, totals, and fast staff workflows.',
+    complexity: 'high',
+  },
+  {
+    id: 'school-portal',
+    label: 'School Portal',
+    category: 'Education',
+    description: 'Organize students, classes, assignments, announcements, and dashboards.',
+    tags: ['school', 'education', 'students', 'classes'],
+    promptInstruction:
+      'Build a school portal with dashboards for students/classes, assignments, announcements, schedules, and clear education-focused navigation.',
+    complexity: 'high',
+  },
+  {
+    id: 'portfolio-website',
+    label: 'Portfolio Website',
+    category: 'Creative',
+    description: 'Present projects, case studies, services, testimonials, and contact sections.',
+    tags: ['portfolio', 'creative', 'projects', 'case-studies'],
+    promptInstruction:
+      'Build a portfolio website with project showcases, case studies, service highlights, testimonials, and a clear contact workflow.',
+    complexity: 'medium',
+  },
+  {
+    id: 'ai-chat-app',
+    label: 'AI Chat App',
+    category: 'AI',
+    description: 'Create a chat workspace with conversations, assistant panels, prompts, and history.',
+    tags: ['ai', 'chat', 'assistant', 'messages'],
+    promptInstruction:
+      'Build an AI chat app interface with conversation threads, message composer, assistant response areas, prompt tools, and useful empty/loading states.',
+    complexity: 'high',
+  },
 ];

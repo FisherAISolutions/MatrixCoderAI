@@ -168,6 +168,53 @@ export type Database = {
           }
         ];
       };
+      build_suite_saved_builds: {
+        Row: {
+          id: string;
+          user_id: string;
+          name: string;
+          favorite: boolean;
+          selection: Json;
+          advisor_recommendations: Json;
+          final_prompt: string;
+          metadata_version: number;
+          created_at: string;
+          updated_at: string;
+        };
+        Insert: {
+          id?: string;
+          user_id: string;
+          name: string;
+          favorite?: boolean;
+          selection: Json;
+          advisor_recommendations?: Json;
+          final_prompt: string;
+          metadata_version?: number;
+          created_at?: string;
+          updated_at?: string;
+        };
+        Update: {
+          id?: string;
+          user_id?: string;
+          name?: string;
+          favorite?: boolean;
+          selection?: Json;
+          advisor_recommendations?: Json;
+          final_prompt?: string;
+          metadata_version?: number;
+          created_at?: string;
+          updated_at?: string;
+        };
+        Relationships: [
+          {
+            foreignKeyName: 'build_suite_saved_builds_user_id_fkey';
+            columns: ['user_id'];
+            isOneToOne: false;
+            referencedRelation: 'users';
+            referencedColumns: ['id'];
+          }
+        ];
+      };
       style_profiles: {
         Row: {
           id: string;
