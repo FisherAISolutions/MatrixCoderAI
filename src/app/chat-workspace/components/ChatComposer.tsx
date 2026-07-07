@@ -46,6 +46,10 @@ import {
   type GenerationCancellationScope,
 } from '@/lib/generation/cancellation';
 import { readMatrixBuildSuiteChatHandoff } from '@/lib/build-suite/chatHandoff';
+import {
+  createBuildManifestPlanningContext,
+  type BuildManifest,
+} from '@/lib/build-suite/buildManifest';
 
 function logGenerationConsistency(
   label: string,
@@ -1092,6 +1096,7 @@ export default function ChatComposer({
   const batchGenerationRef = useRef<ActiveBatchGeneration | null>(null);
   const cancellationScopeRef = useRef<GenerationCancellationScope | null>(null);
   const consumedInitialPromptRef = useRef(false);
+  const pendingBuildManifestRef = useRef<BuildManifest | null>(null);
 
   const { response, isLoading, error, sendMessage } = useChat(AI_PROVIDER, PRIMARY_MODEL, true);
 
@@ -1107,6 +1112,7 @@ export default function ChatComposer({
     if (!handoff) return;
 
     consumedInitialPromptRef.current = true;
+    pendingBuildManifestRef.current = handoff.buildManifest ?? null;
     setInput(handoff.prompt);
     setChatHandoffNotice(handoff.message);
     textareaRef.current?.focus();
@@ -1153,6 +1159,7 @@ export default function ChatComposer({
         memStage: MemoryStage;
         status?: string;
         batchLabel?: string;
+        buildManifest?: BuildManifest | null;
       }
     ) => {
       const scope = ensureCancellationScope();
@@ -1186,11 +1193,19 @@ export default function ChatComposer({
         memoryStage: options.memStage,
       });
 
+      const buildManifestContext =
+        agent === 'planning' && options.buildManifest
+          ? createBuildManifestPlanningContext(options.buildManifest)
+          : null;
+
       const apiMessages = [
         {
           role: 'system' as const,
           content: AGENT_SYSTEM_PROMPTS[agent],
         },
+        ...(buildManifestContext
+          ? [{ role: 'system' as const, content: buildManifestContext }]
+          : []),
         ...(options.repoContextString
           ? [{ role: 'system' as const, content: options.repoContextString }]
           : []),
@@ -2257,6 +2272,8 @@ export default function ChatComposer({
       selectedAgent === 'auto'
         ? detectAgent(text)
         : selectedAgent;
+    const buildManifestForPlanning = pendingBuildManifestRef.current;
+    pendingBuildManifestRef.current = null;
 
     agentRef.current = agent;
 
@@ -2409,6 +2426,7 @@ export default function ChatComposer({
       conversationHistory,
       memStage,
       status: 'Sending request to AI...',
+      buildManifest: agent === 'planning' ? buildManifestForPlanning : null,
     });
   }, [
     input,

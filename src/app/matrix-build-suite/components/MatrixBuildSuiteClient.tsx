@@ -57,6 +57,8 @@ import {
 } from '@/lib/build-suite/templates';
 import { filterPalettesByAppearance } from '@/lib/build-suite/palettes';
 import { buildMatrixBuildSuitePrompt } from '@/lib/build-suite/promptBuilder';
+import { BuildSuiteLivePreviewPanel } from '@/lib/build-suite/preview';
+import { createBuildManifest } from '@/lib/build-suite/buildManifest';
 import {
   createBuildSuiteSavedBuild,
   deleteBuildSuiteSavedBuild,
@@ -1712,6 +1714,8 @@ export default function MatrixBuildSuiteClient() {
   const [selection, setSelection] = useState<BuildSuiteSelection>(() =>
     cloneSelection()
   );
+  const [sourceTemplateId, setSourceTemplateId] = useState<string>();
+  const [sourceSavedBuildId, setSourceSavedBuildId] = useState<string>();
 
   useEffect(() => {
     const previousHtmlOverflow = document.documentElement.style.overflow;
@@ -1800,6 +1804,15 @@ export default function MatrixBuildSuiteClient() {
     () => buildMatrixBuildSuitePrompt(selection),
     [selection]
   );
+  const buildManifest = useMemo(
+    () =>
+      createBuildManifest({
+        selection,
+        templateId: sourceTemplateId,
+        savedBuildId: sourceSavedBuildId,
+      }),
+    [selection, sourceTemplateId, sourceSavedBuildId]
+  );
 
   const visibleSavedBuilds = useMemo(
     () =>
@@ -1842,6 +1855,8 @@ export default function MatrixBuildSuiteClient() {
       aiFeatureIds: [...build.selection.aiFeatureIds],
       integrationIds: [...build.selection.integrationIds],
     });
+    setSourceTemplateId(undefined);
+    setSourceSavedBuildId(build.id);
     setMarketplaceView('wizard');
     setActiveStep(steps.length - 1);
     setSavedBuildStatus(`Loaded "${build.name}" into the Build Wizard.`);
@@ -1849,6 +1864,8 @@ export default function MatrixBuildSuiteClient() {
 
   const applyTemplateSelection = (template: BuildSuiteTemplatePack) => {
     setSelection(cloneBuildSuiteTemplateSelection(template));
+    setSourceTemplateId(template.id);
+    setSourceSavedBuildId(undefined);
     setMarketplaceView('wizard');
     setActiveStep(steps.length - 1);
     setTemplateStatus(`Applied "${template.label}". Review and adjust before sending.`);
@@ -1985,12 +2002,17 @@ export default function MatrixBuildSuiteClient() {
   const insertTemplateIntoChat = (template: BuildSuiteTemplatePack) => {
     try {
       if (typeof window === 'undefined') return;
-      const templatePrompt = buildMatrixBuildSuitePrompt(
-        cloneBuildSuiteTemplateSelection(template)
-      );
+      const templateSelection = cloneBuildSuiteTemplateSelection(template);
+      const templatePrompt = buildMatrixBuildSuitePrompt(templateSelection);
+      const templateManifest = createBuildManifest({
+        selection: templateSelection,
+        templateId: template.id,
+      });
       writeMatrixBuildSuiteChatHandoff(
         window.sessionStorage,
-        templatePrompt.prompt
+        templatePrompt.prompt,
+        undefined,
+        templateManifest
       );
       setChatHandoffStatus(MATRIX_BUILD_SUITE_CHAT_HANDOFF_MESSAGE);
       router.push('/chat-workspace');
@@ -2008,7 +2030,9 @@ export default function MatrixBuildSuiteClient() {
       if (typeof window === 'undefined') return;
       writeMatrixBuildSuiteChatHandoff(
         window.sessionStorage,
-        promptResult.prompt
+        promptResult.prompt,
+        undefined,
+        buildManifest
       );
       setChatHandoffStatus(MATRIX_BUILD_SUITE_CHAT_HANDOFF_MESSAGE);
       router.push('/chat-workspace');
@@ -2044,10 +2068,14 @@ export default function MatrixBuildSuiteClient() {
     key: keyof BuildSuiteSelection,
     id: string | BuildSuiteAppearance
   ) => {
+    setSourceTemplateId(undefined);
+    setSourceSavedBuildId(undefined);
     setSelection((current) => ({ ...current, [key]: id }));
   };
 
   const selectAppearance = (appearance: BuildSuiteAppearance) => {
+    setSourceTemplateId(undefined);
+    setSourceSavedBuildId(undefined);
     setSelection((current) => {
       const palettes = filterPalettesByAppearance(
         appearance,
@@ -2071,6 +2099,8 @@ export default function MatrixBuildSuiteClient() {
     key: 'componentIds' | 'aiFeatureIds' | 'integrationIds',
     id: string
   ) => {
+    setSourceTemplateId(undefined);
+    setSourceSavedBuildId(undefined);
     setSelection((current) => ({
       ...current,
       [key]: toggleId(current[key], id),
@@ -2086,6 +2116,8 @@ export default function MatrixBuildSuiteClient() {
     }
     if (bucket === 'palettes') {
       const appearance = item.compatibleWith?.appearances?.[0];
+      setSourceTemplateId(undefined);
+      setSourceSavedBuildId(undefined);
       setSelection((current) => ({
         ...current,
         appearance: current.appearance ?? appearance,
@@ -3049,7 +3081,7 @@ export default function MatrixBuildSuiteClient() {
           {marketplaceView === 'home' ? renderMarketplaceHome() : null}
           {marketplaceView === 'browse' ? renderMarketplaceBrowse() : null}
           {marketplaceView === 'wizard' ? (
-            <div className="grid gap-6 lg:grid-cols-[300px_1fr]">
+            <div className="grid gap-6 xl:grid-cols-[280px_minmax(0,1fr)_380px]">
               <StepRail activeStep={activeStep} setActiveStep={setActiveStep} />
               <section className="grid gap-5">
                 <StepHeader activeStep={activeStep} canAdvance={canAdvance} />
@@ -3087,6 +3119,7 @@ export default function MatrixBuildSuiteClient() {
                   </div>
                 </div>
               </section>
+              <BuildSuiteLivePreviewPanel selection={selection} />
             </div>
           ) : null}
         </div>
