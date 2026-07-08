@@ -30,7 +30,7 @@ export const APP_SHELL_NAV_ITEMS: AppShellNavItem[] = [
   { label: 'Dashboard', href: '/dashboard', icon: Home },
   { label: 'Workspace', href: '/chat-workspace', icon: MessageSquare },
   { label: 'Matrix Build Suite', href: '/matrix-build-suite', icon: Blocks },
-  { label: 'Blueprint Studio', href: '/blueprint-studio', icon: Ruler, comingSoon: true },
+  { label: 'Blueprint Studio', href: '/blueprint-studio', icon: Ruler },
   { label: 'Deployment Center', href: '/deployment-center', icon: Rocket },
   { label: 'Projects', href: '/projects', icon: FolderKanban, comingSoon: true },
   { label: 'History', href: '/history', icon: Clock, comingSoon: true },

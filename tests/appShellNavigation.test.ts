@@ -25,7 +25,6 @@ describe('app shell navigation', () => {
     );
 
     expect(unavailable).toEqual([
-      '/blueprint-studio',
       '/projects',
       '/history',
       '/settings',
