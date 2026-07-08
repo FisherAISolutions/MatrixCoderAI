@@ -1,4 +1,5 @@
 import type { Metadata } from 'next';
+import { AppShell } from '@/components/app-shell';
 import MatrixBuildSuiteClient from './components/MatrixBuildSuiteClient';
 
 export const metadata: Metadata = {
@@ -7,5 +8,18 @@ export const metadata: Metadata = {
 };
 
 export default function MatrixBuildSuitePage() {
-  return <MatrixBuildSuiteClient />;
+  return (
+    <AppShell
+      title="Matrix Build Suite"
+      description="Design marketplace, templates, saved builds, and prompt handoff."
+      breadcrumbs={[
+        { label: 'Matrix Coder AI', href: '/' },
+        { label: 'Matrix Build Suite' },
+      ]}
+      showHeader={false}
+      contentClassName="h-full p-0"
+    >
+      <MatrixBuildSuiteClient />
+    </AppShell>
+  );
 }

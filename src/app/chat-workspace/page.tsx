@@ -2,6 +2,7 @@
 import { useEffect, type ReactNode } from 'react';
 import { useRouter } from 'next/navigation';
 import { useAuth } from '@/contexts/AuthContext';
+import { AppShell } from '@/components/app-shell';
 import ChatWorkspacePage from './components/ChatWorkspacePage';
 import WorkspaceErrorBoundary from './components/WorkspaceErrorBoundary';
 
@@ -47,9 +48,16 @@ function AuthGate({ children }: { children: ReactNode }) {
 export default function ChatWorkspace() {
   return (
     <AuthGate>
-      <WorkspaceErrorBoundary>
-        <ChatWorkspacePage />
-      </WorkspaceErrorBoundary>
+      <AppShell
+        title="Workspace"
+        breadcrumbs={[{ label: 'Matrix Coder AI', href: '/' }, { label: 'Workspace' }]}
+        showHeader={false}
+        contentClassName="h-full overflow-hidden p-0 [&_.workspace-shell]:h-full [&_.workspace-shell]:w-full"
+      >
+        <WorkspaceErrorBoundary>
+          <ChatWorkspacePage />
+        </WorkspaceErrorBoundary>
+      </AppShell>
     </AuthGate>
   );
 }
