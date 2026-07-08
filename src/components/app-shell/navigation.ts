@@ -27,7 +27,7 @@ export interface AppShellQuickAction {
 }
 
 export const APP_SHELL_NAV_ITEMS: AppShellNavItem[] = [
-  { label: 'Dashboard', href: '/', icon: Home, comingSoon: true },
+  { label: 'Dashboard', href: '/dashboard', icon: Home },
   { label: 'Workspace', href: '/chat-workspace', icon: MessageSquare },
   { label: 'Matrix Build Suite', href: '/matrix-build-suite', icon: Blocks },
   { label: 'Blueprint Studio', href: '/blueprint-studio', icon: Ruler, comingSoon: true },

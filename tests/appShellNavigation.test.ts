@@ -8,7 +8,7 @@ import {
 describe('app shell navigation', () => {
   it('contains the primary application destinations', () => {
     expect(APP_SHELL_NAV_ITEMS.map((item) => item.href)).toEqual([
-      '/',
+      '/dashboard',
       '/chat-workspace',
       '/matrix-build-suite',
       '/blueprint-studio',
@@ -25,7 +25,6 @@ describe('app shell navigation', () => {
     );
 
     expect(unavailable).toEqual([
-      '/',
       '/blueprint-studio',
       '/projects',
       '/history',
@@ -50,5 +49,6 @@ describe('app shell navigation', () => {
     expect(isAppShellRouteActive('/matrix-build-suite', '/chat-workspace')).toBe(false);
     expect(isAppShellRouteActive('/chat-workspace', '/')).toBe(false);
     expect(isAppShellRouteActive('/', '/')).toBe(true);
+    expect(isAppShellRouteActive('/dashboard', '/dashboard')).toBe(true);
   });
 });
