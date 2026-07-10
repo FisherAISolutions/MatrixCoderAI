@@ -3,6 +3,11 @@ import {
   serializeBuildManifest,
   type BuildManifest,
 } from './buildManifest';
+import {
+  deserializeBlueprintDraft,
+  serializeBlueprintDraft,
+  type BlueprintDraft,
+} from '@/lib/blueprint-studio/blueprintDraft';
 
 export const MATRIX_BUILD_SUITE_CHAT_HANDOFF_KEY =
   'matrix-build-suite:chat-prompt-handoff';
@@ -14,6 +19,7 @@ export interface MatrixBuildSuiteChatHandoff {
   source: 'matrix-build-suite';
   prompt: string;
   buildManifest?: BuildManifest;
+  blueprintDraft?: BlueprintDraft;
   createdAt: string;
   message: string;
 }
@@ -24,7 +30,8 @@ type ReadableStorage = Pick<Storage, 'getItem' | 'removeItem'>;
 export function createMatrixBuildSuiteChatHandoff(
   prompt: string,
   now = new Date(),
-  buildManifest?: BuildManifest
+  buildManifest?: BuildManifest,
+  blueprintDraft?: BlueprintDraft
 ): MatrixBuildSuiteChatHandoff {
   if (!prompt.trim()) {
     throw new Error('Matrix Build Suite prompt is empty.');
@@ -40,6 +47,9 @@ export function createMatrixBuildSuiteChatHandoff(
   if (buildManifest) {
     handoff.buildManifest = buildManifest;
   }
+  if (blueprintDraft) {
+    handoff.blueprintDraft = blueprintDraft;
+  }
 
   return handoff;
 }
@@ -48,12 +58,14 @@ export function writeMatrixBuildSuiteChatHandoff(
   storage: WritableStorage,
   prompt: string,
   now = new Date(),
-  buildManifest?: BuildManifest
+  buildManifest?: BuildManifest,
+  blueprintDraft?: BlueprintDraft
 ): MatrixBuildSuiteChatHandoff {
   const handoff = createMatrixBuildSuiteChatHandoff(
     prompt,
     now,
-    buildManifest
+    buildManifest,
+    blueprintDraft
   );
   storage.setItem(
     MATRIX_BUILD_SUITE_CHAT_HANDOFF_KEY,
@@ -61,6 +73,9 @@ export function writeMatrixBuildSuiteChatHandoff(
       ...handoff,
       ...(buildManifest
         ? { buildManifest: JSON.parse(serializeBuildManifest(buildManifest)) }
+        : {}),
+      ...(blueprintDraft
+        ? { blueprintDraft: JSON.parse(serializeBlueprintDraft(blueprintDraft)) }
         : {}),
     })
   );
@@ -95,6 +110,9 @@ export function readMatrixBuildSuiteChatHandoff(
     const buildManifest = parsed.buildManifest
       ? deserializeBuildManifest(JSON.stringify(parsed.buildManifest))
       : undefined;
+    const blueprintDraft = parsed.blueprintDraft
+      ? deserializeBlueprintDraft(JSON.stringify(parsed.blueprintDraft))
+      : undefined;
 
     const handoff: MatrixBuildSuiteChatHandoff = {
       source: 'matrix-build-suite',
@@ -108,6 +126,9 @@ export function readMatrixBuildSuiteChatHandoff(
 
     if (buildManifest) {
       handoff.buildManifest = buildManifest;
+    }
+    if (blueprintDraft) {
+      handoff.blueprintDraft = blueprintDraft;
     }
 
     return handoff;

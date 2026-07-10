@@ -50,6 +50,14 @@ import {
   createBuildManifestPlanningContext,
   type BuildManifest,
 } from '@/lib/build-suite/buildManifest';
+import {
+  createBlueprintDraftPlanningContext,
+  type BlueprintDraft,
+} from '@/lib/blueprint-studio/blueprintDraft';
+import {
+  loadMatrixProjectWorkspaceContext,
+  saveMatrixProjectWorkspaceContext,
+} from '@/lib/projects/projectStore';
 
 function logGenerationConsistency(
   label: string,
@@ -1097,6 +1105,7 @@ export default function ChatComposer({
   const cancellationScopeRef = useRef<GenerationCancellationScope | null>(null);
   const consumedInitialPromptRef = useRef(false);
   const pendingBuildManifestRef = useRef<BuildManifest | null>(null);
+  const pendingBlueprintDraftRef = useRef<BlueprintDraft | null>(null);
 
   const { response, isLoading, error, sendMessage } = useChat(AI_PROVIDER, PRIMARY_MODEL, true);
 
@@ -1113,6 +1122,13 @@ export default function ChatComposer({
 
     consumedInitialPromptRef.current = true;
     pendingBuildManifestRef.current = handoff.buildManifest ?? null;
+    pendingBlueprintDraftRef.current = handoff.blueprintDraft ?? null;
+    const existingContext = loadMatrixProjectWorkspaceContext(window.localStorage);
+    saveMatrixProjectWorkspaceContext(window.localStorage, {
+      ...existingContext,
+      buildManifest: handoff.buildManifest,
+      blueprintDraft: handoff.blueprintDraft,
+    });
     setInput(handoff.prompt);
     setChatHandoffNotice(handoff.message);
     textareaRef.current?.focus();
@@ -1160,6 +1176,7 @@ export default function ChatComposer({
         status?: string;
         batchLabel?: string;
         buildManifest?: BuildManifest | null;
+        blueprintDraft?: BlueprintDraft | null;
       }
     ) => {
       const scope = ensureCancellationScope();
@@ -1197,6 +1214,10 @@ export default function ChatComposer({
         agent === 'planning' && options.buildManifest
           ? createBuildManifestPlanningContext(options.buildManifest)
           : null;
+      const blueprintDraftContext =
+        agent === 'planning' && options.blueprintDraft
+          ? createBlueprintDraftPlanningContext(options.blueprintDraft)
+          : null;
 
       const apiMessages = [
         {
@@ -1205,6 +1226,9 @@ export default function ChatComposer({
         },
         ...(buildManifestContext
           ? [{ role: 'system' as const, content: buildManifestContext }]
+          : []),
+        ...(blueprintDraftContext
+          ? [{ role: 'system' as const, content: blueprintDraftContext }]
           : []),
         ...(options.repoContextString
           ? [{ role: 'system' as const, content: options.repoContextString }]
@@ -2273,7 +2297,9 @@ export default function ChatComposer({
         ? detectAgent(text)
         : selectedAgent;
     const buildManifestForPlanning = pendingBuildManifestRef.current;
+    const blueprintDraftForPlanning = pendingBlueprintDraftRef.current;
     pendingBuildManifestRef.current = null;
+    pendingBlueprintDraftRef.current = null;
 
     agentRef.current = agent;
 
@@ -2427,6 +2453,7 @@ export default function ChatComposer({
       memStage,
       status: 'Sending request to AI...',
       buildManifest: agent === 'planning' ? buildManifestForPlanning : null,
+      blueprintDraft: agent === 'planning' ? blueprintDraftForPlanning : null,
     });
   }, [
     input,

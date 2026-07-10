@@ -69,15 +69,17 @@ const ACTION_CARDS: ActionCardConfig[] = [
   {
     title: 'Blueprint Studio',
     description: 'Plan app architecture, pages, data models, and product flows visually.',
+    href: '/blueprint-studio',
     icon: Ruler,
-    status: 'Coming soon',
+    status: 'Ready',
     accent: 'from-amber-300/15 to-matrix-green/5',
   },
   {
     title: 'Projects',
     description: 'Manage saved generated projects, versions, exports, and shared workspaces.',
+    href: '/projects',
     icon: FolderKanban,
-    status: 'Coming soon',
+    status: 'Ready',
     accent: 'from-sky-400/15 to-matrix-green/5',
   },
 ];
