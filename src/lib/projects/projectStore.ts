@@ -1,4 +1,4 @@
-import type {
+﻿import type {
   ChatMessage,
   FileNode,
 } from '@/app/chat-workspace/components/types';
@@ -200,10 +200,10 @@ function normalizeProjectPayload(
   }
 
   const buildManifest = parsed.buildManifest
-    ? deserializeBuildManifest(JSON.stringify(parsed.buildManifest))
+    ? (deserializeBuildManifest(JSON.stringify(parsed.buildManifest)) ?? undefined)
     : undefined;
   const blueprintDraft = parsed.blueprintDraft
-    ? deserializeBlueprintDraft(JSON.stringify(parsed.blueprintDraft))
+    ? (deserializeBlueprintDraft(JSON.stringify(parsed.blueprintDraft)) ?? undefined)
     : undefined;
 
   return {
@@ -632,10 +632,10 @@ export function loadMatrixProjectWorkspaceSnapshot(
       files: cloneJson(parsed.files as FileNode[]),
       chatMessages: cloneJson(parsed.chatMessages as ChatMessage[]),
       buildManifest: parsed.buildManifest
-        ? deserializeBuildManifest(JSON.stringify(parsed.buildManifest))
+        ? (deserializeBuildManifest(JSON.stringify(parsed.buildManifest)) ?? undefined)
         : undefined,
       blueprintDraft: parsed.blueprintDraft
-        ? deserializeBlueprintDraft(JSON.stringify(parsed.blueprintDraft))
+        ? (deserializeBlueprintDraft(JSON.stringify(parsed.blueprintDraft)) ?? undefined)
         : undefined,
       validationStatus:
         parsed.validationStatus === 'passed' ||
@@ -710,10 +710,10 @@ export function loadMatrixProjectWorkspaceContext(
           ? parsed.currentProjectName
           : undefined,
       buildManifest: parsed.buildManifest
-        ? deserializeBuildManifest(JSON.stringify(parsed.buildManifest))
+        ? (deserializeBuildManifest(JSON.stringify(parsed.buildManifest)) ?? undefined)
         : undefined,
       blueprintDraft: parsed.blueprintDraft
-        ? deserializeBlueprintDraft(JSON.stringify(parsed.blueprintDraft))
+        ? (deserializeBlueprintDraft(JSON.stringify(parsed.blueprintDraft)) ?? undefined)
         : undefined,
     };
   } catch {
@@ -773,3 +773,5 @@ export function readMatrixProjectOpenHandoff(
     return null;
   }
 }
+
+

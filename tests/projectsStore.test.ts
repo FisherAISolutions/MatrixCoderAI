@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+﻿import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import {
   MATRIX_PROJECTS_OPEN_HANDOFF_KEY,
@@ -21,141 +21,189 @@ import {
   type MatrixProject,
 } from '@/lib/projects/projectStore';
 
-function makeProject(overrides: Partial<MatrixProject> = {}): MatrixProject {
-  const now = '2026-07-08T00:00:00.000Z';
-
+function createMemoryStorage(): Storage {
+  const values = new Map<string, string>();
   return {
-    id: overrides.id ?? 'project-1',
-    name: overrides.name ?? 'Project One',
-    description: overrides.description ?? 'Test project',
-    createdAt: overrides.createdAt ?? now,
-    updatedAt: overrides.updatedAt ?? now,
-    filesSnapshot: overrides.filesSnapshot ?? [],
-    chatMessagesSnapshot: overrides.chatMessagesSnapshot ?? [],
-    validationStatus: overrides.validationStatus ?? 'unknown',
-    deploymentStatus: overrides.deploymentStatus ?? 'not-ready',
-    ...overrides,
+    get length() {
+      return values.size;
+    },
+    clear() {
+      values.clear();
+    },
+    getItem(key: string) {
+      return values.get(key) ?? null;
+    },
+    key(index: number) {
+      return Array.from(values.keys())[index] ?? null;
+    },
+    removeItem(key: string) {
+      values.delete(key);
+    },
+    setItem(key: string, value: string) {
+      values.set(key, value);
+    },
   };
 }
 
+function makeProject(overrides: Partial<MatrixProject> = {}): MatrixProject {
+  return createMatrixProject(
+    {
+      name: overrides.name ?? 'Project One',
+      description: overrides.description ?? 'Test project',
+      files:
+        overrides.files ??
+        [
+          {
+            id: 'file-1',
+            name: 'page.tsx',
+            path: 'src/app/page.tsx',
+            type: 'file',
+            content: 'export default function Page() { return null; }',
+          },
+        ],
+      chatMessages:
+        overrides.chatMessages ??
+        [
+          {
+            id: 'message-1',
+            role: 'user',
+            content: 'Build an app',
+            timestamp: '2026-07-08T00:00:00.000Z',
+          },
+        ],
+      validationStatus: overrides.validationStatus ?? 'unknown',
+      deploymentStatus: overrides.deploymentStatus ?? 'unknown',
+      workspaceState: overrides.workspaceState,
+    },
+    new Date(overrides.createdAt ?? '2026-07-08T00:00:00.000Z'),
+    overrides.id ?? 'project-1'
+  );
+}
+
 describe('projectStore', () => {
+  let localStorage: Storage;
+  let sessionStorage: Storage;
+
   beforeEach(() => {
-    window.localStorage.clear();
-    window.sessionStorage.clear();
+    localStorage = createMemoryStorage();
+    sessionStorage = createMemoryStorage();
     vi.restoreAllMocks();
   });
 
-  afterEach(() => {
-    window.localStorage.clear();
-    window.sessionStorage.clear();
-  });
-
   it('saves and loads projects with local fallback', async () => {
-    const saved = await saveMatrixProject(makeProject());
-    expect(saved.mode).toBe('local');
+    const project = makeProject();
+    const saved = await saveMatrixProject(project, [], {
+      storage: localStorage,
+      supabaseClient: null,
+    });
 
-    const projects = await loadMatrixProjects();
-    expect(projects).toHaveLength(1);
-    expect(projects[0]?.name).toBe('Project One');
-    expect(window.localStorage.getItem(MATRIX_PROJECTS_STORAGE_KEY)).toContain(
+    expect(saved.source).toBe('local');
+    expect(saved.projects).toHaveLength(1);
+
+    const loaded = await loadMatrixProjects({
+      storage: localStorage,
+      supabaseClient: null,
+    });
+    expect(loaded.source).toBe('local');
+    expect(loaded.projects[0]?.name).toBe('Project One');
+    expect(localStorage.getItem(MATRIX_PROJECTS_STORAGE_KEY)).toContain(
       'Project One'
     );
   });
 
-  it('renames a saved project', async () => {
-    await saveMatrixProject(makeProject());
+  it('renames and duplicates project records without mutating the source', () => {
+    const project = makeProject({ id: 'source-project', name: 'Source' });
 
-    const renamed = await renameMatrixProject('project-1', 'Renamed Project');
-    expect(renamed?.name).toBe('Renamed Project');
+    const renamed = renameMatrixProject(project, 'Renamed Project');
+    expect(renamed.name).toBe('Renamed Project');
+    expect(project.name).toBe('Source');
 
-    const projects = await loadMatrixProjects();
-    expect(projects[0]?.name).toBe('Renamed Project');
+    const duplicate = duplicateMatrixProject(
+      project,
+      new Date('2026-07-09T00:00:00.000Z'),
+      'copy-project'
+    );
+    expect(duplicate.id).toBe('copy-project');
+    expect(duplicate.name).toBe('Source Copy');
+    expect(duplicate.files).not.toBe(project.files);
   });
 
-  it('duplicates a saved project with a new id and name', async () => {
-    await saveMatrixProject(makeProject({ id: 'source-project', name: 'Source' }));
-
-    const duplicate = await duplicateMatrixProject('source-project');
-    expect(duplicate).not.toBeNull();
-    expect(duplicate?.id).not.toBe('source-project');
-    expect(duplicate?.name).toContain('Source');
-
-    const projects = await loadMatrixProjects();
-    expect(projects).toHaveLength(2);
-  });
-
-  it('deletes a saved project', async () => {
-    await saveMatrixProject(makeProject());
-    await deleteMatrixProject('project-1');
-
-    const projects = await loadMatrixProjects();
-    expect(projects).toHaveLength(0);
-  });
-
-  it('creates a new project draft locally', async () => {
-    const created = await createMatrixProject({
-      name: 'Fresh Build',
-      description: 'Created from UI',
+  it('deletes a saved project from local storage', async () => {
+    const project = makeProject();
+    await saveMatrixProject(project, [], {
+      storage: localStorage,
+      supabaseClient: null,
     });
 
-    expect(created.mode).toBe('local');
+    const deleted = await deleteMatrixProject(project.id, [project], {
+      storage: localStorage,
+      supabaseClient: null,
+    });
 
-    const projects = await loadMatrixProjects();
-    expect(projects).toHaveLength(1);
-    expect(projects[0]?.name).toBe('Fresh Build');
+    expect(deleted.projects).toHaveLength(0);
+    const loaded = await loadMatrixProjects({
+      storage: localStorage,
+      supabaseClient: null,
+    });
+    expect(loaded.projects).toHaveLength(0);
   });
 
   it('stores and reads workspace snapshot data', () => {
-    saveMatrixProjectWorkspaceSnapshot({
-      projectId: 'project-1',
-      projectName: 'Project One',
-      workspaceState: {
-        filesSnapshot: [],
-        chatMessagesSnapshot: [],
-        activeFilePath: 'src/app/page.tsx',
-      },
+    const project = makeProject({
+      workspaceState: { activeFilePath: 'src/app/page.tsx' },
     });
 
-    const snapshot = loadMatrixProjectWorkspaceSnapshot();
-    expect(snapshot?.projectId).toBe('project-1');
-    expect(snapshot?.workspaceState.activeFilePath).toBe('src/app/page.tsx');
-    expect(
-      window.localStorage.getItem(MATRIX_PROJECTS_WORKSPACE_SNAPSHOT_KEY)
-    ).toContain('project-1');
+    saveMatrixProjectWorkspaceSnapshot(localStorage, {
+      name: 'Project One',
+      description: 'Snapshot project',
+      files: project.files,
+      chatMessages: project.chatMessages,
+      validationStatus: 'passed',
+      deploymentStatus: 'ready',
+      workspaceState: project.workspaceState,
+      updatedAt: project.updatedAt,
+    });
+
+    const snapshot = loadMatrixProjectWorkspaceSnapshot(localStorage);
+    expect(snapshot?.name).toBe('Project One');
+    expect(snapshot?.workspaceState?.activeFilePath).toBe('src/app/page.tsx');
+    expect(localStorage.getItem(MATRIX_PROJECTS_WORKSPACE_SNAPSHOT_KEY)).toContain(
+      'Project One'
+    );
   });
 
   it('stores and clears workspace context data', () => {
-    saveMatrixProjectWorkspaceContext({
+    saveMatrixProjectWorkspaceContext(localStorage, {
       currentProjectId: 'project-1',
       currentProjectName: 'Project One',
-      buildManifest: { metadataVersion: 1 } as never,
     });
 
-    const saved = loadMatrixProjectWorkspaceContext();
-    expect(saved?.currentProjectId).toBe('project-1');
-    expect(
-      window.localStorage.getItem(MATRIX_PROJECTS_WORKSPACE_CONTEXT_KEY)
-    ).toContain('Project One');
+    const saved = loadMatrixProjectWorkspaceContext(localStorage);
+    expect(saved.currentProjectId).toBe('project-1');
+    expect(localStorage.getItem(MATRIX_PROJECTS_WORKSPACE_CONTEXT_KEY)).toContain(
+      'Project One'
+    );
 
-    clearMatrixProjectWorkspaceContext();
-    expect(loadMatrixProjectWorkspaceContext()).toBeNull();
+    clearMatrixProjectWorkspaceContext(localStorage);
+    expect(loadMatrixProjectWorkspaceContext(localStorage)).toEqual({});
   });
 
   it('writes and consumes project open handoff once', () => {
-    writeMatrixProjectOpenHandoff({
-      projectId: 'project-1',
-      projectName: 'Project One',
-      openedAt: '2026-07-08T00:00:00.000Z',
-    });
+    const project = makeProject();
+    writeMatrixProjectOpenHandoff(
+      sessionStorage,
+      project,
+      new Date('2026-07-08T00:00:00.000Z')
+    );
 
-    expect(
-      window.sessionStorage.getItem(MATRIX_PROJECTS_OPEN_HANDOFF_KEY)
-    ).toContain('project-1');
+    expect(sessionStorage.getItem(MATRIX_PROJECTS_OPEN_HANDOFF_KEY)).toContain(
+      'project-1'
+    );
 
-    const firstRead = readMatrixProjectOpenHandoff();
+    const firstRead = readMatrixProjectOpenHandoff(sessionStorage);
     expect(firstRead?.projectId).toBe('project-1');
 
-    const secondRead = readMatrixProjectOpenHandoff();
+    const secondRead = readMatrixProjectOpenHandoff(sessionStorage);
     expect(secondRead).toBeNull();
   });
 });
