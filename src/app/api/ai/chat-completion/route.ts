@@ -1,18 +1,21 @@
-import { NextRequest, NextResponse } from 'next/server';
+﻿import { NextRequest, NextResponse } from 'next/server';
 import OpenAI from 'openai';
 import { normalizeChatCompletionParameters } from '@/lib/ai/parameterNormalization';
+import { getOptionalServerEnv } from '@/lib/env';
+import { logError, publicErrorMessage } from '@/lib/logger';
+import { rejectIfRequestTooLarge } from '@/lib/api/hardening';
 
 /**
  * Chat-completion proxy.
  *
- * MIGRATION (2026-01) — replaced the (now-deprecated) `@rocketnew/llm-sdk`
+ * MIGRATION (2026-01) â€” replaced the (now-deprecated) `@rocketnew/llm-sdk`
  * with the official `openai` SDK. The public request/response shape is
  * unchanged:
  *
  *   request : { provider, model, messages, stream, parameters }
  *   response:
- *     - non-streaming → the raw OpenAI ChatCompletion object
- *     - streaming     → SSE with frames
+ *     - non-streaming â†’ the raw OpenAI ChatCompletion object
+ *     - streaming     â†’ SSE with frames
  *         data: { "type":"start" }
  *         data: { "type":"chunk", "chunk": <ChatCompletionChunk> }
  *         data: { "type":"done" }
@@ -21,23 +24,24 @@ import { normalizeChatCompletionParameters } from '@/lib/ai/parameterNormalizati
  * This keeps `useChat` / `getChatCompletion` / `getStreamingChatCompletion`
  * / the auto-fix loop working without any front-end changes.
  *
- * Only the OPEN_AI provider is implemented here — Anthropic/Gemini/etc.
+ * Only the OPEN_AI provider is implemented here â€” Anthropic/Gemini/etc.
  * are left as 501 (unchanged behaviour: the calling code only ever sends
  * OPEN_AI today).
  */
 
 const API_KEYS: Record<string, string | undefined> = {
-  OPEN_AI: process.env.OPENAI_API_KEY,
-  ANTHROPIC: process.env.ANTHROPIC_API_KEY,
-  GEMINI: process.env.GEMINI_API_KEY,
-  PERPLEXITY: process.env.PERPLEXITY_API_KEY,
+  OPEN_AI: getOptionalServerEnv('OPENAI_API_KEY'),
+  ANTHROPIC: getOptionalServerEnv('ANTHROPIC_API_KEY'),
+  GEMINI: getOptionalServerEnv('GEMINI_API_KEY'),
+  PERPLEXITY: getOptionalServerEnv('PERPLEXITY_API_KEY'),
 };
 
-// Hardening pass #5 — server-side caps to keep the AI provider happy and
+// Hardening pass #5 â€” server-side caps to keep the AI provider happy and
 // prevent runaway costs / payload-too-large errors that would otherwise
 // surface as opaque 500s. Adjust if you legitimately need more.
 const MAX_TOTAL_PROMPT_CHARS = 400_000; // ~100K tokens for current large-context OpenAI models
 const MAX_MESSAGE_COUNT = 200;
+const MAX_CHAT_BODY_BYTES = 2 * 1024 * 1024;
 
 function totalPromptChars(messages: unknown[]): number {
   let total = 0;
@@ -59,12 +63,17 @@ function formatErrorResponse(error: unknown, provider?: string) {
 
   return {
     error: `${providerName.toUpperCase()} API error: ${statusCode}`,
-    details: error instanceof Error ? error.message : String(error),
+    details: publicErrorMessage('The AI provider returned an error.', error, {
+      exposeInDevelopment: true,
+    }),
     statusCode,
   };
 }
 
 export async function POST(request: NextRequest) {
+  const tooLarge = rejectIfRequestTooLarge(request, MAX_CHAT_BODY_BYTES);
+  if (tooLarge) return tooLarge;
+
   let body: any = {};
 
   try {
@@ -88,7 +97,7 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    // Hardening pass #5 — payload size caps. Reject early with 413 so
+    // Hardening pass #5 â€” payload size caps. Reject early with 413 so
     // callers get a clear, actionable error instead of an opaque provider
     // 500 or a hung connection.
     if (Array.isArray(messages) && messages.length > MAX_MESSAGE_COUNT) {
@@ -154,9 +163,9 @@ export async function POST(request: NextRequest) {
             controller.close();
           } catch (error) {
             const formatted = formatErrorResponse(error, provider);
-            console.error('API Route Error (stream):', {
-              error: formatted.error,
-              details: formatted.details,
+            logError('API Route Error (stream)', error, {
+              operation: 'chat-completion-stream',
+              provider,
             });
             controller.enqueue(
               encoder.encode(
@@ -191,10 +200,16 @@ export async function POST(request: NextRequest) {
     return NextResponse.json(response);
   } catch (error) {
     const formatted = formatErrorResponse(error, body?.provider);
-    console.error('API Route Error:', { error: formatted.error, details: formatted.details });
+    logError('API Route Error', error, {
+      operation: 'chat-completion',
+      provider: body?.provider,
+    });
     return NextResponse.json(
       { error: formatted.error, details: formatted.details },
       { status: formatted.statusCode }
     );
   }
 }
+
+
+

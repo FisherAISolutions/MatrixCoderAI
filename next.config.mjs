@@ -6,10 +6,13 @@ const nextConfig = {
   distDir: process.env.DIST_DIR || '.next',
 
   typescript: {
-    ignoreBuildErrors: true,
+    ignoreBuildErrors: false,
   },
 
   eslint: {
+    // Keep lint as an explicit CI/developer check for now. The repo has
+    // existing Prettier line-ending debt that should be cleaned in a
+    // dedicated pass before lint is enforced inside the production build.
     ignoreDuringBuilds: true,
   },
 
@@ -60,6 +63,34 @@ const nextConfig = {
           { key: 'Pragma', value: 'no-cache' },
         ],
       },
+      {
+        source: '/:path*',
+        headers: [
+          { key: 'X-Content-Type-Options', value: 'nosniff' },
+          { key: 'Referrer-Policy', value: 'strict-origin-when-cross-origin' },
+          {
+            key: 'Permissions-Policy',
+            value:
+              'camera=(), microphone=(), geolocation=(), payment=(), usb=(), serial=()',
+          },
+          {
+            key: 'Content-Security-Policy',
+            value: [
+              "default-src 'self'",
+              "script-src 'self' 'unsafe-eval' 'unsafe-inline' blob:",
+              "style-src 'self' 'unsafe-inline'",
+              "img-src 'self' data: blob: https:",
+              "font-src 'self' data:",
+              "connect-src 'self' https: wss: blob:",
+              "worker-src 'self' blob:",
+              "frame-src 'self' https:",
+              "object-src 'none'",
+              "base-uri 'self'",
+              "form-action 'self'",
+            ].join('; '),
+          },
+        ],
+      },
     ];
   },
 
@@ -68,3 +99,5 @@ const nextConfig = {
   // which made it impossible to ever show a marketing site. Removed.
 };
 export default nextConfig;
+
+

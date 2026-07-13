@@ -1,6 +1,13 @@
-import { NextRequest, NextResponse } from 'next/server';
+﻿import { NextRequest, NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
 import { embedQuery } from '@/lib/embeddings/embedder';
+import { getPublicEnv } from '@/lib/env';
+import {
+  parseJsonBody,
+  rejectIfRequestTooLarge,
+  requireBearerAuthorization,
+  safeApiErrorResponse,
+} from '@/lib/api/hardening';
 
 /**
  * POST /api/embeddings/search
@@ -12,25 +19,43 @@ import { embedQuery } from '@/lib/embeddings/embedder';
  * 503 { status: 'pgvector_unavailable' } when the RPC / table is missing,
  *     so callers cleanly fall back to heuristic-only ranking.
  */
-export async function POST(request: NextRequest) {
-  let body: { sessionId?: string; query?: string; k?: number } = {};
-  try {
-    body = await request.json();
-  } catch {
-    return NextResponse.json({ error: 'Invalid JSON' }, { status: 400 });
-  }
+type EmbeddingsSearchRequestBody = {
+  sessionId?: string;
+  query?: string;
+  k?: number;
+};
 
-  const { sessionId, query } = body;
-  const k = Math.min(Math.max(body.k ?? 8, 1), 24);
+const MAX_SEARCH_BODY_BYTES = 64 * 1024;
+const MAX_QUERY_CHARS = 5000;
+
+export async function POST(request: NextRequest) {
+  const tooLarge = rejectIfRequestTooLarge(request, MAX_SEARCH_BODY_BYTES);
+  if (tooLarge) return tooLarge;
+
+  const authError = requireBearerAuthorization(request);
+  if (authError) return authError;
+
+  const parsed = await parseJsonBody<EmbeddingsSearchRequestBody>(request);
+  if (!parsed.ok || !parsed.body) return parsed.response!;
+
+  const { sessionId, query } = parsed.body;
+  const k = Math.min(Math.max(parsed.body.k ?? 8, 1), 24);
 
   if (!sessionId || !query) {
     return NextResponse.json({ error: 'sessionId and query are required' }, { status: 400 });
   }
 
-  const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
-  const anonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
+  if (query.length > MAX_QUERY_CHARS) {
+    return NextResponse.json(
+      { error: 'Search query is too large.' },
+      { status: 413 }
+    );
+  }
+
+  const url = getPublicEnv('NEXT_PUBLIC_SUPABASE_URL');
+  const anonKey = getPublicEnv('NEXT_PUBLIC_SUPABASE_ANON_KEY');
   if (!url || !anonKey) {
-    return NextResponse.json({ error: 'Supabase not configured' }, { status: 500 });
+    return NextResponse.json({ error: 'Supabase not configured' }, { status: 503 });
   }
 
   const authHeader = request.headers.get('authorization') ?? '';
@@ -43,10 +68,12 @@ export async function POST(request: NextRequest) {
   try {
     embedding = await embedQuery(query);
   } catch (err) {
-    return NextResponse.json(
-      { error: 'Embedding API failed', details: err instanceof Error ? err.message : String(err) },
-      { status: 502 }
-    );
+    return safeApiErrorResponse(err, {
+      fallback: 'Embedding API failed.',
+      status: 502,
+      operation: 'embeddings-search-openai',
+      exposeInDevelopment: true,
+    });
   }
 
   const { data, error } = await supabase.rpc('match_file_chunks', {
@@ -64,10 +91,7 @@ export async function POST(request: NextRequest) {
     ) {
       return NextResponse.json({ status: 'pgvector_unavailable', matches: [] }, { status: 503 });
     }
-    return NextResponse.json(
-      { error: 'Search failed', details: msg, matches: [] },
-      { status: 500 }
-    );
+    return NextResponse.json({ error: 'Search failed', matches: [] }, { status: 500 });
   }
 
   return NextResponse.json({ status: 'ok', matches: data ?? [] });

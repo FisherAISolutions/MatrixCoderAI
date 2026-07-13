@@ -1,7 +1,10 @@
-import { NextRequest, NextResponse } from 'next/server';
+﻿import { NextRequest, NextResponse } from 'next/server';
 import OpenAI from 'openai';
 import { PRIMARY_MODEL } from '@/lib/ai/modelConfig';
 import { normalizeChatCompletionParameters } from '@/lib/ai/parameterNormalization';
+import { requireServerEnv } from '@/lib/env';
+import { logError, publicErrorMessage } from '@/lib/logger';
+import { rejectIfRequestTooLarge } from '@/lib/api/hardening';
 import { normalizeStyleBrief, MAX_STYLE_SCREENSHOTS } from '@/lib/styleInspiration';
 import {
   buildMatrixCoderStylePrompt,
@@ -24,8 +27,12 @@ type AnalyzeRequestBody = {
 };
 
 const MAX_DATA_URL_CHARS = 7_000_000;
+const MAX_ANALYZE_BODY_BYTES = 24 * 1024 * 1024;
 
 export async function POST(request: NextRequest) {
+  const tooLarge = rejectIfRequestTooLarge(request, MAX_ANALYZE_BODY_BYTES);
+  if (tooLarge) return tooLarge;
+
   try {
     const body = (await request.json()) as AnalyzeRequestBody;
     const appName = typeof body.appName === 'string' ? body.appName.trim() : '';
@@ -53,14 +60,7 @@ export async function POST(request: NextRequest) {
         { status: 400 }
       );
     }
-
-    const apiKey = process.env.OPENAI_API_KEY;
-    if (!apiKey) {
-      return NextResponse.json(
-        { error: 'OPENAI_API_KEY is not configured.' },
-        { status: 400 }
-      );
-    }
+    const apiKey = requireServerEnv('OPENAI_API_KEY');
 
     const prompt = buildStyleAnalysisPrompt({
       appName,
@@ -134,10 +134,16 @@ export async function POST(request: NextRequest) {
       model: PRIMARY_MODEL,
     });
   } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    console.error('style-inspiration analyze error:', message);
+    logError('style-inspiration analyze error', error, {
+      operation: 'style-inspiration-analyze',
+    });
     return NextResponse.json(
-      { error: 'Style analysis failed.', details: message },
+      {
+        error: 'Style analysis failed.',
+        details: publicErrorMessage('Style analysis failed.', error, {
+          exposeInDevelopment: true,
+        }),
+      },
       { status: 500 }
     );
   }
@@ -151,3 +157,5 @@ function isValidDataUrlImage(image: AnalyzeImageInput): boolean {
   if (image.dataUrl.length > MAX_DATA_URL_CHARS) return false;
   return image.dataUrl.startsWith(`data:${image.mimeType};base64,`);
 }
+
+

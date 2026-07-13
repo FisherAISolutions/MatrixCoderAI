@@ -1,4 +1,5 @@
-import { createClient } from '@supabase/supabase-js';
+﻿import { createClient } from '@supabase/supabase-js';
+import { getPublicEnv } from '@/lib/env';
 import type { Database } from '@/types/supabase';
 import {
   STYLE_INSPIRATION_BUCKET,
@@ -8,8 +9,8 @@ import {
   type StyleProfileDraft,
 } from '@/lib/styleInspiration';
 
-const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL || '';
-const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || '';
+const supabaseUrl = getPublicEnv('NEXT_PUBLIC_SUPABASE_URL') || '';
+const supabaseAnonKey = getPublicEnv('NEXT_PUBLIC_SUPABASE_ANON_KEY') || '';
 
 // Create client even if env vars are missing (will gracefully fail when used)
 export const supabase = (supabaseUrl && supabaseAnonKey) 
@@ -436,7 +437,7 @@ export async function deleteFile(fileId: string) {
 }
 
 /**
- * Milestone C — lightweight rename. Updates file_path / file_name /
+ * Milestone C â€” lightweight rename. Updates file_path / file_name /
  * parent_path of an existing row in-place (preserving the row ID, so
  * the in-memory tree node identity stays stable). Returns the updated
  * row or null on failure / demo session.
@@ -617,3 +618,5 @@ export async function deleteStyleProfile(profileId: string, userId: string) {
 
   if (error) throw error;
 }
+
+

@@ -1,6 +1,14 @@
-import { NextRequest, NextResponse } from 'next/server';
+﻿import { NextRequest, NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
 import { chunkText, embedChunks } from '@/lib/embeddings/embedder';
+import { getPublicEnv } from '@/lib/env';
+import {
+  parseJsonBody,
+  rejectIfRequestTooLarge,
+  requireBearerAuthorization,
+  safeApiErrorResponse,
+} from '@/lib/api/hardening';
+import { logWarning } from '@/lib/logger';
 
 /**
  * POST /api/embeddings
@@ -10,17 +18,31 @@ import { chunkText, embedChunks } from '@/lib/embeddings/embedder';
  * Chunks the file, embeds each chunk, upserts into file_embeddings.
  * Returns 200 with { chunks, status } on success.
  * Returns 503 { status: 'pgvector_unavailable' } if the table/extension isn't installed.
- *   Callers should treat this as a clean fallback signal — heuristics still work.
+ *   Callers should treat this as a clean fallback signal - heuristics still work.
  */
-export async function POST(request: NextRequest) {
-  let body: { sessionId?: string; filePath?: string; content?: string } = {};
-  try {
-    body = await request.json();
-  } catch {
-    return NextResponse.json({ error: 'Invalid JSON' }, { status: 400 });
-  }
+type EmbeddingsRequestBody = {
+  sessionId?: string;
+  filePath?: string;
+  content?: string;
+};
 
-  const { sessionId, filePath, content } = body;
+const MAX_EMBEDDINGS_BODY_BYTES = 250_000;
+const MAX_EMBEDDING_CONTENT_CHARS = 200_000;
+
+export async function POST(request: NextRequest) {
+  const tooLarge = rejectIfRequestTooLarge(
+    request,
+    MAX_EMBEDDINGS_BODY_BYTES
+  );
+  if (tooLarge) return tooLarge;
+
+  const authError = requireBearerAuthorization(request);
+  if (authError) return authError;
+
+  const parsed = await parseJsonBody<EmbeddingsRequestBody>(request);
+  if (!parsed.ok || !parsed.body) return parsed.response!;
+
+  const { sessionId, filePath, content } = parsed.body;
   if (!sessionId || !filePath || typeof content !== 'string') {
     return NextResponse.json(
       { error: 'sessionId, filePath, content are required' },
@@ -28,19 +50,17 @@ export async function POST(request: NextRequest) {
     );
   }
 
-  // Skip pathological inputs early
   if (content.length === 0) {
     return NextResponse.json({ status: 'empty', chunks: 0 });
   }
-  if (content.length > 200_000) {
-    // Too large — refuse to embed (>50K tokens single file)
+  if (content.length > MAX_EMBEDDING_CONTENT_CHARS) {
     return NextResponse.json({ status: 'skipped_too_large', chunks: 0 });
   }
 
-  const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
-  const anonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
+  const url = getPublicEnv('NEXT_PUBLIC_SUPABASE_URL');
+  const anonKey = getPublicEnv('NEXT_PUBLIC_SUPABASE_ANON_KEY');
   if (!url || !anonKey) {
-    return NextResponse.json({ error: 'Supabase not configured' }, { status: 500 });
+    return NextResponse.json({ error: 'Supabase not configured' }, { status: 503 });
   }
 
   const authHeader = request.headers.get('authorization') ?? '';
@@ -49,76 +69,86 @@ export async function POST(request: NextRequest) {
     auth: { persistSession: false, autoRefreshToken: false },
   });
 
-  // Look up file_id from (session_id, file_path) — the embeddings table FKs on file_id
-  const { data: fileRow, error: fileErr } = await supabase
-    .from('files')
-    .select('id')
-    .eq('session_id', sessionId)
-    .eq('file_path', filePath)
-    .maybeSingle();
-
-  if (fileErr || !fileRow) {
-    return NextResponse.json(
-      { error: 'File not found', details: fileErr?.message },
-      { status: 404 }
-    );
-  }
-  const fileId = fileRow.id as string;
-
-  // Chunk + embed
-  const chunks = chunkText(content);
-  let embeddings: number[][];
   try {
-    embeddings = await embedChunks(chunks);
-  } catch (err) {
-    return NextResponse.json(
-      { error: 'Embedding API failed', details: err instanceof Error ? err.message : String(err) },
-      { status: 502 }
-    );
-  }
+    const { data: fileRow, error: fileErr } = await supabase
+      .from('files')
+      .select('id')
+      .eq('session_id', sessionId)
+      .eq('file_path', filePath)
+      .maybeSingle();
 
-  // Clear stale embeddings for this file (file may have shrunk)
-  const { error: delErr } = await supabase
-    .from('file_embeddings')
-    .delete()
-    .eq('file_id', fileId);
-  if (delErr) {
-    const msg = delErr.message || '';
-    if (msg.includes('does not exist') || msg.includes('relation') || msg.toLowerCase().includes('vector')) {
-      return NextResponse.json(
-        { status: 'pgvector_unavailable', details: msg },
-        { status: 503 }
-      );
+    if (fileErr || !fileRow) {
+      return NextResponse.json({ error: 'File not found' }, { status: 404 });
     }
-    // Non-fatal: continue with upsert
-    console.warn('[embeddings] delete-stale failed:', msg);
-  }
+    const fileId = fileRow.id as string;
 
-  // Insert new chunks
-  const rows = chunks.map((c, i) => ({
-    session_id: sessionId,
-    file_id: fileId,
-    file_path: filePath,
-    chunk_index: i,
-    chunk_content: c,
-    // pgvector accepts the array form '[1,2,3]' as text; supabase-js will send it as JSON
-    embedding: embeddings[i] as unknown as string,
-  }));
-
-  const { error: insertErr } = await supabase.from('file_embeddings').insert(rows);
-  if (insertErr) {
-    const msg = insertErr.message || '';
-    if (msg.includes('does not exist') || msg.includes('relation') || msg.toLowerCase().includes('vector')) {
-      return NextResponse.json(
-        { status: 'pgvector_unavailable', details: msg },
-        { status: 503 }
-      );
+    const chunks = chunkText(content);
+    let embeddings: number[][];
+    try {
+      embeddings = await embedChunks(chunks);
+    } catch (err) {
+      return safeApiErrorResponse(err, {
+        fallback: 'Embedding API failed.',
+        status: 502,
+        operation: 'embeddings-openai',
+        exposeInDevelopment: true,
+      });
     }
-    return NextResponse.json(
-      { error: 'Insert failed', details: msg },
-      { status: 500 }
-    );
-  }
 
-  return NextResponse.json({ status: 'ok', chunks: chunks.length });
+    const { error: delErr } = await supabase
+      .from('file_embeddings')
+      .delete()
+      .eq('file_id', fileId);
+    if (delErr) {
+      const msg = delErr.message || '';
+      if (
+        msg.includes('does not exist') ||
+        msg.includes('relation') ||
+        msg.toLowerCase().includes('vector')
+      ) {
+        return NextResponse.json(
+          { status: 'pgvector_unavailable' },
+          { status: 503 }
+        );
+      }
+      logWarning('[embeddings] delete-stale failed', {
+        operation: 'embeddings-delete-stale',
+        reason: msg,
+      });
+    }
+
+    const rows = chunks.map((chunk, index) => ({
+      session_id: sessionId,
+      file_id: fileId,
+      file_path: filePath,
+      chunk_index: index,
+      chunk_content: chunk,
+      embedding: embeddings[index] as unknown as string,
+    }));
+
+    const { error: insertErr } = await supabase.from('file_embeddings').insert(rows);
+    if (insertErr) {
+      const msg = insertErr.message || '';
+      if (
+        msg.includes('does not exist') ||
+        msg.includes('relation') ||
+        msg.toLowerCase().includes('vector')
+      ) {
+        return NextResponse.json(
+          { status: 'pgvector_unavailable' },
+          { status: 503 }
+        );
+      }
+      return NextResponse.json({ error: 'Insert failed' }, { status: 500 });
+    }
+
+    return NextResponse.json({ status: 'ok', chunks: chunks.length });
+  } catch (error) {
+    return safeApiErrorResponse(error, {
+      fallback: 'Embedding request failed.',
+      operation: 'embeddings-upsert',
+      exposeInDevelopment: true,
+    });
+  }
 }
+

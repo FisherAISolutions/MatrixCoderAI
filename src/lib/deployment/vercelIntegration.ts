@@ -1,3 +1,4 @@
+﻿import { getOptionalServerEnv, getPublicEnv } from '@/lib/env';
 import type { ProjectExportFile } from '@/lib/deployment/projectZip';
 import type { VercelReadinessStatus } from '@/lib/deployment/vercelReadiness';
 
@@ -63,11 +64,12 @@ type VercelEnv = Record<string, string | undefined>;
 function defaultEnv(): VercelEnv {
   if (typeof process === 'undefined') return {};
   return {
-    VERCEL_TOKEN: process.env.VERCEL_TOKEN,
+    VERCEL_TOKEN: getOptionalServerEnv('VERCEL_TOKEN'),
     NEXT_PUBLIC_VERCEL_TOKEN_CONFIGURED:
-      process.env.NEXT_PUBLIC_VERCEL_TOKEN_CONFIGURED,
+      getPublicEnv('NEXT_PUBLIC_VERCEL_TOKEN_CONFIGURED'),
   };
 }
+
 
 export function detectVercelEnvironment(
   env: VercelEnv = defaultEnv()
@@ -128,3 +130,6 @@ export function getVercelConnectionState({
       'Vercel token is detected and the project is ready. Live connection is coming next.',
   };
 }
+
+
+
