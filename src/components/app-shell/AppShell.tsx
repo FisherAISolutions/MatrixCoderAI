@@ -44,14 +44,14 @@ function ShellLink({
   const Icon = item.icon;
   const active = isAppShellRouteActive(pathname, item.href);
   const sharedClassName =
-    'group flex w-full items-center gap-3 border px-3 py-2 text-left text-xs uppercase tracking-[0.18em] transition-all focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-matrix-green/70';
+    'group flex w-full items-center gap-3 rounded-xl border px-3 py-2.5 text-left text-xs uppercase tracking-[0.18em] transition-all duration-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-matrix-green/70';
 
   if (item.comingSoon) {
     return (
       <button
         type="button"
         disabled
-        className={`${sharedClassName} cursor-not-allowed border-matrix-border/40 text-matrix-green-muted/50`}
+        className={`${sharedClassName} cursor-not-allowed border-matrix-border/30 bg-matrix-panel/20 text-matrix-green-muted/45`}
         title={`${item.label} is coming soon`}
       >
         <Icon size={16} aria-hidden="true" />
@@ -73,8 +73,8 @@ function ShellLink({
       onClick={onNavigate}
       className={`${sharedClassName} ${
         active
-          ? 'border-matrix-green bg-matrix-green-ghost text-matrix-green neon-text-glow'
-          : 'border-transparent text-matrix-green-muted hover:border-matrix-border hover:bg-matrix-panel hover:text-matrix-green'
+          ? 'border-matrix-green/80 bg-matrix-green-ghost text-matrix-green neon-text-glow shadow-[0_0_24px_rgba(0,255,102,0.12)]'
+          : 'border-transparent text-matrix-green-muted hover:border-matrix-border/80 hover:bg-matrix-panel/80 hover:text-matrix-green hover:shadow-[0_0_18px_rgba(0,255,102,0.08)]'
       }`}
       aria-current={active ? 'page' : undefined}
       title={collapsed ? item.label : undefined}
@@ -103,11 +103,11 @@ function Sidebar({
 
   return (
     <aside
-      className={`flex h-full flex-col border-r border-matrix-border bg-matrix-bg/95 text-matrix-green shadow-[0_0_28px_rgba(0,255,102,0.08)] backdrop-blur-xl transition-[width] duration-300 ${
+      className={`flex h-full flex-col border-r border-matrix-border/80 bg-[#030806]/95 text-matrix-green shadow-[0_0_38px_rgba(0,255,102,0.10)] backdrop-blur-xl transition-[width] duration-300 ${
         mobile ? 'w-80 max-w-[86vw]' : collapsed ? 'w-20' : 'w-64 xl:w-72'
       }`}
     >
-      <div className="flex items-center gap-3 border-b border-matrix-border px-4 py-4">
+      <div className="flex items-center gap-3 border-b border-matrix-border/80 bg-matrix-panel/35 px-4 py-4">
         <AppLogo size={34} />
         {!collapsed && (
           <div className="min-w-0">
@@ -123,7 +123,7 @@ function Sidebar({
           <button
             type="button"
             onClick={onToggleCollapsed}
-            className="ml-auto hidden border border-matrix-border p-1.5 text-matrix-green-muted transition-colors hover:border-matrix-green hover:text-matrix-green lg:inline-flex"
+            className="ml-auto hidden rounded-lg border border-matrix-border bg-matrix-bg/70 p-1.5 text-matrix-green-muted transition-colors hover:border-matrix-green hover:text-matrix-green lg:inline-flex"
             aria-label={collapsed ? 'Expand navigation' : 'Collapse navigation'}
             aria-expanded={!collapsed}
           >
@@ -150,7 +150,7 @@ function Sidebar({
           ))}
         </div>
 
-        <div className="space-y-1 border-t border-matrix-border pt-4">
+        <div className="space-y-1 border-t border-matrix-border/70 pt-4">
           {!collapsed && (
             <p className="px-3 pb-2 text-[10px] uppercase tracking-[0.32em] text-matrix-green-muted">
               Quick actions
@@ -168,8 +168,8 @@ function Sidebar({
         </div>
       </nav>
 
-      <footer className="border-t border-matrix-border p-3">
-        <div className="border border-matrix-border bg-matrix-panel/70 p-3">
+      <footer className="border-t border-matrix-border/80 bg-matrix-panel/20 p-3">
+        <div className="rounded-xl border border-matrix-border/80 bg-matrix-panel/70 p-3 shadow-[0_0_22px_rgba(0,255,102,0.06)]">
           {!collapsed || mobile ? (
             <>
               <p className="truncate text-xs font-semibold text-matrix-green">{userLabel}</p>
@@ -178,7 +178,7 @@ function Sidebar({
               </p>
             </>
           ) : (
-            <div className="mx-auto flex h-8 w-8 items-center justify-center border border-matrix-green text-xs font-bold text-matrix-green">
+            <div className="mx-auto flex h-8 w-8 items-center justify-center rounded-lg border border-matrix-green text-xs font-bold text-matrix-green">
               {userLabel.slice(0, 1).toUpperCase()}
             </div>
           )}
@@ -219,7 +219,7 @@ export function AppShell({
   }, [breadcrumbs, title]);
 
   return (
-    <div className="flex h-screen w-screen overflow-hidden bg-matrix-bg text-matrix-green font-mono">
+    <div className="flex h-screen w-screen overflow-hidden bg-[#020604] text-matrix-green font-mono">
       <div className="hidden lg:block">
         <Sidebar
           collapsed={collapsed}
@@ -249,10 +249,10 @@ export function AppShell({
 
       <div className="flex min-w-0 flex-1 flex-col">
         {showHeader ? (
-          <header className="flex min-h-[76px] items-center gap-4 border-b border-matrix-border bg-matrix-bg/85 px-4 backdrop-blur md:px-6">
+          <header className="flex min-h-[76px] items-center gap-4 border-b border-matrix-border/80 bg-matrix-bg/88 px-4 shadow-[0_12px_40px_rgba(0,0,0,0.24)] backdrop-blur-xl md:px-6">
             <button
               type="button"
-              className="inline-flex border border-matrix-border p-2 text-matrix-green-muted transition-colors hover:border-matrix-green hover:text-matrix-green lg:hidden"
+              className="inline-flex rounded-lg border border-matrix-border bg-matrix-panel/70 p-2 text-matrix-green-muted transition-colors hover:border-matrix-green hover:text-matrix-green lg:hidden"
               aria-label="Open navigation drawer"
               aria-expanded={mobileOpen}
               onClick={() => setMobileOpen(true)}
@@ -288,7 +288,7 @@ export function AppShell({
         ) : (
           <button
             type="button"
-            className="fixed left-3 top-3 z-40 inline-flex border border-matrix-border bg-matrix-bg/90 p-2 text-matrix-green-muted backdrop-blur transition-colors hover:border-matrix-green hover:text-matrix-green lg:hidden"
+            className="fixed left-3 top-3 z-40 inline-flex rounded-lg border border-matrix-border bg-matrix-bg/90 p-2 text-matrix-green-muted backdrop-blur transition-colors hover:border-matrix-green hover:text-matrix-green lg:hidden"
             aria-label="Open navigation drawer"
             aria-expanded={mobileOpen}
             onClick={() => setMobileOpen(true)}

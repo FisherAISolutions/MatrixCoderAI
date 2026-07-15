@@ -1,15 +1,33 @@
-﻿export type EnvVarVisibility = 'public' | 'server';
+export type EnvVarVisibility = 'public' | 'server';
 export type EnvVarRequirement = 'required' | 'optional';
 
+export const PUBLIC_ENV_KEYS = [
+  'NEXT_PUBLIC_SUPABASE_URL',
+  'NEXT_PUBLIC_SUPABASE_ANON_KEY',
+  'NEXT_PUBLIC_VERCEL_TOKEN_CONFIGURED',
+] as const;
+
+export const SERVER_ENV_KEYS = [
+  'OPENAI_API_KEY',
+  'ANTHROPIC_API_KEY',
+  'GEMINI_API_KEY',
+  'PERPLEXITY_API_KEY',
+  'VERCEL_TOKEN',
+] as const;
+
+export type PublicEnvKey = (typeof PUBLIC_ENV_KEYS)[number];
+export type ServerEnvKey = (typeof SERVER_ENV_KEYS)[number];
+export type KnownEnvKey = PublicEnvKey | ServerEnvKey;
+
 export interface EnvVarSpec {
-  key: string;
+  key: KnownEnvKey;
   visibility: EnvVarVisibility;
   requirement: EnvVarRequirement;
   description: string;
 }
 
 export interface EnvValidationIssue {
-  key: string;
+  key: KnownEnvKey;
   visibility: EnvVarVisibility;
   requirement: EnvVarRequirement;
   message: string;
@@ -19,6 +37,18 @@ export interface EnvValidationResult {
   ok: boolean;
   issues: EnvValidationIssue[];
 }
+
+const PUBLIC_ENV_KEY_SET = new Set<string>(PUBLIC_ENV_KEYS);
+const SERVER_ENV_KEY_SET = new Set<string>(SERVER_ENV_KEYS);
+
+// Public values must be statically referenced so Next.js can embed them
+// into browser bundles. Do not replace these with process.env[key].
+export const PUBLIC_ENV_MAP: Readonly<Record<PublicEnvKey, string | undefined>> = {
+  NEXT_PUBLIC_SUPABASE_URL: process.env.NEXT_PUBLIC_SUPABASE_URL,
+  NEXT_PUBLIC_SUPABASE_ANON_KEY: process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY,
+  NEXT_PUBLIC_VERCEL_TOKEN_CONFIGURED:
+    process.env.NEXT_PUBLIC_VERCEL_TOKEN_CONFIGURED,
+};
 
 export const ENV_SPECS = [
   {
@@ -71,9 +101,10 @@ export const ENV_SPECS = [
   },
 ] as const satisfies readonly EnvVarSpec[];
 
-export type KnownEnvKey = (typeof ENV_SPECS)[number]['key'];
-
-function readEnvValue(key: string, source: Record<string, string | undefined> = process.env) {
+function readEnvValue(
+  key: string,
+  source: Record<string, string | undefined>
+): string | undefined {
   const value = source[key];
   return typeof value === 'string' && value.trim().length > 0
     ? value.trim()
@@ -117,11 +148,10 @@ export function validateEnvironment(
 }
 
 export function getOptionalServerEnv(
-  key: KnownEnvKey,
+  key: ServerEnvKey,
   source: Record<string, string | undefined> = process.env
 ): string | undefined {
-  const spec = ENV_SPECS.find((item) => item.key === key);
-  if (spec?.visibility === 'public') {
+  if (!SERVER_ENV_KEY_SET.has(key)) {
     throw new Error(`${key} is public; use getPublicEnv instead.`);
   }
   if (typeof window !== 'undefined') {
@@ -131,7 +161,7 @@ export function getOptionalServerEnv(
 }
 
 export function requireServerEnv(
-  key: KnownEnvKey,
+  key: ServerEnvKey,
   source: Record<string, string | undefined> = process.env
 ): string {
   const value = getOptionalServerEnv(key, source);
@@ -142,13 +172,11 @@ export function requireServerEnv(
 }
 
 export function getPublicEnv(
-  key: KnownEnvKey,
-  source: Record<string, string | undefined> = process.env
+  key: PublicEnvKey,
+  source?: Record<string, string | undefined>
 ): string | undefined {
-  const spec = ENV_SPECS.find((item) => item.key === key);
-  if (spec?.visibility === 'server') {
+  if (!PUBLIC_ENV_KEY_SET.has(key)) {
     throw new Error(`${key} is server-only and must not be exposed to the browser.`);
   }
-  return readEnvValue(key, source);
+  return readEnvValue(key, source ?? PUBLIC_ENV_MAP);
 }
-

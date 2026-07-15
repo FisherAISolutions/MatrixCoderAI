@@ -23,6 +23,7 @@ export default function SignUpForm({ onSwitchToLogin }: Props) {
   const [showPassword, setShowPassword] = useState(false);
   const [showConfirm, setShowConfirm] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
+  const [authError, setAuthError] = useState<string | null>(null);
 
   const {
     register,
@@ -50,8 +51,9 @@ export default function SignUpForm({ onSwitchToLogin }: Props) {
 
   const onSubmit = async (data: SignUpFormData) => {
     setIsLoading(true);
+    setAuthError(null);
     try {
-      // BACKEND: POST /api/auth/signup — Supabase Auth signUp({ email, password }) + create user profile row
+      // Supabase Auth signUp({ email, password }) + create user profile row
       await signUp(data.email, data.password);
       toast.success('Account initialized', {
         description: 'Deploying your Matrix Coder AI workspace...',
@@ -59,8 +61,10 @@ export default function SignUpForm({ onSwitchToLogin }: Props) {
       });
       setTimeout(() => router.push('/chat-workspace'), 700);
     } catch (err) {
+      const message = err instanceof Error ? err.message : 'Unable to create account';
+      setAuthError(message);
       toast.error('Account initialization failed', {
-        description: err instanceof Error ? err.message : 'Unable to create account',
+        description: message,
         style: { background: '#1a0d0d', border: '1px solid #ff3333', color: '#ff3333' },
       });
     } finally {
@@ -69,7 +73,7 @@ export default function SignUpForm({ onSwitchToLogin }: Props) {
   };
 
   return (
-    <form onSubmit={handleSubmit(onSubmit)} className="flex flex-col gap-4" noValidate>
+    <form onSubmit={handleSubmit(onSubmit)} method="post" action="/sign-up-login-screen" className="flex flex-col gap-4" noValidate>
       {/* Email */}
       <div className="flex flex-col gap-1.5">
         <label htmlFor="signup-email" className="text-xs font-mono text-matrix-green-muted tracking-widest uppercase">
@@ -80,7 +84,7 @@ export default function SignUpForm({ onSwitchToLogin }: Props) {
           type="email"
           autoComplete="email"
           placeholder="you@yourdomain.dev"
-          className={`w-full bg-matrix-surface border px-3 py-2.5 text-sm font-mono text-matrix-green placeholder-matrix-green-muted outline-none transition-all duration-150 rounded-sm ${
+          className={`w-full rounded-lg border border-matrix-border bg-matrix-surface/90 px-3 py-2.5 text-sm font-mono text-matrix-green shadow-inner shadow-black/20 placeholder-matrix-green-muted outline-none transition-all duration-150 ${
             errors.email
               ? 'border-matrix-red' :'border-matrix-border focus:border-matrix-green focus:shadow-neon-input'
           }`}
@@ -89,7 +93,7 @@ export default function SignUpForm({ onSwitchToLogin }: Props) {
             pattern: { value: /^\S+@\S+\.\S+$/, message: 'Invalid email format' },
           })}
         />
-        {errors.email && <p className="text-xs text-matrix-red font-mono">⚠ {errors.email.message}</p>}
+        {errors.email && <p className="text-xs text-matrix-red font-mono">! {errors.email.message}</p>}
       </div>
 
       {/* Password */}
@@ -105,8 +109,8 @@ export default function SignUpForm({ onSwitchToLogin }: Props) {
             id="signup-password"
             type={showPassword ? 'text' : 'password'}
             autoComplete="new-password"
-            placeholder="••••••••••••••••"
-            className={`w-full bg-matrix-surface border px-3 py-2.5 pr-10 text-sm font-mono text-matrix-green placeholder-matrix-green-muted outline-none transition-all duration-150 rounded-sm ${
+            placeholder="****************"
+            className={`w-full rounded-lg border border-matrix-border bg-matrix-surface/90 px-3 py-2.5 pr-10 text-sm font-mono text-matrix-green shadow-inner shadow-black/20 placeholder-matrix-green-muted outline-none transition-all duration-150 ${
               errors.password
                 ? 'border-matrix-red' :'border-matrix-border focus:border-matrix-green focus:shadow-neon-input'
             }`}
@@ -143,7 +147,7 @@ export default function SignUpForm({ onSwitchToLogin }: Props) {
             }`}>{strength.label}</span>
           </div>
         )}
-        {errors.password && <p className="text-xs text-matrix-red font-mono">⚠ {errors.password.message}</p>}
+        {errors.password && <p className="text-xs text-matrix-red font-mono">! {errors.password.message}</p>}
       </div>
 
       {/* Confirm Password */}
@@ -156,8 +160,8 @@ export default function SignUpForm({ onSwitchToLogin }: Props) {
             id="signup-confirm"
             type={showConfirm ? 'text' : 'password'}
             autoComplete="new-password"
-            placeholder="••••••••••••••••"
-            className={`w-full bg-matrix-surface border px-3 py-2.5 pr-10 text-sm font-mono text-matrix-green placeholder-matrix-green-muted outline-none transition-all duration-150 rounded-sm ${
+            placeholder="****************"
+            className={`w-full rounded-lg border border-matrix-border bg-matrix-surface/90 px-3 py-2.5 pr-10 text-sm font-mono text-matrix-green shadow-inner shadow-black/20 placeholder-matrix-green-muted outline-none transition-all duration-150 ${
               errors.confirmPassword
                 ? 'border-matrix-red' :'border-matrix-border focus:border-matrix-green focus:shadow-neon-input'
             }`}
@@ -176,7 +180,7 @@ export default function SignUpForm({ onSwitchToLogin }: Props) {
           </button>
         </div>
         {errors.confirmPassword && (
-          <p className="text-xs text-matrix-red font-mono">⚠ {errors.confirmPassword.message}</p>
+          <p className="text-xs text-matrix-red font-mono">! {errors.confirmPassword.message}</p>
         )}
       </div>
 
@@ -196,14 +200,20 @@ export default function SignUpForm({ onSwitchToLogin }: Props) {
         </label>
       </div>
       {errors.acceptTerms && (
-        <p className="text-xs text-matrix-red font-mono -mt-2">⚠ {errors.acceptTerms.message}</p>
+        <p className="text-xs text-matrix-red font-mono -mt-2">! {errors.acceptTerms.message}</p>
+      )}
+
+      {authError && (
+        <div className="rounded-lg border border-matrix-red/70 bg-matrix-red/10 px-3 py-2 text-xs font-mono leading-relaxed text-matrix-red" role="alert">
+          {authError}
+        </div>
       )}
 
       {/* Submit */}
       <button
         type="submit"
         disabled={isLoading}
-        className="w-full py-2.5 bg-matrix-green text-black text-sm font-mono font-bold tracking-widest uppercase rounded-sm transition-all duration-150 hover:bg-matrix-green-dim active:scale-[0.98] disabled:opacity-50 disabled:cursor-not-allowed neon-glow mt-1"
+        className="mt-1 w-full rounded-xl bg-matrix-green py-3 text-sm font-mono font-bold uppercase tracking-widest text-black transition-all duration-150 hover:bg-matrix-green-dim active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-50 neon-glow"
       >
         {isLoading ? (
           <span className="flex items-center justify-center gap-2">
@@ -222,7 +232,7 @@ export default function SignUpForm({ onSwitchToLogin }: Props) {
           onClick={onSwitchToLogin}
           className="text-matrix-green hover:underline underline-offset-2 transition-colors"
         >
-          Login to session →
+          Login to session {'->'}
         </button>
       </p>
     </form>

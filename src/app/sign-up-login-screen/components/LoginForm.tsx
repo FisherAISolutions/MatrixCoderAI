@@ -26,6 +26,7 @@ export default function LoginForm({ onSwitchToSignup }: Props) {
   const { signIn } = useAuth();
   const [showPassword, setShowPassword] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
+  const [authError, setAuthError] = useState<string | null>(null);
   const [copiedField, setCopiedField] = useState<string | null>(null);
 
   const {
@@ -52,8 +53,9 @@ export default function LoginForm({ onSwitchToSignup }: Props) {
 
   const onSubmit = async (data: LoginFormData) => {
     setIsLoading(true);
+    setAuthError(null);
     try {
-      // BACKEND: POST /api/auth/login — Supabase Auth signInWithPassword({ email, password })
+      // Supabase Auth signInWithPassword({ email, password })
       await signIn(data.email, data.password);
 
       toast.success('Authentication successful', {
@@ -62,8 +64,10 @@ export default function LoginForm({ onSwitchToSignup }: Props) {
       });
       setTimeout(() => router.push('/chat-workspace'), 600);
     } catch (err) {
-      toast.error('Invalid credentials — use the demo accounts below to sign in', {
-        description: err instanceof Error ? err.message : 'Authentication failed',
+      const message = err instanceof Error ? err.message : 'Authentication failed';
+      setAuthError(message);
+      toast.error('Sign in could not complete', {
+        description: message,
         style: { background: '#1a0000', border: '1px solid #ff4444', color: '#ff4444' },
       });
       setIsLoading(false);
@@ -71,7 +75,7 @@ export default function LoginForm({ onSwitchToSignup }: Props) {
   };
 
   return (
-    <form onSubmit={handleSubmit(onSubmit)} className="flex flex-col gap-4" noValidate>
+    <form onSubmit={handleSubmit(onSubmit)} method="post" action="/sign-up-login-screen" className="flex flex-col gap-4" noValidate>
       {/* Email */}
       <div className="flex flex-col gap-1.5">
         <label htmlFor="login-email" className="text-xs font-mono text-matrix-green-muted tracking-widest uppercase">
@@ -82,7 +86,7 @@ export default function LoginForm({ onSwitchToSignup }: Props) {
           type="email"
           autoComplete="email"
           placeholder="dev@codepilot.sh"
-          className={`w-full bg-matrix-surface border px-3 py-2.5 text-sm font-mono text-matrix-green placeholder-matrix-green-muted outline-none transition-all duration-150 rounded-sm ${
+          className={`w-full rounded-lg border border-matrix-border bg-matrix-surface/90 px-3 py-2.5 text-sm font-mono text-matrix-green shadow-inner shadow-black/20 placeholder-matrix-green-muted outline-none transition-all duration-150 ${
             errors.email
               ? 'border-matrix-red focus:shadow-[0_0_0_1px_#ff4444]'
               : 'border-matrix-border focus:border-matrix-green focus:shadow-neon-input'
@@ -93,7 +97,7 @@ export default function LoginForm({ onSwitchToSignup }: Props) {
           })}
         />
         {errors.email && (
-          <p className="text-xs text-matrix-red font-mono">⚠ {errors.email.message}</p>
+          <p className="text-xs text-matrix-red font-mono">! {errors.email.message}</p>
         )}
       </div>
 
@@ -107,8 +111,8 @@ export default function LoginForm({ onSwitchToSignup }: Props) {
             id="login-password"
             type={showPassword ? 'text' : 'password'}
             autoComplete="current-password"
-            placeholder="••••••••••••••••"
-            className={`w-full bg-matrix-surface border px-3 py-2.5 pr-10 text-sm font-mono text-matrix-green placeholder-matrix-green-muted outline-none transition-all duration-150 rounded-sm ${
+            placeholder="****************"
+            className={`w-full rounded-lg border border-matrix-border bg-matrix-surface/90 px-3 py-2.5 pr-10 text-sm font-mono text-matrix-green shadow-inner shadow-black/20 placeholder-matrix-green-muted outline-none transition-all duration-150 ${
               errors.password
                 ? 'border-matrix-red focus:shadow-[0_0_0_1px_#ff4444]'
                 : 'border-matrix-border focus:border-matrix-green focus:shadow-neon-input'
@@ -128,7 +132,7 @@ export default function LoginForm({ onSwitchToSignup }: Props) {
           </button>
         </div>
         {errors.password && (
-          <p className="text-xs text-matrix-red font-mono">⚠ {errors.password.message}</p>
+          <p className="text-xs text-matrix-red font-mono">! {errors.password.message}</p>
         )}
       </div>
 
@@ -145,11 +149,17 @@ export default function LoginForm({ onSwitchToSignup }: Props) {
         </label>
       </div>
 
+      {authError && (
+        <div className="rounded-lg border border-matrix-red/70 bg-matrix-red/10 px-3 py-2 text-xs font-mono leading-relaxed text-matrix-red" role="alert">
+          {authError}
+        </div>
+      )}
+
       {/* Submit */}
       <button
         type="submit"
         disabled={isLoading}
-        className="w-full py-2.5 bg-matrix-green text-black text-sm font-mono font-bold tracking-widest uppercase rounded-sm transition-all duration-150 hover:bg-matrix-green-dim active:scale-[0.98] disabled:opacity-50 disabled:cursor-not-allowed neon-glow mt-1"
+        className="mt-1 w-full rounded-xl bg-matrix-green py-3 text-sm font-mono font-bold uppercase tracking-widest text-black transition-all duration-150 hover:bg-matrix-green-dim active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-50 neon-glow"
         style={{ minWidth: 0 }}
       >
         {isLoading ? (
@@ -163,7 +173,7 @@ export default function LoginForm({ onSwitchToSignup }: Props) {
       </button>
 
       {/* Demo credentials box */}
-      <div className="mt-2 border border-matrix-border rounded-sm bg-matrix-green-ghost p-3">
+      <div className="mt-2 rounded-xl border border-matrix-border/80 bg-matrix-green-ghost p-3 shadow-[0_0_22px_rgba(0,255,102,0.08)]">
         <div className="flex items-center justify-between mb-2">
           <div className="flex items-center gap-1.5">
             <Terminal size={11} className="text-matrix-green-muted" />
@@ -174,7 +184,7 @@ export default function LoginForm({ onSwitchToSignup }: Props) {
             onClick={autofillDemo}
             className="text-xs font-mono text-matrix-green hover:text-matrix-green-dim underline underline-offset-2 transition-colors"
           >
-            autofill →
+            autofill {'->'}
           </button>
         </div>
         {(['email', 'password'] as const).map((field) => (
@@ -182,7 +192,7 @@ export default function LoginForm({ onSwitchToSignup }: Props) {
             <div className="flex items-center gap-2 min-w-0">
               <span className="text-matrix-green-muted text-xs font-mono w-14 flex-shrink-0">{field}:</span>
               <span className="text-matrix-green text-xs font-mono truncate">
-                {field === 'password' ? '••••••••••••••••' : DEMO_CREDENTIALS[field]}
+                {field === 'password' ? '****************' : DEMO_CREDENTIALS[field]}
               </span>
             </div>
             <button
@@ -204,7 +214,7 @@ export default function LoginForm({ onSwitchToSignup }: Props) {
           onClick={onSwitchToSignup}
           className="text-matrix-green hover:underline underline-offset-2 transition-colors"
         >
-          Initialize new session →
+          Initialize new session {'->'}
         </button>
       </p>
     </form>

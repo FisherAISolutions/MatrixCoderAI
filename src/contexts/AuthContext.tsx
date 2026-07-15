@@ -21,6 +21,19 @@ import {
 import { logToTerminal } from '@/lib/terminal/store';
 
 const ARCHIVED_WORKSPACES_KEY = 'matrix-coder:archived-workspace-ids';
+const AUTH_OPERATION_TIMEOUT_MS = 15000;
+const SESSION_OPERATION_TIMEOUT_MS = 8000;
+
+function withTimeout<T>(promise: Promise<T>, timeoutMs: number, label: string): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const timeout = new Promise<T>((_, reject) => {
+    timer = setTimeout(() => reject(new Error(`${label} timed out`)), timeoutMs);
+  });
+
+  return Promise.race([promise, timeout]).finally(() => {
+    if (timer) clearTimeout(timer);
+  });
+}
 
 interface Session {
   id: string;
@@ -107,51 +120,78 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     return userSessions[0];
   };
 
+  const createLocalWorkspaceSession = useCallback((title = 'Local Workspace'): Session => {
+    const now = new Date().toISOString();
+    return {
+      id: `demo-session-${Date.now()}`,
+      title,
+      created_at: now,
+      updated_at: now,
+    };
+  }, []);
+
+  const useLocalWorkspaceFallback = useCallback(
+    (reason: unknown, title = 'Local Workspace') => {
+      const message = reason instanceof Error ? reason.message : String(reason);
+      console.warn('Workspace session fallback:', message);
+      logToTerminal(`[auth] using local workspace fallback reason="${message}"`, 'warn');
+      const localSession = createLocalWorkspaceSession(title);
+      persistAndSetSession(localSession);
+      setSessions([localSession]);
+      return localSession;
+    },
+    [createLocalWorkspaceSession, persistAndSetSession]
+  );
+
+  const restoreUserWorkspace = useCallback(
+    async (authUser: User, source: string) => {
+      try {
+        console.log(`Loading sessions for user from ${source}:`, authUser.id);
+        const userSessions = await withTimeout(
+          getUserSessions(authUser.id),
+          SESSION_OPERATION_TIMEOUT_MS,
+          'Loading workspaces'
+        );
+        setSessions(userSessions);
+
+        if (userSessions.length > 0) {
+          persistAndSetSession(pickRestoredSession(userSessions));
+          return;
+        }
+
+        try {
+          const newSession = await withTimeout(
+            createSession(authUser.id, 'Main Workspace'),
+            SESSION_OPERATION_TIMEOUT_MS,
+            'Creating workspace'
+          );
+          persistAndSetSession(newSession);
+          setSessions([newSession]);
+        } catch (createErr) {
+          useLocalWorkspaceFallback(createErr, 'Main Workspace');
+        }
+      } catch (loadErr) {
+        useLocalWorkspaceFallback(loadErr, 'Main Workspace');
+      }
+    },
+    [persistAndSetSession, useLocalWorkspaceFallback]
+  );
+
   // Initialize auth on mount
   useEffect(() => {
     const initAuth = async () => {
       try {
         // Get current user
-        const currentUser = await getCurrentUser();
+        const currentUser = await withTimeout(
+          getCurrentUser(),
+          AUTH_OPERATION_TIMEOUT_MS,
+          'Restoring auth session'
+        );
         console.log('Auth init - currentUser:', currentUser?.email || 'not logged in');
         setUser(currentUser || null);
 
         if (currentUser) {
-          try {
-            // Load user's sessions
-            console.log('Loading sessions for user:', currentUser.id);
-            const userSessions = await getUserSessions(currentUser.id);
-            console.log('Loaded sessions:', userSessions.length);
-            setSessions(userSessions);
-
-            // Set to first session or create new one
-            if (userSessions.length > 0) {
-              const restored = pickRestoredSession(userSessions);
-              console.log(
-                'Setting active session:',
-                restored?.id,
-                restored?.id === userSessions[0].id ? '(first)' : '(restored from localStorage)'
-              );
-              persistAndSetSession(restored);
-            } else {
-              // Create default session for new user
-              console.log('Creating default session for new user');
-              const newSession = await createSession(currentUser.id, 'Main Workspace');
-              console.log('Created session:', newSession?.id);
-              persistAndSetSession(newSession);
-              setSessions([newSession]);
-            }
-          } catch (dbErr) {
-            console.warn('Database connection issue - using demo session:', dbErr instanceof Error ? dbErr.message : String(dbErr));
-            // Create a temporary demo session if DB fails
-            const demoSession: Session = {
-              id: 'demo-' + Date.now(),
-              title: 'Demo Session',
-              created_at: new Date().toISOString(),
-              updated_at: new Date().toISOString(),
-            };
-            persistAndSetSession(demoSession);
-          }
+          await restoreUserWorkspace(currentUser, 'initial-auth');
         }
       } catch (err) {
         console.error('Auth init error:', err);
@@ -167,24 +207,22 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       return;
     }
 
-    // Set up auth state listener
-    const { data: authListener } = supabase.auth.onAuthStateChange(async (event, authSession) => {
+    // Set up auth state listener. Supabase warns against awaiting more
+    // Supabase calls inside this callback, so defer workspace restoration.
+    let disposed = false;
+    const pendingAuthTimers = new Set<ReturnType<typeof setTimeout>>();
+
+    const { data: authListener } = supabase.auth.onAuthStateChange((_event, authSession) => {
       if (authSession?.user) {
         setUser(authSession.user);
-        // Load sessions for this user
-        try {
-          const userSessions = await getUserSessions(authSession.user.id);
-          setSessions(userSessions);
-          if (userSessions.length > 0) {
-            persistAndSetSession(pickRestoredSession(userSessions));
-          } else {
-            const newSession = await createSession(authSession.user.id, 'Main Workspace');
-            persistAndSetSession(newSession);
-            setSessions([newSession]);
-          }
-        } catch (err) {
-          console.error('Failed to load sessions:', err);
-        }
+        const timer = setTimeout(() => {
+          pendingAuthTimers.delete(timer);
+          if (disposed) return;
+          void restoreUserWorkspace(authSession.user, 'auth-state').catch((err) => {
+            if (!disposed) useLocalWorkspaceFallback(err, 'Main Workspace');
+          });
+        }, 0);
+        pendingAuthTimers.add(timer);
       } else {
         setUser(null);
         persistAndSetSession(null);
@@ -193,20 +231,24 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     });
 
     return () => {
+      disposed = true;
+      for (const timer of pendingAuthTimers) clearTimeout(timer);
+      pendingAuthTimers.clear();
       authListener?.subscription.unsubscribe();
     };
-  }, []);
+  }, [persistAndSetSession, restoreUserWorkspace, useLocalWorkspaceFallback]);
 
   const signUp = async (email: string, password: string) => {
     try {
       setError(null);
-      const { user: newUser } = await signUpUser(email, password);
+      const { user: newUser } = await withTimeout(
+        signUpUser(email, password),
+        AUTH_OPERATION_TIMEOUT_MS,
+        'Sign up'
+      );
       if (newUser) {
         setUser(newUser);
-        // Create default session
-        const newSession = await createSession(newUser.id, 'Main Workspace');
-        persistAndSetSession(newSession);
-        setSessions([newSession]);
+        await restoreUserWorkspace(newUser, 'sign-up');
       }
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Sign up failed';
@@ -218,19 +260,16 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const signIn = async (email: string, password: string) => {
     try {
       setError(null);
-      const { user: authUser } = await signInUser(email, password);
+      const { user: authUser } = await withTimeout(
+        signInUser(email, password),
+        AUTH_OPERATION_TIMEOUT_MS,
+        'Sign in'
+      );
       if (authUser) {
         setUser(authUser);
-        // Load sessions
-        const userSessions = await getUserSessions(authUser.id);
-        setSessions(userSessions);
-        if (userSessions.length > 0) {
-          persistAndSetSession(pickRestoredSession(userSessions));
-        } else {
-          const newSession = await createSession(authUser.id, 'Main Workspace');
-          persistAndSetSession(newSession);
-          setSessions([newSession]);
-        }
+        void restoreUserWorkspace(authUser, 'sign-in').catch((err) => {
+          useLocalWorkspaceFallback(err, 'Main Workspace');
+        });
       }
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Sign in failed';

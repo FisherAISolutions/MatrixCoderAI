@@ -24,7 +24,6 @@ import {
   normalizeContinuationPaths,
 } from '@/lib/generation/continuationGuards';
 import { applyEditSequence } from '@/lib/repo/patcher';
-import { describePatchMarkerLeak } from '@/lib/repo/patchMarkers';
 import { flattenTree } from '@/lib/repo/heuristics';
 import {
   createNextScaffoldFiles,
@@ -45,6 +44,17 @@ import {
   createGenerationCancellationScope,
   type GenerationCancellationScope,
 } from '@/lib/generation/cancellation';
+import {
+  createFileNodeFromCreate,
+  planCreateFileApplications,
+  updateFileNodeFromCreate,
+} from '@/lib/generation/fileApplication';
+import {
+  PipelineRunGuard,
+  isTerminalPipelineStage,
+  stageForAgent,
+  type PipelineStage,
+} from '@/lib/generation/pipelineState';
 import { readMatrixBuildSuiteChatHandoff } from '@/lib/build-suite/chatHandoff';
 import {
   createBuildManifestPlanningContext,
@@ -1106,6 +1116,26 @@ export default function ChatComposer({
   const consumedInitialPromptRef = useRef(false);
   const pendingBuildManifestRef = useRef<BuildManifest | null>(null);
   const pendingBlueprintDraftRef = useRef<BlueprintDraft | null>(null);
+  const pipelineRunGuardRef = useRef(new PipelineRunGuard());
+  const activePipelineRunIdRef = useRef<string | null>(null);
+
+  const setActivePipelineStage = useCallback((stage: PipelineStage) => {
+    const runId = activePipelineRunIdRef.current;
+    if (!runId) return;
+
+    const snapshot = pipelineRunGuardRef.current.setStage(runId, stage);
+    if (snapshot.runId !== runId || snapshot.stage !== stage) return;
+
+    pushTerminalLog({
+      level: 'info',
+      text: `[generation-pipeline] run=${runId} stage=${stage}\n`,
+      timestamp: Date.now(),
+    });
+
+    if (isTerminalPipelineStage(stage)) {
+      activePipelineRunIdRef.current = null;
+    }
+  }, []);
 
   const { response, isLoading, error, sendMessage } = useChat(AI_PROVIDER, PRIMARY_MODEL, true);
 
@@ -1192,6 +1222,7 @@ export default function ChatComposer({
       const streamMsgId = generateId('msg');
 
       agentRef.current = agent;
+      setActivePipelineStage(stageForAgent(agent));
       streamMsgIdRef.current = streamMsgId;
       accumulatedRef.current = '';
       streamingMessageShownRef.current = false;
@@ -1258,6 +1289,7 @@ export default function ChatComposer({
       onSetActiveAgent,
       onSetActivityStatus,
       onSetIsStreaming,
+      setActivePipelineStage,
       isLoading,
       sendMessage,
     ]
@@ -1293,6 +1325,8 @@ export default function ChatComposer({
   useEffect(() => {
     if (error) {
       const errMsg = error.message ?? 'AI response failed';
+      setActivePipelineStage('failed');
+      setGenerationPipelineActive(false);
       toast.error(errMsg);
       onSetIsStreaming(false);
       onSetActiveAgent(null);
@@ -1355,6 +1389,7 @@ export default function ChatComposer({
     onSetActiveAgent,
     onSetActivityStatus,
     onUpdateLastMessage,
+    setActivePipelineStage,
     onAddMessage,
   ]);
 
@@ -1799,61 +1834,93 @@ export default function ChatComposer({
           }
         }
 
-        // ----- Apply CREATES (existing behavior) -----
+        // ----- Plan and apply full-file creates/updates -----
         if (creates.length > 0) {
-          onSetActivityStatus('Saving files…');
+          onSetActivityStatus('Saving files...');
           console.info(
-            `[Files] Created ${creates.length} new file(s) from ${agentRef.current} agent`
+            `[Files] Planning ${creates.length} full-file create/update request(s) from ${agentRef.current} agent`
           );
         }
-        creates.forEach((file, idx) => {
-          scheduleGenerationTimer(() => {
-            if (cancellationScopeRef.current?.signal.aborted) return;
-            const markerLeak = describePatchMarkerLeak(file.content);
-            if (markerLeak) {
-              console.warn(`[Files] rejected create for ${file.path}: ${markerLeak}`);
-              toast.error(`Rejected ${file.path} because patch markers leaked into the file`);
-              onAddMessage({
-                id: prefixedId('msg'),
-                role: 'system',
-                content: `**File rejected**\n\n\`${file.path}\` was not saved because ${markerLeak}. Ask the agent to continue with a clean full-file block.`,
-                timestamp: new Date().toISOString(),
-              });
-              return;
-            }
-            onAddFile({
-              id: `file-${safeUUID()}`,
-              name: file.name,
-              path: file.path,
-              type: 'file',
-              language: file.language as any,
-              isNew: true,
-              content: file.content,
-              lastModified: new Date().toISOString(),
-              size: file.content.length,
-            });
-          }, idx * 200);
+
+        const plannedCreates = planCreateFileApplications({
+          existingFiles: flattenTree(fileTree).filter((file) => file.type === 'file'),
+          creates,
         });
-        if (creates.length > 0) {
-          const safeCreates = creates.filter((file) => !describePatchMarkerLeak(file.content));
-          createdAny = safeCreates.length > 0;
-          createsCount = safeCreates.length;
-          persistedScheduledPathsForDiagnostics.push(...safeCreates.map((file) => file.path));
-          for (const c of safeCreates) {
-            mutatedFilesByPath.set(c.path, {
-              id: `file-${safeUUID()}`,
-              name: c.name,
-              path: c.path,
-              type: 'file',
-              language: c.language as any,
-              isNew: true,
-              content: c.content,
-              lastModified: new Date().toISOString(),
-              size: c.content.length,
+        const rejectedCreates = plannedCreates.filter((plan) => plan.status === 'reject');
+        const skippedCreates = plannedCreates.filter((plan) => plan.status === 'skip');
+        const acceptedCreateNodes: Array<{
+          status: 'create' | 'update';
+          node: FileNode;
+        }> = [];
+        for (const plan of plannedCreates) {
+          if (plan.status === 'create') {
+            acceptedCreateNodes.push({
+              status: 'create',
+              node: createFileNodeFromCreate(plan.create, {
+                id: `file-${safeUUID()}`,
+                nowIso: new Date().toISOString(),
+              }),
+            });
+          } else if (plan.status === 'update' && plan.existing) {
+            acceptedCreateNodes.push({
+              status: 'update',
+              node: updateFileNodeFromCreate(
+                plan.existing,
+                plan.create,
+                new Date().toISOString()
+              ),
             });
           }
         }
 
+        for (const plan of rejectedCreates) {
+          console.warn(`[Files] rejected create for ${plan.path}: ${plan.reason}`);
+          toast.error(`Rejected ${plan.path}: ${plan.reason}`);
+        }
+        if (rejectedCreates.length > 0) {
+          onAddMessage({
+            id: prefixedId('msg'),
+            role: 'system',
+            content:
+              `**File create/update report**\n\n` +
+              rejectedCreates
+                .map((plan) => `- Rejected \`${plan.path}\`: ${plan.reason}`)
+                .join('\n'),
+            timestamp: new Date().toISOString(),
+          });
+        }
+        if (skippedCreates.length > 0) {
+          pushTerminalLog({
+            level: 'info',
+            text:
+              `[Files] skipped ${skippedCreates.length} create/update request(s): ` +
+              skippedCreates.map((plan) => `${plan.path} (${plan.reason})`).join(', ') +
+              '\n',
+            timestamp: Date.now(),
+          });
+        }
+
+        acceptedCreateNodes.forEach(({ status, node }, idx) => {
+          scheduleGenerationTimer(() => {
+            if (cancellationScopeRef.current?.signal.aborted) return;
+            if (status === 'create') {
+              onAddFile(node);
+            } else {
+              onUpdateFile(node);
+            }
+          }, idx * 200);
+        });
+
+        if (acceptedCreateNodes.length > 0) {
+          createdAny = true;
+          createsCount = acceptedCreateNodes.length;
+          persistedScheduledPathsForDiagnostics.push(
+            ...acceptedCreateNodes.map(({ node }) => node.path)
+          );
+          for (const { node } of acceptedCreateNodes) {
+            mutatedFilesByPath.set(node.path, node);
+          }
+        }
         persistedScheduledPathsForDiagnostics.push(...Array.from(mutatedFilesByPath.keys()));
 
         if (appliedAnyEdit || createdAny) {
@@ -1888,8 +1955,8 @@ export default function ChatComposer({
         });
 
         // Clear activity status once all create timeouts have fired.
-        if (creates.length > 0) {
-          scheduleGenerationTimer(() => onSetActivityStatus(null), creates.length * 200 + 300);
+        if (createsCount > 0) {
+          scheduleGenerationTimer(() => onSetActivityStatus(null), createsCount * 200 + 300);
         } else {
           onSetActivityStatus(null);
         }
@@ -2147,12 +2214,21 @@ export default function ChatComposer({
         autoFixScheduled = true;
         scheduleGenerationTimer(() => {
           const scope = cancellationScopeRef.current;
+          const runId = activePipelineRunIdRef.current;
           if (scope?.signal.aborted) return;
+          setActivePipelineStage('validating');
           void runAutoFixLoop({
             files: depAdjustedFiles,
-            onStatus: onSetActivityStatus,
+            onStatus: (status) => {
+              if (status && /auto-fix|repair/i.test(status)) {
+                setActivePipelineStage('repairing');
+              } else if (status) {
+                setActivePipelineStage('validating');
+              }
+              onSetActivityStatus(status);
+            },
             onChatMessage: (msg) =>
-              // BUG #2 FIX (2026-01) — persist auto-fix-loop messages
+              // BUG #2 FIX (2026-01) - persist auto-fix-loop messages
               // so they survive a page refresh.
               onAddMessage({
                 id: msg.id,
@@ -2163,7 +2239,7 @@ export default function ChatComposer({
             onUpdateFile,
             onAddFile,
             onDeleteFile,
-            // 2026-01 runtime-smoke pass — turn ON the GET / smoke
+            // 2026-01 runtime-smoke pass - turn ON the GET / smoke
             // test after a successful build. This catches the
             // "builds but crashes at runtime" class of bugs (legacy
             // <Link><a>, missing 'use client', metadata misuse,
@@ -2172,7 +2248,22 @@ export default function ChatComposer({
             runtimeSmoke: true,
             requirements: lastUserTextRef.current,
             signal: scope?.signal,
+          }).then((result) => {
+            if (scope?.signal.aborted) return;
+            if (runId && activePipelineRunIdRef.current !== runId) return;
+            if (result.succeeded) {
+              setActivePipelineStage('completed');
+            } else if (result.finalValidation?.skipped) {
+              setActivePipelineStage('validation-blocked');
+            } else if (result.skippedReason) {
+              setActivePipelineStage('recoverable-failure');
+            } else {
+              setActivePipelineStage('failed');
+            }
           }).catch((err) => {
+            if (scope?.signal.aborted) return;
+            if (runId && activePipelineRunIdRef.current !== runId) return;
+            setActivePipelineStage('failed');
             console.error('[autofix] loop crashed unexpectedly:', err);
           }).finally(() => {
             if (!scope?.signal.aborted) {
@@ -2186,6 +2277,11 @@ export default function ChatComposer({
       accumulatedRef.current = '';
       streamingMessageShownRef.current = false;
       if (!autoFixScheduled) {
+        if (shouldExtractFiles && !appliedAnyEdit && !createdAny && ignoredProtectedScaffoldCount === 0) {
+          setActivePipelineStage('failed');
+        } else {
+          setActivePipelineStage('completed');
+        }
         setGenerationPipelineActive(false);
       }
     }
@@ -2203,6 +2299,7 @@ export default function ChatComposer({
     onAddMessage,
     continueBatchGeneration,
     scheduleGenerationTimer,
+    setActivePipelineStage,
   ]);
 
   useEffect(() => {
@@ -2282,9 +2379,16 @@ export default function ChatComposer({
       return;
     }
 
+    const previousRunId = activePipelineRunIdRef.current;
+    if (previousRunId) {
+      pipelineRunGuardRef.current.cancelRun(previousRunId, 'cancelled');
+      activePipelineRunIdRef.current = null;
+    }
     cancellationScopeRef.current?.cancel('New generation started');
     const generationScope = createGenerationCancellationScope();
     cancellationScopeRef.current = generationScope;
+    const pipelineSnapshot = pipelineRunGuardRef.current.startRun('generation');
+    activePipelineRunIdRef.current = pipelineSnapshot.runId;
     setGenerationPipelineActive(true);
 
     setInput('');
@@ -2478,6 +2582,12 @@ export default function ChatComposer({
   const handleStop = useCallback(() => {
     const scope = cancellationScopeRef.current;
     if (!scope && !isStreaming && !isLoading && !generationPipelineActive) return;
+
+    const runId = activePipelineRunIdRef.current;
+    if (runId) {
+      pipelineRunGuardRef.current.cancelRun(runId, 'cancelled');
+      activePipelineRunIdRef.current = null;
+    }
 
     scope?.cancel('Cancelled by user');
     if (batchGenerationRef.current) {

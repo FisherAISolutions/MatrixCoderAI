@@ -12,6 +12,8 @@ export function useChat(provider: string, model: string, streaming: boolean = tr
   const responseBufferRef = useRef('');
   const chunksRef = useRef<any[]>([]);
   const flushTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const requestSeqRef = useRef(0);
+  const activeRequestIdRef = useRef(0);
 
   const clearPendingFlush = useCallback(() => {
     if (flushTimerRef.current) {
@@ -20,18 +22,30 @@ export function useChat(provider: string, model: string, streaming: boolean = tr
     }
   }, []);
 
-  const flushResponse = useCallback(() => {
-    clearPendingFlush();
-    setResponse(responseBufferRef.current);
-  }, [clearPendingFlush]);
-
-  const scheduleFlush = useCallback(() => {
-    if (flushTimerRef.current) return;
-    flushTimerRef.current = setTimeout(() => {
-      flushTimerRef.current = null;
-      setResponse(responseBufferRef.current);
-    }, 50);
+  const isCurrentRequest = useCallback((requestId: number) => {
+    return activeRequestIdRef.current === requestId;
   }, []);
+
+  const flushResponse = useCallback(
+    (requestId: number) => {
+      clearPendingFlush();
+      if (!isCurrentRequest(requestId)) return;
+      setResponse(responseBufferRef.current);
+    },
+    [clearPendingFlush, isCurrentRequest]
+  );
+
+  const scheduleFlush = useCallback(
+    (requestId: number) => {
+      if (flushTimerRef.current) return;
+      flushTimerRef.current = setTimeout(() => {
+        flushTimerRef.current = null;
+        if (!isCurrentRequest(requestId)) return;
+        setResponse(responseBufferRef.current);
+      }, 50);
+    },
+    [isCurrentRequest]
+  );
 
   const sendMessage = useCallback(
     async (
@@ -40,6 +54,8 @@ export function useChat(provider: string, model: string, streaming: boolean = tr
       options: { signal?: AbortSignal } = {}
     ) => {
       const { signal } = options;
+      const requestId = ++requestSeqRef.current;
+      activeRequestIdRef.current = requestId;
       clearPendingFlush();
       responseBufferRef.current = '';
       chunksRef.current = [];
@@ -48,6 +64,7 @@ export function useChat(provider: string, model: string, streaming: boolean = tr
       setIsLoading(true);
       setError(null);
       const handleAbort = () => {
+        if (!isCurrentRequest(requestId)) return;
         clearPendingFlush();
         setIsLoading(false);
       };
@@ -55,7 +72,7 @@ export function useChat(provider: string, model: string, streaming: boolean = tr
 
       try {
         if (signal?.aborted) {
-          setIsLoading(false);
+          if (isCurrentRequest(requestId)) setIsLoading(false);
           return;
         }
         if (streaming) {
@@ -64,22 +81,23 @@ export function useChat(provider: string, model: string, streaming: boolean = tr
             model,
             messages,
             (chunk) => {
+              if (!isCurrentRequest(requestId) || signal?.aborted) return;
               chunksRef.current.push(chunk);
               const content = chunk?.choices?.[0]?.delta?.content;
               if (content) {
                 responseBufferRef.current += content;
-                scheduleFlush();
+                scheduleFlush(requestId);
               }
             },
             () => {
-              if (signal?.aborted) return;
-              flushResponse();
+              if (signal?.aborted || !isCurrentRequest(requestId)) return;
+              flushResponse(requestId);
               setFullResponse(chunksRef.current);
               setIsLoading(false);
             },
             (err) => {
-              if (signal?.aborted) return;
-              flushResponse();
+              if (signal?.aborted || !isCurrentRequest(requestId)) return;
+              flushResponse(requestId);
               setFullResponse(chunksRef.current);
               setError(err);
               setIsLoading(false);
@@ -91,7 +109,7 @@ export function useChat(provider: string, model: string, streaming: boolean = tr
           const result = await getChatCompletion(provider, model, messages, parameters, {
             signal,
           });
-          if (signal?.aborted) return;
+          if (signal?.aborted || !isCurrentRequest(requestId)) return;
           setFullResponse(result);
           setResponse(result?.choices?.[0]?.message?.content || '');
           setIsLoading(false);
@@ -99,10 +117,11 @@ export function useChat(provider: string, model: string, streaming: boolean = tr
       } catch (err) {
         if (signal?.aborted || isAbortLikeError(err)) {
           clearPendingFlush();
-          setIsLoading(false);
+          if (isCurrentRequest(requestId)) setIsLoading(false);
           return;
         }
-        flushResponse();
+        if (!isCurrentRequest(requestId)) return;
+        flushResponse(requestId);
         if (streaming) setFullResponse(chunksRef.current);
         setError(err instanceof Error ? err : new Error('Unknown error'));
         setIsLoading(false);
@@ -110,7 +129,15 @@ export function useChat(provider: string, model: string, streaming: boolean = tr
         signal?.removeEventListener('abort', handleAbort);
       }
     },
-    [clearPendingFlush, flushResponse, model, provider, scheduleFlush, streaming]
+    [
+      clearPendingFlush,
+      flushResponse,
+      isCurrentRequest,
+      model,
+      provider,
+      scheduleFlush,
+      streaming,
+    ]
   );
 
   return { response, fullResponse, isLoading, error, sendMessage };
