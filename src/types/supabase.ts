@@ -215,6 +215,56 @@ export type Database = {
           }
         ];
       };
+      matrix_projects: {
+        Row: {
+          id: string;
+          user_id: string;
+          name: string;
+          description: string;
+          payload: Json;
+          created_at: string;
+          updated_at: string;
+          workspace_id: string | null;
+          favorite: boolean;
+          save_version: number;
+          last_opened_at: string | null;
+        };
+        Insert: {
+          id: string;
+          user_id: string;
+          name: string;
+          description?: string;
+          payload?: Json;
+          created_at?: string;
+          updated_at?: string;
+          workspace_id?: string | null;
+          favorite?: boolean;
+          save_version?: number;
+          last_opened_at?: string | null;
+        };
+        Update: {
+          id?: string;
+          user_id?: string;
+          name?: string;
+          description?: string;
+          payload?: Json;
+          created_at?: string;
+          updated_at?: string;
+          workspace_id?: string | null;
+          favorite?: boolean;
+          save_version?: number;
+          last_opened_at?: string | null;
+        };
+        Relationships: [
+          {
+            foreignKeyName: 'matrix_projects_user_id_fkey';
+            columns: ['user_id'];
+            isOneToOne: false;
+            referencedRelation: 'users';
+            referencedColumns: ['id'];
+          }
+        ];
+      };
       style_profiles: {
         Row: {
           id: string;

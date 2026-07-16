@@ -21,10 +21,12 @@ import {
   loadMatrixProjects,
   loadMatrixProjectWorkspaceContext,
   loadMatrixProjectWorkspaceSnapshot,
+  markMatrixProjectOpened,
   renameMatrixProject,
   saveMatrixProject,
   saveMatrixProjectWorkspaceContext,
   saveMatrixProjectWorkspaceSnapshot,
+  toggleMatrixProjectFavorite,
   writeMatrixProjectOpenHandoff,
   type MatrixProject,
   type MatrixProjectPersistenceResult,
@@ -58,6 +60,7 @@ function statusTone(status: string): string {
 
 function buildSnapshotFromProject(project: MatrixProject): MatrixProjectWorkspaceSnapshot {
   return {
+    projectId: project.id,
     name: project.name,
     description: project.description,
     files: project.files,
@@ -67,8 +70,56 @@ function buildSnapshotFromProject(project: MatrixProject): MatrixProjectWorkspac
     validationStatus: project.validationStatus,
     deploymentStatus: project.deploymentStatus,
     workspaceState: project.workspaceState,
+    favorite: project.favorite,
+    lastOpenedAt: project.lastOpenedAt,
     updatedAt: project.updatedAt,
   };
+}
+
+function saveStateToastMessage(
+  result: MatrixProjectPersistenceResult,
+  successMessage: string
+): { type: 'success' | 'warning' | 'error'; message: string } {
+  switch (result.saveState) {
+    case 'conflict':
+      return {
+        type: 'error',
+        message:
+          result.warning ??
+          'This project changed elsewhere. Your local edits were preserved.',
+      };
+    case 'save-failed':
+      return {
+        type: 'error',
+        message: result.warning ?? 'Project changes could not be saved.',
+      };
+    case 'offline-local-only':
+      return {
+        type: 'warning',
+        message:
+          result.warning ??
+          successMessage + ' Saved locally until cloud sync is available.',
+      };
+    default:
+      return { type: 'success', message: successMessage };
+  }
+}
+
+function notifyPersistenceResult(
+  result: MatrixProjectPersistenceResult,
+  successMessage: string
+): boolean {
+  const notice = saveStateToastMessage(result, successMessage);
+  if (notice.type === 'error') {
+    toast.error(notice.message);
+    return false;
+  }
+  if (notice.type === 'warning') {
+    toast(notice.message);
+    return true;
+  }
+  toast.success(notice.message);
+  return true;
 }
 
 export default function ProjectsClient() {
@@ -122,13 +173,14 @@ export default function ProjectsClient() {
     async (
       nextProject: MatrixProject,
       existing: MatrixProject[],
-      successMessage: string
+      successMessage: string,
+      options: Parameters<typeof saveMatrixProject>[2] = {}
     ) => {
-      const result = await saveMatrixProject(nextProject, existing);
+      const result = await saveMatrixProject(nextProject, existing, options);
       setProjects(result.projects);
       setSource(result.source);
       setWarning(result.warning ?? null);
-      toast.success(successMessage);
+      notifyPersistenceResult(result, successMessage);
       return result;
     },
     []
@@ -184,7 +236,9 @@ export default function ProjectsClient() {
       if (!nextName || !nextName.trim() || nextName.trim() === project.name) return;
 
       const renamed = renameMatrixProject(project, nextName);
-      await persistProjectList(renamed, projects, 'Project renamed.');
+      await persistProjectList(renamed, projects, 'Project renamed.', {
+        expectedUpdatedAt: project.updatedAt,
+      });
     },
     [persistProjectList, projects]
   );
@@ -193,6 +247,21 @@ export default function ProjectsClient() {
     async (project: MatrixProject) => {
       const duplicate = duplicateMatrixProject(project);
       await persistProjectList(duplicate, projects, 'Project duplicated.');
+    },
+    [persistProjectList, projects]
+  );
+
+  const handleToggleFavorite = useCallback(
+    async (project: MatrixProject) => {
+      const nextProject = toggleMatrixProjectFavorite(project);
+      await persistProjectList(
+        nextProject,
+        projects,
+        nextProject.favorite
+          ? 'Project added to favorites.'
+          : 'Project removed from favorites.',
+        { expectedUpdatedAt: project.updatedAt }
+      );
     },
     [persistProjectList, projects]
   );
@@ -208,39 +277,55 @@ export default function ProjectsClient() {
 
       const result: MatrixProjectPersistenceResult = await deleteMatrixProject(
         project.id,
-        projects
+        projects,
+        { expectedName: project.name }
       );
       setProjects(result.projects);
       setSource(result.source);
       setWarning(result.warning ?? null);
-      if (activeProjectId === project.id) {
+      const deleted = result.saveState !== 'conflict' && result.saveState !== 'save-failed';
+      if (deleted && activeProjectId === project.id) {
         setActiveProjectId(null);
       }
-      toast.success('Project deleted.');
+      notifyPersistenceResult(result, 'Project deleted.');
     },
     [activeProjectId, projects]
   );
 
   const handleOpenProject = useCallback(
-    (project: MatrixProject) => {
+    async (project: MatrixProject) => {
       if (typeof window === 'undefined') return;
+      const openedProject = markMatrixProjectOpened(project);
+      const result = await saveMatrixProject(openedProject, projects, {
+        expectedUpdatedAt: project.updatedAt,
+      });
+      const projectToOpen =
+        result.projects.find((item) => item.id === openedProject.id) ??
+        openedProject;
+      setProjects(result.projects);
+      setSource(result.source);
+      setWarning(result.warning ?? null);
+      if (result.saveState === 'conflict' || result.saveState === 'save-failed') {
+        notifyPersistenceResult(result, 'Project opened.');
+        return;
+      }
 
       saveMatrixProjectWorkspaceSnapshot(
         window.localStorage,
-        buildSnapshotFromProject(project)
+        buildSnapshotFromProject(projectToOpen)
       );
       saveMatrixProjectWorkspaceContext(window.localStorage, {
-        currentProjectId: project.id,
-        currentProjectName: project.name,
-        buildManifest: project.buildManifest,
-        blueprintDraft: project.blueprintDraft,
+        currentProjectId: projectToOpen.id,
+        currentProjectName: projectToOpen.name,
+        buildManifest: projectToOpen.buildManifest,
+        blueprintDraft: projectToOpen.blueprintDraft,
       });
-      writeMatrixProjectOpenHandoff(window.sessionStorage, project);
-      setActiveProjectId(project.id);
-      toast.success(`${project.name} loaded into Workspace.`);
+      writeMatrixProjectOpenHandoff(window.sessionStorage, projectToOpen);
+      setActiveProjectId(projectToOpen.id);
+      notifyPersistenceResult(result, projectToOpen.name + ' loaded into Workspace.');
       router.push('/chat-workspace');
     },
-    [router]
+    [projects, router]
   );
 
   return (
@@ -456,7 +541,7 @@ export default function ProjectsClient() {
                       <div className="flex flex-wrap gap-2">
                         <button
                           type="button"
-                          onClick={() => handleOpenProject(project)}
+                          onClick={() => void handleOpenProject(project)}
                           className="inline-flex items-center gap-2 border border-matrix-green bg-matrix-green px-3 py-2 text-xs font-bold uppercase tracking-[0.18em] text-matrix-bg transition hover:bg-matrix-green-bright"
                         >
                           <ExternalLink size={14} />
@@ -552,10 +637,22 @@ export default function ProjectsClient() {
                         <span>Updated {formatDate(project.updatedAt)}</span>
                       </div>
                       <div className="flex items-center gap-4">
-                        <span className="inline-flex items-center gap-1">
-                          <Star size={12} />
-                          Build context ready
-                        </span>
+                        <button
+                          type="button"
+                          onClick={() => void handleToggleFavorite(project)}
+                          className={[
+                            'inline-flex items-center gap-1 transition hover:text-matrix-green',
+                            project.favorite ? 'text-matrix-green' : '',
+                          ]
+                            .filter(Boolean)
+                            .join(' ')}
+                        >
+                          <Star
+                            size={12}
+                            fill={project.favorite ? 'currentColor' : 'none'}
+                          />
+                          {project.favorite ? 'Favorite' : 'Mark favorite'}
+                        </button>
                         <span>{project.workspaceState?.activeFilePath ?? 'No active file saved'}</span>
                       </div>
                     </div>
