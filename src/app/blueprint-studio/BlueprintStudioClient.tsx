@@ -117,7 +117,7 @@ function persistDraft(draft: BlueprintDraft): void {
 
 function FieldLabel({ children }: { children: ReactNode }) {
   return (
-    <label className="text-[10px] font-bold uppercase tracking-[0.24em] text-matrix-green-muted">
+    <label className="text-[10px] font-semibold uppercase tracking-[0.22em] text-slate-400">
       {children}
     </label>
   );
@@ -127,7 +127,7 @@ function TextInput(props: React.InputHTMLAttributes<HTMLInputElement>) {
   return (
     <input
       {...props}
-      className={`w-full border border-matrix-border bg-matrix-bg/80 px-3 py-2 text-sm font-semibold text-matrix-green outline-none transition-colors placeholder:text-matrix-green-muted/60 focus:border-matrix-green ${
+      className={`w-full rounded-lg border border-slate-700/80 bg-[#10151c] px-3 py-2 text-sm font-medium text-slate-100 caret-matrix-green outline-none transition-colors placeholder:text-slate-500 focus:border-matrix-green/80 focus:bg-[#111923] focus:ring-1 focus:ring-matrix-green/25 ${
         props.className ?? ''
       }`}
     />
@@ -138,7 +138,7 @@ function TextArea(props: React.TextareaHTMLAttributes<HTMLTextAreaElement>) {
   return (
     <textarea
       {...props}
-      className={`min-h-24 w-full resize-y border border-matrix-border bg-matrix-bg/80 px-3 py-2 text-sm leading-6 text-matrix-readable outline-none transition-colors placeholder:text-matrix-green-muted/60 focus:border-matrix-green ${
+      className={`min-h-24 w-full resize-y rounded-lg border border-slate-700/80 bg-[#10151c] px-3 py-2 text-sm leading-6 text-slate-100 caret-matrix-green outline-none transition-colors placeholder:text-slate-500 focus:border-matrix-green/80 focus:bg-[#111923] focus:ring-1 focus:ring-matrix-green/25 ${
         props.className ?? ''
       }`}
     />
@@ -162,7 +162,7 @@ function SmallButton({
       onClick={onClick}
       title={title}
       disabled={disabled}
-      className="inline-flex h-9 w-9 items-center justify-center border border-matrix-border text-matrix-green transition-colors hover:border-matrix-green hover:bg-matrix-green-ghost disabled:cursor-not-allowed disabled:opacity-40"
+      className="inline-flex h-9 w-9 items-center justify-center rounded-lg border border-slate-700/80 bg-slate-900/70 text-slate-300 transition-colors hover:border-matrix-green/70 hover:bg-matrix-green-ghost/70 hover:text-matrix-green disabled:cursor-not-allowed disabled:opacity-40"
     >
       {children}
     </button>
@@ -181,17 +181,17 @@ function Panel({
   children: ReactNode;
 }) {
   return (
-    <section className="border border-matrix-border bg-matrix-panel/70 p-5">
+    <section className="rounded-2xl border border-slate-800/90 border-l-violet-400/40 bg-[#0d1117]/92 p-5 shadow-[0_18px_45px_rgba(0,0,0,0.22)]">
       <div className="flex flex-wrap items-start justify-between gap-4">
         <div className="flex items-start gap-3">
-          <div className="flex h-10 w-10 shrink-0 items-center justify-center border border-matrix-border bg-matrix-bg text-matrix-green">
+          <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border border-violet-400/25 bg-violet-400/10 text-violet-200">
             <Icon size={17} aria-hidden="true" />
           </div>
           <div>
-            <h2 className="text-xl font-bold text-matrix-green neon-text-glow">
+            <h2 className="text-lg font-semibold text-slate-100">
               {title}
             </h2>
-            <p className="mt-1 text-sm leading-6 text-matrix-readable">
+            <p className="mt-1 text-sm leading-6 text-slate-400">
               {description}
             </p>
           </div>
@@ -218,7 +218,7 @@ function RouteEditor({
   onMove: (id: string, direction: -1 | 1) => void;
 }) {
   return (
-    <div className="grid gap-3 border border-matrix-border bg-matrix-bg/60 p-3 lg:grid-cols-[1fr_1fr_auto]">
+    <div className="grid gap-3 rounded-xl border border-slate-800/90 bg-slate-950/45 p-3 lg:grid-cols-[1fr_1fr_auto]">
       <div className="space-y-2">
         <FieldLabel>Route path</FieldLabel>
         <TextInput
@@ -274,7 +274,7 @@ function DataModelEditor({
   onMove: (id: string, direction: -1 | 1) => void;
 }) {
   return (
-    <div className="grid gap-3 border border-matrix-border bg-matrix-bg/60 p-3 lg:grid-cols-[0.8fr_1.2fr_auto]">
+    <div className="grid gap-3 rounded-xl border border-slate-800/90 bg-slate-950/45 p-3 lg:grid-cols-[0.8fr_1.2fr_auto]">
       <div className="space-y-2">
         <FieldLabel>Model</FieldLabel>
         <TextInput
@@ -337,7 +337,7 @@ function ListItemEditor({
   onMove: (id: string, direction: -1 | 1) => void;
 }) {
   return (
-    <div className="grid gap-3 border border-matrix-border bg-matrix-bg/60 p-3 lg:grid-cols-[0.8fr_1.2fr_auto]">
+    <div className="grid gap-3 rounded-xl border border-slate-800/90 bg-slate-950/45 p-3 lg:grid-cols-[0.8fr_1.2fr_auto]">
       <div className="space-y-2">
         <FieldLabel>Name</FieldLabel>
         <TextInput
@@ -441,10 +441,10 @@ export default function BlueprintStudioClient() {
 
   if (!draft) {
     return (
-      <div className="min-h-full bg-matrix-bg px-4 py-8 text-matrix-green">
-        <div className="mx-auto max-w-5xl border border-matrix-border bg-matrix-panel/70 p-8">
+      <div className="min-h-full bg-[#06090d] px-4 py-8 text-slate-100">
+        <div className="mx-auto max-w-5xl rounded-2xl border border-slate-800/90 bg-[#0d1117]/92 p-8">
           <Boxes size={22} aria-hidden="true" />
-          <h1 className="mt-4 text-2xl font-bold neon-text-glow">
+          <h1 className="mt-4 text-2xl font-semibold text-slate-100">
             Loading Blueprint Studio
           </h1>
         </div>
@@ -453,18 +453,18 @@ export default function BlueprintStudioClient() {
   }
 
   return (
-    <div className="min-h-full overflow-x-hidden bg-matrix-bg px-4 py-8 text-matrix-green md:px-8 lg:px-10">
+    <div className="min-h-full overflow-x-hidden bg-[#06090d] px-4 py-8 text-slate-100 md:px-8 lg:px-10">
       <div className="mx-auto flex w-full max-w-7xl flex-col gap-6">
-        <header className="border border-matrix-border bg-matrix-panel/60 p-6 md:p-8">
+        <header className="rounded-2xl border border-slate-800/90 bg-[#0d1117]/92 p-6 shadow-[0_18px_45px_rgba(0,0,0,0.22)] md:p-8">
           <div className="flex flex-wrap items-start justify-between gap-6">
             <div className="max-w-4xl">
-              <p className="text-[11px] uppercase tracking-[0.34em] text-matrix-green-muted">
+              <p className="text-[11px] uppercase tracking-[0.30em] text-violet-300">
                 Matrix Blueprint Studio
               </p>
-              <h1 className="mt-3 text-3xl font-bold text-matrix-green neon-text-glow md:text-5xl">
+              <h1 className="mt-3 text-3xl font-semibold text-slate-100 md:text-4xl">
                 Approve the build before generation
               </h1>
-              <p className="mt-4 text-sm leading-7 text-matrix-readable md:text-base">
+              <p className="mt-4 text-sm leading-7 text-slate-400 md:text-base">
                 Edit the blueprint draft, review warnings, then send the approved
                 plan to the workspace. The original Build Manifest stays intact.
               </p>
@@ -472,7 +472,7 @@ export default function BlueprintStudioClient() {
             <div className="flex flex-wrap gap-3">
               <Link
                 href="/matrix-build-suite"
-                className="inline-flex items-center gap-2 border border-matrix-border px-4 py-3 text-xs font-bold uppercase tracking-[0.18em] text-matrix-green transition-colors hover:border-matrix-green hover:bg-matrix-green-ghost"
+                className="inline-flex items-center gap-2 rounded-lg border border-slate-700/80 bg-slate-900/60 px-4 py-3 text-xs font-semibold uppercase tracking-[0.16em] text-slate-200 transition-colors hover:border-matrix-green/70 hover:bg-matrix-green-ghost/70 hover:text-matrix-green"
               >
                 <ArrowLeft size={15} aria-hidden="true" />
                 Build Suite
@@ -480,7 +480,7 @@ export default function BlueprintStudioClient() {
               <button
                 type="button"
                 onClick={resetFromManifest}
-                className="inline-flex items-center gap-2 border border-matrix-border px-4 py-3 text-xs font-bold uppercase tracking-[0.18em] text-matrix-green transition-colors hover:border-matrix-green hover:bg-matrix-green-ghost"
+                className="inline-flex items-center gap-2 rounded-lg border border-slate-700/80 bg-slate-900/60 px-4 py-3 text-xs font-semibold uppercase tracking-[0.16em] text-slate-200 transition-colors hover:border-matrix-green/70 hover:bg-matrix-green-ghost/70 hover:text-matrix-green"
               >
                 <Save size={15} aria-hidden="true" />
                 Reset draft
@@ -488,7 +488,7 @@ export default function BlueprintStudioClient() {
               <button
                 type="button"
                 onClick={sendBlueprintToWorkspace}
-                className="inline-flex items-center gap-2 border border-matrix-green bg-matrix-green-ghost px-4 py-3 text-xs font-bold uppercase tracking-[0.18em] text-matrix-green transition-colors hover:bg-matrix-green/20"
+                className="inline-flex items-center gap-2 rounded-lg border border-matrix-green/70 bg-matrix-green px-4 py-3 text-xs font-semibold uppercase tracking-[0.16em] text-black transition-colors hover:bg-matrix-green-bright"
               >
                 <Send size={15} aria-hidden="true" />
                 Send Blueprint to Workspace
@@ -496,7 +496,7 @@ export default function BlueprintStudioClient() {
             </div>
           </div>
           {savedMessage ? (
-            <p className="mt-5 border border-matrix-border bg-matrix-bg/70 px-4 py-3 text-xs font-bold uppercase tracking-[0.18em] text-matrix-green-muted">
+            <p className="mt-5 rounded-lg border border-slate-800/90 bg-slate-950/60 px-4 py-3 text-xs font-semibold uppercase tracking-[0.16em] text-slate-400">
               {savedMessage}
             </p>
           ) : null}
@@ -557,7 +557,7 @@ export default function BlueprintStudioClient() {
                 </div>
               ))
             ) : (
-              <div className="border border-matrix-border bg-matrix-bg/60 p-4 text-sm font-semibold text-matrix-green">
+              <div className="rounded-xl border border-slate-800/90 bg-slate-950/45 p-4 text-sm font-semibold text-slate-300">
                 No blueprint warnings detected.
               </div>
             )}
@@ -587,7 +587,7 @@ export default function BlueprintStudioClient() {
           <button
             type="button"
             onClick={() => commit(addBlueprintRoute(draft, '/new-route'))}
-            className="inline-flex items-center gap-2 border border-matrix-border px-4 py-2 text-xs font-bold uppercase tracking-[0.18em] text-matrix-green transition-colors hover:border-matrix-green hover:bg-matrix-green-ghost"
+            className="inline-flex items-center gap-2 rounded-lg border border-slate-700/80 bg-slate-900/60 px-4 py-2 text-xs font-semibold uppercase tracking-[0.16em] text-slate-200 transition-colors hover:border-matrix-green/70 hover:bg-matrix-green-ghost/70 hover:text-matrix-green"
           >
             <Plus size={15} aria-hidden="true" />
             Add route
@@ -617,7 +617,7 @@ export default function BlueprintStudioClient() {
             onClick={() =>
               commit(addBlueprintDataModel(draft, 'New Model', ['id', 'name']))
             }
-            className="inline-flex items-center gap-2 border border-matrix-border px-4 py-2 text-xs font-bold uppercase tracking-[0.18em] text-matrix-green transition-colors hover:border-matrix-green hover:bg-matrix-green-ghost"
+            className="inline-flex items-center gap-2 rounded-lg border border-slate-700/80 bg-slate-900/60 px-4 py-2 text-xs font-semibold uppercase tracking-[0.16em] text-slate-200 transition-colors hover:border-matrix-green/70 hover:bg-matrix-green-ghost/70 hover:text-matrix-green"
           >
             <Plus size={15} aria-hidden="true" />
             Add model
@@ -658,7 +658,7 @@ export default function BlueprintStudioClient() {
                   onClick={() =>
                     commit(addBlueprintListItem(draft, section.key, 'New item'))
                   }
-                  className="inline-flex items-center gap-2 border border-matrix-border px-4 py-2 text-xs font-bold uppercase tracking-[0.18em] text-matrix-green transition-colors hover:border-matrix-green hover:bg-matrix-green-ghost"
+                  className="inline-flex items-center gap-2 rounded-lg border border-slate-700/80 bg-slate-900/60 px-4 py-2 text-xs font-semibold uppercase tracking-[0.16em] text-slate-200 transition-colors hover:border-matrix-green/70 hover:bg-matrix-green-ghost/70 hover:text-matrix-green"
                 >
                   <Plus size={15} aria-hidden="true" />
                   {section.addLabel}

@@ -44,21 +44,21 @@ function ShellLink({
   const Icon = item.icon;
   const active = isAppShellRouteActive(pathname, item.href);
   const sharedClassName =
-    'group flex w-full items-center gap-3 rounded-xl border px-3 py-2.5 text-left text-xs uppercase tracking-[0.18em] transition-all duration-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-matrix-green/70';
+    'group flex w-full items-center gap-3 rounded-xl border px-3 py-2.5 text-left text-xs uppercase tracking-[0.14em] transition-all duration-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-matrix-green/60';
 
   if (item.comingSoon) {
     return (
       <button
         type="button"
         disabled
-        className={`${sharedClassName} cursor-not-allowed border-matrix-border/30 bg-matrix-panel/20 text-matrix-green-muted/45`}
+        className={`${sharedClassName} cursor-not-allowed border-slate-800/70 bg-slate-900/25 text-slate-500`}
         title={`${item.label} is coming soon`}
       >
         <Icon size={16} aria-hidden="true" />
         {!collapsed && (
           <span className="flex min-w-0 flex-1 items-center justify-between gap-2">
             <span className="truncate">{item.label}</span>
-            <span className="text-[9px] tracking-widest text-matrix-green-muted/60">
+            <span className="text-[9px] tracking-widest text-slate-500">
               Soon
             </span>
           </span>
@@ -73,8 +73,8 @@ function ShellLink({
       onClick={onNavigate}
       className={`${sharedClassName} ${
         active
-          ? 'border-matrix-green/80 bg-matrix-green-ghost text-matrix-green neon-text-glow shadow-[0_0_24px_rgba(0,255,102,0.12)]'
-          : 'border-transparent text-matrix-green-muted hover:border-matrix-border/80 hover:bg-matrix-panel/80 hover:text-matrix-green hover:shadow-[0_0_18px_rgba(0,255,102,0.08)]'
+          ? 'border-matrix-green/60 bg-matrix-green-ghost/80 text-matrix-green shadow-[0_0_18px_rgba(0,255,102,0.08)]'
+          : 'border-transparent text-slate-400 hover:border-slate-700/80 hover:bg-slate-900/70 hover:text-slate-100'
       }`}
       aria-current={active ? 'page' : undefined}
       title={collapsed ? item.label : undefined}
@@ -103,18 +103,18 @@ function Sidebar({
 
   return (
     <aside
-      className={`flex h-full flex-col border-r border-matrix-border/80 bg-[#030806]/95 text-matrix-green shadow-[0_0_38px_rgba(0,255,102,0.10)] backdrop-blur-xl transition-[width] duration-300 ${
+      className={`flex h-full flex-col border-r border-slate-800/90 bg-[#05070a]/96 text-slate-200 shadow-[18px_0_44px_rgba(0,0,0,0.28)] backdrop-blur-xl transition-[width] duration-300 ${
         mobile ? 'w-80 max-w-[86vw]' : collapsed ? 'w-20' : 'w-64 xl:w-72'
       }`}
     >
-      <div className="flex items-center gap-3 border-b border-matrix-border/80 bg-matrix-panel/35 px-4 py-4">
+      <div className="flex items-center gap-3 border-b border-slate-800/90 bg-slate-950/55 px-4 py-4">
         <AppLogo size={34} />
         {!collapsed && (
           <div className="min-w-0">
-            <p className="truncate text-xs font-bold uppercase tracking-[0.3em] neon-text-glow">
+            <p className="truncate text-xs font-bold uppercase tracking-[0.28em] text-slate-100">
               Matrix Coder AI
             </p>
-            <p className="mt-1 text-[10px] uppercase tracking-[0.22em] text-matrix-green-muted">
+            <p className="mt-1 text-[10px] uppercase tracking-[0.22em] text-slate-500">
               Application shell
             </p>
           </div>
@@ -123,7 +123,7 @@ function Sidebar({
           <button
             type="button"
             onClick={onToggleCollapsed}
-            className="ml-auto hidden rounded-lg border border-matrix-border bg-matrix-bg/70 p-1.5 text-matrix-green-muted transition-colors hover:border-matrix-green hover:text-matrix-green lg:inline-flex"
+            className="ml-auto hidden rounded-lg border border-slate-800 bg-slate-950/80 p-1.5 text-slate-500 transition-colors hover:border-matrix-green/70 hover:text-matrix-green lg:inline-flex"
             aria-label={collapsed ? 'Expand navigation' : 'Collapse navigation'}
             aria-expanded={!collapsed}
           >
@@ -135,7 +135,7 @@ function Sidebar({
       <nav className="flex-1 space-y-6 overflow-y-auto px-3 py-4" aria-label="Application navigation">
         <div className="space-y-1">
           {!collapsed && (
-            <p className="px-3 pb-2 text-[10px] uppercase tracking-[0.32em] text-matrix-green-muted">
+            <p className="px-3 pb-2 text-[10px] uppercase tracking-[0.28em] text-slate-500">
               Navigate
             </p>
           )}
@@ -150,9 +150,9 @@ function Sidebar({
           ))}
         </div>
 
-        <div className="space-y-1 border-t border-matrix-border/70 pt-4">
+        <div className="space-y-1 border-t border-slate-800/90 pt-4">
           {!collapsed && (
-            <p className="px-3 pb-2 text-[10px] uppercase tracking-[0.32em] text-matrix-green-muted">
+            <p className="px-3 pb-2 text-[10px] uppercase tracking-[0.28em] text-slate-500">
               Quick actions
             </p>
           )}
@@ -168,17 +168,17 @@ function Sidebar({
         </div>
       </nav>
 
-      <footer className="border-t border-matrix-border/80 bg-matrix-panel/20 p-3">
-        <div className="rounded-xl border border-matrix-border/80 bg-matrix-panel/70 p-3 shadow-[0_0_22px_rgba(0,255,102,0.06)]">
+      <footer className="border-t border-slate-800/90 bg-slate-950/35 p-3">
+        <div className="rounded-xl border border-slate-800/90 bg-slate-900/55 p-3 shadow-[0_12px_28px_rgba(0,0,0,0.20)]">
           {!collapsed || mobile ? (
             <>
-              <p className="truncate text-xs font-semibold text-matrix-green">{userLabel}</p>
-              <p className="mt-1 text-[10px] uppercase tracking-[0.2em] text-matrix-green-muted">
+              <p className="truncate text-xs font-semibold text-slate-100">{userLabel}</p>
+              <p className="mt-1 text-[10px] uppercase tracking-[0.2em] text-slate-500">
                 Matrix session ready
               </p>
             </>
           ) : (
-            <div className="mx-auto flex h-8 w-8 items-center justify-center rounded-lg border border-matrix-green text-xs font-bold text-matrix-green">
+            <div className="mx-auto flex h-8 w-8 items-center justify-center rounded-lg border border-matrix-green/60 text-xs font-bold text-matrix-green">
               {userLabel.slice(0, 1).toUpperCase()}
             </div>
           )}
@@ -219,7 +219,7 @@ export function AppShell({
   }, [breadcrumbs, title]);
 
   return (
-    <div className="flex h-screen w-screen overflow-hidden bg-[#020604] text-matrix-green font-mono">
+    <div className="flex h-screen w-screen overflow-hidden bg-[#05070a] text-slate-100 font-mono">
       <div className="hidden lg:block">
         <Sidebar
           collapsed={collapsed}
@@ -249,10 +249,10 @@ export function AppShell({
 
       <div className="flex min-w-0 flex-1 flex-col">
         {showHeader ? (
-          <header className="flex min-h-[76px] items-center gap-4 border-b border-matrix-border/80 bg-matrix-bg/88 px-4 shadow-[0_12px_40px_rgba(0,0,0,0.24)] backdrop-blur-xl md:px-6">
+          <header className="flex min-h-[76px] items-center gap-4 border-b border-slate-800/90 bg-[#070a0f]/92 px-4 shadow-[0_12px_40px_rgba(0,0,0,0.24)] backdrop-blur-xl md:px-6">
             <button
               type="button"
-              className="inline-flex rounded-lg border border-matrix-border bg-matrix-panel/70 p-2 text-matrix-green-muted transition-colors hover:border-matrix-green hover:text-matrix-green lg:hidden"
+              className="inline-flex rounded-lg border border-slate-800 bg-slate-950/80 p-2 text-slate-500 transition-colors hover:border-matrix-green/70 hover:text-matrix-green lg:hidden"
               aria-label="Open navigation drawer"
               aria-expanded={mobileOpen}
               onClick={() => setMobileOpen(true)}
@@ -261,7 +261,7 @@ export function AppShell({
             </button>
             <div className="min-w-0 flex-1">
               <nav
-                className="mb-1 flex flex-wrap items-center gap-2 text-[10px] uppercase tracking-[0.24em] text-matrix-green-muted"
+                className="mb-1 flex flex-wrap items-center gap-2 text-[10px] uppercase tracking-[0.22em] text-slate-500"
                 aria-label="Breadcrumb"
               >
                 {resolvedBreadcrumbs.map((item, index) => (
@@ -277,7 +277,7 @@ export function AppShell({
                   </span>
                 ))}
               </nav>
-              <h1 className="truncate text-lg font-bold uppercase tracking-[0.22em] text-matrix-green neon-text-glow">
+              <h1 className="truncate text-lg font-semibold uppercase tracking-[0.18em] text-slate-100">
                 {title}
               </h1>
               {description && (
@@ -288,7 +288,7 @@ export function AppShell({
         ) : (
           <button
             type="button"
-            className="fixed left-3 top-3 z-40 inline-flex rounded-lg border border-matrix-border bg-matrix-bg/90 p-2 text-matrix-green-muted backdrop-blur transition-colors hover:border-matrix-green hover:text-matrix-green lg:hidden"
+            className="fixed left-3 top-3 z-40 inline-flex rounded-lg border border-slate-800 bg-slate-950/90 p-2 text-slate-500 backdrop-blur transition-colors hover:border-matrix-green/70 hover:text-matrix-green lg:hidden"
             aria-label="Open navigation drawer"
             aria-expanded={mobileOpen}
             onClick={() => setMobileOpen(true)}

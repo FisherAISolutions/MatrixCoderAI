@@ -8,33 +8,33 @@
   :root {
     --theme-background: #0a0a0a;
     --theme-surface: #111111;
-    --theme-surface-secondary: #0d1a0d;
-    --theme-border: #0a5c25;
-    --theme-text-primary: #00ff66;
-    --theme-text-secondary: #3fd07a;
+    --theme-surface-secondary: #121821;
+    --theme-border: #24303a;
+    --theme-text-primary: #e5e7eb;
+    --theme-text-secondary: #9ca3af;
     --theme-success: #00ff66;
     --theme-warning: #ffc857;
     --theme-error: #ff6b6b;
     --theme-accent-primary: #39ff88;
     --theme-accent-secondary: #7cc4ff;
-    --theme-glow-primary: rgba(0, 255, 102, 0.45);
-    --theme-glow-secondary: rgba(0, 255, 102, 0.18);
-    --theme-panel-background: #111111;
-    --theme-panel-border: #0a5c25;
+    --theme-glow-primary: rgba(0, 255, 102, 0.22);
+    --theme-glow-secondary: rgba(0, 255, 102, 0.08);
+    --theme-panel-background: #101419;
+    --theme-panel-border: #24303a;
     --theme-panel-shadow: none;
     --theme-panel-filter: none;
-    --theme-active-state: #001a00;
-    --theme-hover-state: #0d1a0d;
-    --theme-muted-text: #3fd07a;
-    --theme-strong-text: #39ff88;
+    --theme-active-state: #082314;
+    --theme-hover-state: #151c24;
+    --theme-muted-text: #9ca3af;
+    --theme-strong-text: #e5e7eb;
     --theme-ai-accent: #d27bff;
     --theme-success-accent: #00ff66;
     --theme-preview-accent: #7cc4ff;
     --theme-terminal-accent: #00ff66;
     --theme-background-pattern: none;
-    --theme-panel-background-rgb: 17, 17, 17;
-    --theme-active-state-rgb: 0, 26, 0;
-    --theme-hover-state-rgb: 13, 26, 13;
+    --theme-panel-background-rgb: 16, 20, 25;
+    --theme-active-state-rgb: 8, 35, 20;
+    --theme-hover-state-rgb: 21, 28, 36;
     --theme-ai-accent-rgb: 210, 123, 255;
     --theme-success-accent-rgb: 0, 255, 102;
     --theme-preview-accent-rgb: 124, 196, 255;
@@ -44,41 +44,53 @@
     --workspace-editor-accent: var(--theme-preview-accent);
     --workspace-preview-accent: var(--theme-preview-accent);
     --workspace-terminal-accent: var(--theme-terminal-accent);
+    --product-accent-workspace: #00ff66;
+    --product-accent-build-suite: #38bdf8;
+    --product-accent-blueprint: #a78bfa;
+    --product-accent-deployment: #f59e0b;
+    --product-accent-history: #94a3b8;
+    --product-accent-settings: #64748b;
     --matrix-bg: #0a0a0a;
-    --matrix-card: #111111;
-    --matrix-surface: #0d1a0d;
+    --matrix-card: #101419;
+    --matrix-surface: #121821;
     --matrix-green: #00ff66;
     --matrix-green-bright: #39ff88;
     --matrix-green-dim: #39ff88;
     --matrix-green-muted: #3fd07a;
     --matrix-green-faint: #0a4e1f;
     --matrix-green-ghost: #001a00;
-    --matrix-border: #0a5c25;
-    --matrix-border-bright: #00ff66;
+    --matrix-border: #24303a;
+    --matrix-border-bright: #35d176;
     --matrix-blue: #7cc4ff;
     --matrix-amber: #ffc857;
     --matrix-purple: #d27bff;
     --matrix-red: #ff6b6b;
+    --matrix-text: #e5e7eb;
+    --matrix-text-soft: #cbd5e1;
+    --matrix-text-muted: #94a3b8;
+    --matrix-panel-neutral: #101419;
+    --matrix-panel-elevated: #141a21;
+    --matrix-border-neutral: #24303a;
     --matrix-bg-rgb: 10, 10, 10;
-    --matrix-card-rgb: 17, 17, 17;
-    --matrix-surface-rgb: 13, 26, 13;
+    --matrix-card-rgb: 16, 20, 25;
+    --matrix-surface-rgb: 18, 24, 33;
     --matrix-green-rgb: 0, 255, 102;
     --matrix-green-muted-rgb: 63, 208, 122;
-    --matrix-border-rgb: 10, 92, 37;
+    --matrix-border-rgb: 36, 48, 58;
     --matrix-blue-rgb: 124, 196, 255;
     --matrix-amber-rgb: 255, 200, 87;
     --matrix-purple-rgb: 210, 123, 255;
     --matrix-red-rgb: 255, 107, 107;
     --background: 0 0% 4%;
-    --foreground: 120 100% 50%;
+    --foreground: 210 20% 92%;
     --card: 0 0% 8%;
-    --card-foreground: 120 100% 50%;
-    --border: 120 100% 15%;
+    --card-foreground: 210 20% 92%;
+    --border: 210 22% 18%;
     --input: 0 0% 10%;
     --primary: 120 100% 50%;
     --primary-foreground: 0 0% 0%;
     --muted: 120 20% 12%;
-    --muted-foreground: 120 40% 45%;
+    --muted-foreground: 215 16% 65%;
     --accent: 120 100% 20%;
     --destructive: 0 85% 50%;
     --ring: 120 100% 50%;
@@ -93,19 +105,19 @@
     background-color: var(--matrix-bg);
     background-image: var(--theme-background-pattern);
     background-attachment: fixed;
-    color: var(--matrix-green);
+    color: var(--matrix-text);
     font-family: 'JetBrains Mono', monospace;
     -webkit-font-smoothing: antialiased;
     overflow: hidden;
   }
 
-  /* 2026-01 landing-page scroll fix — the workspace + auth pages need
+  /* 2026-01 landing-page scroll fix - the workspace + auth pages need
    * `body { overflow: hidden }` (their IDE-style layout would otherwise
    * spawn an outer scrollbar). The marketing landing page needs the
    * opposite: a long, scrollable document. Targeting via `:has()` so
    * the rule applies whenever the landing root is rendered, with no JS
    * dependency, no hydration race, and no per-component side effects.
-   * `:has()` is supported in Chrome 105+, Firefox 121+, Safari 15.4+ —
+   * `:has()` is supported in Chrome 105+, Firefox 121+, Safari 15.4+ -
    * the same browsers WebContainer already requires.
    *
    * `!important` is intentional: it has to win over the workspace's
@@ -121,7 +133,7 @@
 
   ::selection {
     background-color: rgba(var(--matrix-green-rgb), 0.27);
-    color: var(--matrix-green-bright);
+    color: var(--matrix-text);
   }
 
   ::-webkit-scrollbar {
@@ -134,7 +146,7 @@
   }
 
   ::-webkit-scrollbar-thumb {
-    background: var(--matrix-border);
+    background: var(--matrix-border-neutral);
     border-radius: 2px;
   }
 
@@ -145,8 +157,8 @@
   input:-webkit-autofill,
   input:-webkit-autofill:hover,
   input:-webkit-autofill:focus {
-    -webkit-text-fill-color: var(--matrix-green);
-    -webkit-box-shadow: 0 0 0px 1000px var(--matrix-surface) inset;
+    -webkit-text-fill-color: var(--matrix-text);
+    -webkit-box-shadow: 0 0 0px 1000px #10151c inset;
     transition: background-color 5000s ease-in-out 0s;
   }
 }
@@ -159,13 +171,13 @@
     right: 0;
     bottom: 0;
     pointer-events: none;
-    z-index: 9999;
+    z-index: 30;
     background: repeating-linear-gradient(
       0deg,
       transparent,
       transparent 2px,
-      rgba(var(--matrix-green-rgb), 0.02) 2px,
-      rgba(var(--matrix-green-rgb), 0.02) 4px
+      rgba(var(--matrix-green-rgb), 0.01) 2px,
+      rgba(var(--matrix-green-rgb), 0.01) 4px
     );
   }
 
@@ -179,30 +191,30 @@
   }
 
   .neon-glow {
-    box-shadow: 0 0 16px var(--theme-glow-primary), 0 0 32px var(--theme-glow-secondary);
+    box-shadow: 0 0 10px var(--theme-glow-primary), 0 0 22px var(--theme-glow-secondary);
   }
 
-  /* Readability pass — subtle, not blurry */
+  /* Readability pass - subtle, not blurry */
   .neon-text-glow {
     text-shadow:
-      0 0 4px var(--theme-glow-primary),
-      0 0 10px var(--theme-glow-secondary);
+      0 0 2px var(--theme-glow-primary),
+      0 0 6px var(--theme-glow-secondary);
   }
 
   /* Lighter variant for body copy / headings without the heavy glow */
   .matrix-readable {
-    color: var(--matrix-green-bright);
+    color: var(--matrix-text);
   }
 
   .terminal-cursor::after {
-    content: '▋';
+    content: '\258B';
     animation: cursor-blink 1s step-end infinite;
     color: var(--matrix-green);
     margin-left: 1px;
   }
 
   .streaming-cursor::after {
-    content: '█';
+    content: '\2588';
     animation: cursor-blink 0.7s step-end infinite;
     color: var(--matrix-green);
     font-size: 0.9em;
@@ -305,7 +317,7 @@
     font-family: 'JetBrains Mono', monospace;
     font-size: 13px;
     line-height: 1.6;
-    color: var(--matrix-green-bright);
+    color: var(--matrix-text);
     overflow-x: auto;
   }
 
@@ -349,7 +361,10 @@
     color: var(--theme-muted-text);
   }
 
-  .text-matrix-green-bright,
+  .text-matrix-green-bright {
+    color: var(--matrix-green-bright);
+  }
+
   .matrix-readable {
     color: var(--theme-strong-text);
   }
