@@ -8,9 +8,8 @@
  *   2. Configure consistent options (font, line numbers, minimap off,
  *      cursor style, etc.) in a single place.
  *   3. Bind Ctrl/Cmd+S to the host save handler.
- *   4. Lazy-load via next/dynamic so Monaco never lands in the SSR bundle
- *      and the chat workspace doesn't pay for it until the user actually
- *      edits a file.
+ *   4. Load Monaco through the official loader only after the editor mounts
+ *      so failures stay local to the editor instead of breaking the page.
  *
  * Monaco-bugfix pass — why .tsx files were rendering as "plain text":
  *
@@ -37,24 +36,15 @@
  *   so red squiggles + hover info show up.
  */
 
-import { useId } from 'react';
-import dynamic from 'next/dynamic';
+import { useEffect, useId, useRef, useState } from 'react';
+import loader from '@monaco-editor/loader';
 import type { OnMount, BeforeMount } from '@monaco-editor/react';
 import type { FileLanguage } from '@/app/chat-workspace/components/types';
 
-// Dynamic import — Monaco is a big dependency and is only needed in edit
-// mode. ssr:false ensures it never lands in the server bundle.
-const MonacoEditor = dynamic(() => import('@monaco-editor/react'), {
-  ssr: false,
-  loading: () => (
-    <div
-      className="flex items-center justify-center h-full text-xs font-mono text-matrix-green-muted"
-      data-testid="monaco-loading"
-    >
-      <span className="animate-pulse">// loading editor…</span>
-    </div>
-  ),
-});
+type MonacoApi = Parameters<BeforeMount>[0];
+type MonacoCodeEditor = Parameters<OnMount>[0];
+type MonacoTextModel = ReturnType<MonacoApi['editor']['createModel']>;
+type MonacoDisposable = { dispose: () => void };
 
 interface Props {
   value: string;
@@ -77,6 +67,77 @@ interface Props {
   onChange: (next: string) => void;
   onSave?: () => void;
   readOnly?: boolean;
+}
+
+function formatMonacoLoadError(error: unknown): string {
+  if (error instanceof Error) return error.message;
+
+  if (typeof ErrorEvent !== 'undefined' && error instanceof ErrorEvent) {
+    return error.message || error.filename || 'Monaco worker failed to load';
+  }
+
+  if (typeof Event !== 'undefined' && error instanceof Event) {
+    return error.type ? `Monaco emitted a ${error.type} event` : 'Monaco emitted a browser event';
+  }
+
+  if (typeof error === 'string') return error;
+
+  try {
+    const serialized = JSON.stringify(error);
+    if (serialized && serialized !== '{}') return serialized;
+  } catch {
+    // Fall through to String(error).
+  }
+
+  return String(error || 'unknown Monaco initialization error');
+}
+
+function MonacoLoadingOverlay() {
+  return (
+    <div
+      className="absolute inset-0 flex items-center justify-center bg-black/80 text-xs font-mono text-matrix-green-muted"
+      data-testid="monaco-loading"
+    >
+      <span className="animate-pulse">// loading editor...</span>
+    </div>
+  );
+}
+
+function TextareaFallbackEditor({
+  value,
+  onChange,
+  onSave,
+  readOnly,
+  reason,
+}: {
+  value: string;
+  onChange: (next: string) => void;
+  onSave?: () => void;
+  readOnly?: boolean;
+  reason: string;
+}) {
+  return (
+    <div className="flex h-full min-h-0 flex-col bg-[#0a0a0a]" data-testid="monaco-fallback">
+      <div className="border-b border-matrix-green-ghost px-3 py-2 text-[11px] font-mono text-matrix-green-muted">
+        Monaco editor could not start, so Matrix Coder opened a lightweight editor instead.
+        <span className="ml-2 text-matrix-green-muted/70">{reason}</span>
+      </div>
+      <textarea
+        value={value}
+        onChange={(event) => onChange(event.target.value)}
+        onKeyDown={(event) => {
+          if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 's') {
+            event.preventDefault();
+            onSave?.();
+          }
+        }}
+        readOnly={readOnly ?? false}
+        spellCheck={false}
+        className="h-full min-h-0 w-full flex-1 resize-none bg-[#0a0a0a] p-3 font-mono text-[13px] leading-5 text-matrix-green outline-none placeholder:text-matrix-green-muted"
+        aria-label="Fallback code editor"
+      />
+    </div>
+  );
 }
 
 // ---------------------------------------------------------------------------
@@ -402,103 +463,199 @@ export default function MatrixMonacoEditor({
   onSave,
   readOnly,
 }: Props) {
-  // Stable instance ID — used to namespace synthetic paths when the
-  // host doesn't pass a real `path`. Prevents collisions when multiple
-  // editors are mounted (history navigation, etc.).
+  // Stable instance ID - used to namespace synthetic paths when the
+  // host doesn't pass a real path. React's useId contains colons,
+  // which Monaco can interpret as URI schemes, so sanitize it first.
   const instanceId = useId();
+  const safeInstanceId = instanceId.replace(/[^a-zA-Z0-9_-]/g, '') || 'editor';
+
+  const containerRef = useRef<HTMLDivElement | null>(null);
+  const editorRef = useRef<MonacoCodeEditor | null>(null);
+  const modelRef = useRef<MonacoTextModel | null>(null);
+  const changeDisposableRef = useRef<MonacoDisposable | null>(null);
+  const onChangeRef = useRef(onChange);
+  const onSaveRef = useRef(onSave);
+  const valueRef = useRef(value);
+
+  const [isLoading, setIsLoading] = useState(true);
+  const [loadError, setLoadError] = useState<string | null>(null);
+
+  useEffect(() => {
+    onChangeRef.current = onChange;
+  }, [onChange]);
+
+  useEffect(() => {
+    onSaveRef.current = onSave;
+  }, [onSave]);
+
+  useEffect(() => {
+    valueRef.current = value;
+  }, [value]);
 
   const editorPath = resolveEditorPath(path, language);
   // Detect the Monaco language ID from the extension. When the file
-  // is .ts/.tsx/.js/.jsx we return 'typescript' / 'javascript' — but
+  // is .ts/.tsx/.js/.jsx we return 'typescript' / 'javascript' - but
   // we also rely on the path's extension being correct in the model
   // URI, because Monaco's TS service uses the URI to decide JSX vs
   // plain TS parsing.
   const detectedLanguage =
     languageFromPath(editorPath) ?? (language ? languageFromPath(`x${fallbackExtensionFor(language)}`) : undefined);
 
-  const handleBeforeMount: BeforeMount = (monaco) => {
-    // Idempotent: re-defining the same theme just replaces it.
-    monaco.editor.defineTheme(MATRIX_THEME_NAME, matrixTheme);
-    configureTypeScriptDefaults(monaco);
-  };
-
-  const handleMount: OnMount = (editor, monaco) => {
-    monaco.editor.setTheme(MATRIX_THEME_NAME);
-
-    if (onSave) {
-      editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyS, () => {
-        onSave();
-      });
-    }
-  };
-
-  // The `path` prop on @monaco-editor/react becomes the model's URI
-  // (or matches an existing model with that URI, enabling cross-file
-  // navigation). Including the file extension here is what makes the
-  // .tsx language service kick in.
+  // The model URI needs an extension so TSX / JSX files get the right
+  // language service. Project paths are already relative and safe.
   const monacoPath = editorPath.includes('.')
     ? editorPath
     : `${editorPath}.${detectedLanguage === 'javascript' ? 'jsx' : 'tsx'}`;
 
-  // Defensive: ensure the path is unique per editor instance so React
-  // hot-reload + parallel viewers never share a stale model. We DON'T
-  // do this for real paths because that would defeat go-to-definition
-  // across views — only synthetic fallbacks get the suffix.
   const finalPath =
     path && path.trim().length > 0
       ? monacoPath
-      : `${instanceId}-${monacoPath}`;
+      : `${safeInstanceId}-${monacoPath}`;
+
+  useEffect(() => {
+    let cancelled = false;
+    const init = loader.init();
+
+    setLoadError(null);
+    setIsLoading(true);
+
+    init
+      .then((monaco) => {
+        if (cancelled) return;
+
+        const container = containerRef.current;
+        if (!container) return;
+
+        try {
+          monaco.editor.defineTheme(MATRIX_THEME_NAME, matrixTheme);
+          configureTypeScriptDefaults(monaco);
+
+          const uri = monaco.Uri.parse(finalPath);
+          const model =
+            monaco.editor.getModel(uri) ??
+            monaco.editor.createModel(valueRef.current, detectedLanguage ?? 'plaintext', uri);
+
+          modelRef.current = model;
+
+          const editor = monaco.editor.create(container, {
+            model,
+            theme: MATRIX_THEME_NAME,
+            readOnly: readOnly ?? false,
+            fontFamily: "'JetBrains Mono', 'Fira Code', Consolas, monospace",
+            fontSize: 13,
+            lineHeight: 20,
+            minimap: { enabled: false },
+            scrollBeyondLastLine: false,
+            smoothScrolling: true,
+            cursorBlinking: 'smooth',
+            cursorStyle: 'line',
+            cursorWidth: 2,
+            renderLineHighlight: 'all',
+            roundedSelection: false,
+            scrollbar: {
+              verticalScrollbarSize: 10,
+              horizontalScrollbarSize: 10,
+            },
+            padding: { top: 12, bottom: 12 },
+            automaticLayout: true,
+            wordWrap: 'on',
+            tabSize: 2,
+            insertSpaces: true,
+            renderWhitespace: 'selection',
+            guides: {
+              indentation: true,
+              highlightActiveIndentation: true,
+            },
+            bracketPairColorization: { enabled: true },
+            quickSuggestions: { other: true, comments: false, strings: true },
+            suggestOnTriggerCharacters: true,
+            acceptSuggestionOnEnter: 'on',
+            snippetSuggestions: 'top',
+          });
+
+          editorRef.current = editor;
+          monaco.editor.setTheme(MATRIX_THEME_NAME);
+
+          if (onSaveRef.current) {
+            editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyS, () => {
+              onSaveRef.current?.();
+            });
+          }
+
+          changeDisposableRef.current = editor.onDidChangeModelContent(() => {
+            onChangeRef.current(editor.getValue());
+          });
+
+          setIsLoading(false);
+        } catch (error) {
+          const message = formatMonacoLoadError(error);
+          console.warn('Monaco editor failed to mount; using fallback editor.', message);
+          setLoadError(message);
+          setIsLoading(false);
+        }
+      })
+      .catch((error: unknown) => {
+        if (cancelled) return;
+        if (typeof error === 'object' && error && 'type' in error && error.type === 'cancelation') return;
+
+        const message = formatMonacoLoadError(error);
+        console.warn('Monaco editor unavailable; using fallback editor.', message);
+        setLoadError(message);
+        setIsLoading(false);
+      });
+
+    return () => {
+      cancelled = true;
+      init.cancel?.();
+      changeDisposableRef.current?.dispose();
+      changeDisposableRef.current = null;
+
+      editorRef.current?.dispose();
+      editorRef.current = null;
+
+      if (modelRef.current && !modelRef.current.isDisposed()) {
+        modelRef.current.dispose();
+      }
+      modelRef.current = null;
+    };
+  }, [detectedLanguage, finalPath, readOnly]);
+
+  useEffect(() => {
+    const editor = editorRef.current;
+    if (!editor || editor.getValue() === value) return;
+
+    const model = editor.getModel();
+    if (!model) {
+      editor.setValue(value);
+      return;
+    }
+
+    editor.executeEdits('external-update', [
+      {
+        range: model.getFullModelRange(),
+        text: value,
+        forceMoveMarkers: true,
+      },
+    ]);
+    editor.pushUndoStop();
+  }, [value]);
+
+  if (loadError) {
+    return (
+      <TextareaFallbackEditor
+        value={value}
+        onChange={onChange}
+        onSave={onSave}
+        readOnly={readOnly}
+        reason={loadError}
+      />
+    );
+  }
 
   return (
-    <MonacoEditor
-      value={value}
-      // When we have a TS/JS family extension on the path, prefer the
-      // model URI (let Monaco infer JSX from the extension). For other
-      // languages, set both — Monaco honours `language` and the path
-      // becomes the URI tag.
-      language={detectedLanguage}
-      path={finalPath}
-      defaultPath={finalPath}
-      theme={MATRIX_THEME_NAME}
-      beforeMount={handleBeforeMount}
-      onMount={handleMount}
-      onChange={(v) => onChange(v ?? '')}
-      options={{
-        readOnly: readOnly ?? false,
-        fontFamily: "'JetBrains Mono', 'Fira Code', Consolas, monospace",
-        fontSize: 13,
-        lineHeight: 20,
-        minimap: { enabled: false },
-        scrollBeyondLastLine: false,
-        smoothScrolling: true,
-        cursorBlinking: 'smooth',
-        cursorStyle: 'line',
-        cursorWidth: 2,
-        renderLineHighlight: 'all',
-        roundedSelection: false,
-        scrollbar: {
-          verticalScrollbarSize: 10,
-          horizontalScrollbarSize: 10,
-        },
-        padding: { top: 12, bottom: 12 },
-        automaticLayout: true,
-        wordWrap: 'on',
-        tabSize: 2,
-        insertSpaces: true,
-        renderWhitespace: 'selection',
-        guides: {
-          indentation: true,
-          highlightActiveIndentation: true,
-        },
-        bracketPairColorization: { enabled: true },
-        // Quick-suggestion + IntelliSense — these were implicit before
-        // but worth pinning explicitly so the TSX experience matches
-        // what users expect from VS Code.
-        quickSuggestions: { other: true, comments: false, strings: true },
-        suggestOnTriggerCharacters: true,
-        acceptSuggestionOnEnter: 'on',
-        snippetSuggestions: 'top',
-      }}
-    />
+    <div className="relative h-full min-h-0 w-full">
+      <div ref={containerRef} className="h-full min-h-0 w-full" />
+      {isLoading && <MonacoLoadingOverlay />}
+    </div>
   );
 }
