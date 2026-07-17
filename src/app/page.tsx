@@ -33,7 +33,7 @@ import LandingTechStack from './_components/landing/LandingTechStack';
 import LandingFAQ from './_components/landing/LandingFAQ';
 import LandingFooter from './_components/landing/LandingFooter';
 import ScreenshotPlaceholder from './_components/landing/ScreenshotPlaceholder';
-import { ArrowRight, Blocks, LayoutDashboard, Rocket, Terminal } from 'lucide-react';
+import { ArrowRight, Blocks, FolderKanban, LayoutDashboard, Rocket, Terminal } from 'lucide-react';
 
 export default function LandingPage() {
   const { user, isLoading } = useAuth();
@@ -221,6 +221,14 @@ export default function LandingPage() {
           >
             <LayoutDashboard size={14} />
             Open Workspace
+          </Link>
+          <Link
+            href="/projects"
+            className="inline-flex items-center justify-center gap-2 border border-matrix-border bg-matrix-panel/70 px-4 py-2 text-xs font-bold uppercase tracking-[0.16em] text-matrix-green-muted transition-colors hover:border-matrix-green hover:bg-matrix-green-ghost hover:text-matrix-green"
+            data-testid="landing-entry-projects"
+          >
+            <FolderKanban size={14} />
+            Projects
           </Link>
           <Link
             href="/matrix-build-suite"

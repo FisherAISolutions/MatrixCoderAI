@@ -62,7 +62,7 @@ export default function LoginForm({ onSwitchToSignup }: Props) {
         description: 'Initializing Matrix Coder AI workspace...',
         style: { background: '#0d1a0d', border: '1px solid #00ff66', color: '#00ff66' },
       });
-      setTimeout(() => router.push('/chat-workspace'), 600);
+      setTimeout(() => router.push('/projects'), 600);
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Authentication failed';
       setAuthError(message);

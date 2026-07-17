@@ -59,7 +59,7 @@ export default function SignUpForm({ onSwitchToLogin }: Props) {
         description: 'Deploying your Matrix Coder AI workspace...',
         style: { background: '#0d1a0d', border: '1px solid #00ff66', color: '#00ff66' },
       });
-      setTimeout(() => router.push('/chat-workspace'), 700);
+      setTimeout(() => router.push('/projects'), 700);
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Unable to create account';
       setAuthError(message);

@@ -32,6 +32,7 @@ import {
   type MatrixProjectPersistenceResult,
   type MatrixProjectWorkspaceSnapshot,
 } from '@/lib/projects/projectStore';
+import WorkflowNav from '@/components/workflow/WorkflowNav';
 
 function formatDate(value: string): string {
   const date = new Date(value);
@@ -360,6 +361,15 @@ export default function ProjectsClient() {
           ) : null}
         </header>
 
+        <WorkflowNav
+          context={{
+            hasProject: Boolean(activeProjectId || projects.length > 0),
+            hasBuildManifest: Boolean(workspaceSnapshot?.buildManifest),
+            hasBlueprintDraft: Boolean(workspaceSnapshot?.blueprintDraft),
+            hasGeneratedProject: Boolean(workspaceSnapshot?.files.length),
+          }}
+        />
+
         <section className="grid gap-6 xl:grid-cols-[1.1fr_0.9fr]">
           <div className="border border-matrix-border bg-matrix-panel/70 p-5">
             <div className="flex items-center gap-3">
@@ -506,7 +516,25 @@ export default function ProjectsClient() {
               </div>
             ) : filteredProjects.length === 0 ? (
               <div className="border border-dashed border-matrix-border bg-matrix-bg/60 px-4 py-10 text-center text-sm text-matrix-readable">
-                No saved projects yet.
+                <p className="font-semibold text-matrix-green">No saved projects yet.</p>
+                <p className="mx-auto mt-2 max-w-xl leading-6">
+                  Start from Matrix Build Suite, open the Workspace, or create a blank
+                  project above when you are ready to save work here.
+                </p>
+                <div className="mt-5 flex flex-wrap justify-center gap-3">
+                  <a
+                    href="/matrix-build-suite"
+                    className="border border-matrix-green bg-matrix-green px-4 py-2 text-xs font-bold uppercase tracking-[0.18em] text-matrix-bg transition hover:bg-matrix-green-bright"
+                  >
+                    Start with Build Suite
+                  </a>
+                  <a
+                    href="/chat-workspace"
+                    className="border border-matrix-border bg-matrix-panel px-4 py-2 text-xs font-bold uppercase tracking-[0.18em] text-matrix-green transition hover:border-matrix-green"
+                  >
+                    Open Workspace
+                  </a>
+                </div>
               </div>
             ) : (
               filteredProjects.map((project) => {

@@ -84,6 +84,7 @@ import type {
   BuildSuiteSelection,
 } from '@/lib/build-suite/types';
 import { emptyBuildSuiteSelection } from '@/lib/build-suite/types';
+import WorkflowNav from '@/components/workflow/WorkflowNav';
 import {
   BuildSuiteAppearancePreview,
   BuildSuiteCardPreview,
@@ -2045,6 +2046,26 @@ export default function MatrixBuildSuiteClient() {
     }
   };
 
+  const reviewPromptInBlueprint = () => {
+    try {
+      if (typeof window === 'undefined') return;
+      writeMatrixBuildSuiteChatHandoff(
+        window.sessionStorage,
+        promptResult.prompt,
+        undefined,
+        buildManifest
+      );
+      setChatHandoffStatus('Build Manifest sent to Blueprint Studio for review.');
+      router.push('/blueprint-studio');
+    } catch (error) {
+      setChatHandoffStatus(
+        error instanceof Error
+          ? error.message
+          : 'Could not prepare the Build Manifest for Blueprint Studio.'
+      );
+    }
+  };
+
   const canAdvance = useMemo(() => {
     if (activeStep === 0) return Boolean(selection.appTypeId);
     if (activeStep === 1) return Boolean(selection.appearance);
@@ -3008,14 +3029,24 @@ export default function MatrixBuildSuiteClient() {
               </p>
             ) : null}
           </div>
-          <button
-            type="button"
-            onClick={insertPromptIntoChat}
-            disabled={promptResult.missingSelection.length > 0}
-            className="border border-emerald-300 bg-emerald-300 px-5 py-3 text-xs font-bold uppercase tracking-[0.24em] text-black transition hover:-translate-y-0.5 hover:bg-emerald-200 disabled:cursor-not-allowed disabled:border-emerald-500/25 disabled:bg-emerald-500/10 disabled:text-emerald-100/35"
-          >
-            Insert into Chat
-          </button>
+          <div className="flex flex-wrap gap-2">
+            <button
+              type="button"
+              onClick={reviewPromptInBlueprint}
+              disabled={promptResult.missingSelection.length > 0}
+              className="border border-emerald-500/45 bg-black/35 px-5 py-3 text-xs font-bold uppercase tracking-[0.24em] text-emerald-100 transition hover:-translate-y-0.5 hover:border-emerald-300 hover:bg-emerald-400/10 disabled:cursor-not-allowed disabled:border-emerald-500/25 disabled:bg-emerald-500/10 disabled:text-emerald-100/35"
+            >
+              Review in Blueprint
+            </button>
+            <button
+              type="button"
+              onClick={insertPromptIntoChat}
+              disabled={promptResult.missingSelection.length > 0}
+              className="border border-emerald-300 bg-emerald-300 px-5 py-3 text-xs font-bold uppercase tracking-[0.24em] text-black transition hover:-translate-y-0.5 hover:bg-emerald-200 disabled:cursor-not-allowed disabled:border-emerald-500/25 disabled:bg-emerald-500/10 disabled:text-emerald-100/35"
+            >
+              Insert into Chat
+            </button>
+          </div>
         </div>
         <textarea
           value={promptResult.prompt}
@@ -3072,6 +3103,13 @@ export default function MatrixBuildSuiteClient() {
             ))}
           </div>
         </header>
+
+        <WorkflowNav
+          context={{
+            hasBuildManifest: true,
+          }}
+          className="mt-6"
+        />
 
         {renderTemplatePacks()}
 

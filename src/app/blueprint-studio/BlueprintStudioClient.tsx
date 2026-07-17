@@ -48,6 +48,7 @@ import {
   type BlueprintDraftListKey,
   type BlueprintRouteItem,
 } from '@/lib/blueprint-studio/blueprintDraft';
+import WorkflowNav from '@/components/workflow/WorkflowNav';
 
 const LIST_SECTIONS: Array<{
   key: BlueprintDraftListKey;
@@ -501,6 +502,14 @@ export default function BlueprintStudioClient() {
             </p>
           ) : null}
         </header>
+
+        <WorkflowNav
+          context={{
+            hasBuildManifest: Boolean(sourceManifest),
+            hasBlueprintDraft: Boolean(draft),
+          }}
+          className="rounded-2xl border-slate-800/90 bg-[#0d1117]/92 text-slate-300"
+        />
 
         <section className="grid gap-4 lg:grid-cols-[1.1fr_0.9fr]">
           <Panel

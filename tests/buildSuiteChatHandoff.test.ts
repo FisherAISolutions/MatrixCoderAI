@@ -3,6 +3,7 @@ import {
   MATRIX_BUILD_SUITE_CHAT_HANDOFF_KEY,
   MATRIX_BUILD_SUITE_CHAT_HANDOFF_MESSAGE,
   createMatrixBuildSuiteChatHandoff,
+  peekMatrixBuildSuiteChatHandoff,
   readMatrixBuildSuiteChatHandoff,
   writeMatrixBuildSuiteChatHandoff,
 } from '@/lib/build-suite/chatHandoff';
@@ -93,6 +94,24 @@ describe('Matrix Build Suite chat handoff', () => {
     expect(handoff?.buildManifest).toEqual(buildManifest);
     expect(handoff?.buildManifest?.source).toBe('saved-build');
     expect(handoff?.buildManifest?.selection.appTypeId).toBe('personal-crm');
+  });
+
+  it('peeks at a handoff without consuming it', () => {
+    const storage = new MemoryStorage();
+    const prompt = 'Prompt ready for dashboard status';
+
+    writeMatrixBuildSuiteChatHandoff(
+      storage,
+      prompt,
+      new Date('2026-07-02T12:00:00.000Z')
+    );
+
+    const peeked = peekMatrixBuildSuiteChatHandoff(storage);
+
+    expect(peeked?.prompt).toBe(prompt);
+    expect(storage.getItem(MATRIX_BUILD_SUITE_CHAT_HANDOFF_KEY)).not.toBeNull();
+    expect(readMatrixBuildSuiteChatHandoff(storage)?.prompt).toBe(prompt);
+    expect(storage.getItem(MATRIX_BUILD_SUITE_CHAT_HANDOFF_KEY)).toBeNull();
   });
 
   it('rejects an empty prompt before writing', () => {

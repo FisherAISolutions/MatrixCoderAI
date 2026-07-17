@@ -7,7 +7,7 @@ import AuthPage from './components/AuthPage';
 /**
  * Sign-up / login page wrapper (2026-01 stability pass).
  *
- * Auto-redirects to /chat-workspace once Supabase has rehydrated a
+ * Auto-redirects to /projects once Supabase has rehydrated a
  * valid session, so a refresh on the auth route never strands a
  * logged-in user here. While auth is still loading we render the
  * AuthPage normally — its own forms will no-op if the user submits
@@ -19,7 +19,7 @@ export default function SignUpLoginPage() {
 
   useEffect(() => {
     if (!isLoading && user) {
-      router.replace('/chat-workspace');
+      router.replace('/projects');
     }
   }, [isLoading, user, router]);
 

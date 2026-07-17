@@ -26,6 +26,7 @@ export interface MatrixBuildSuiteChatHandoff {
 
 type WritableStorage = Pick<Storage, 'setItem'>;
 type ReadableStorage = Pick<Storage, 'getItem' | 'removeItem'>;
+type PeekableStorage = Pick<Storage, 'getItem'>;
 
 export function createMatrixBuildSuiteChatHandoff(
   prompt: string,
@@ -88,14 +89,9 @@ export function clearMatrixBuildSuiteChatHandoff(
   storage.removeItem(MATRIX_BUILD_SUITE_CHAT_HANDOFF_KEY);
 }
 
-export function readMatrixBuildSuiteChatHandoff(
-  storage: ReadableStorage
+function parseMatrixBuildSuiteChatHandoff(
+  raw: string
 ): MatrixBuildSuiteChatHandoff | null {
-  const raw = storage.getItem(MATRIX_BUILD_SUITE_CHAT_HANDOFF_KEY);
-  if (!raw) return null;
-
-  storage.removeItem(MATRIX_BUILD_SUITE_CHAT_HANDOFF_KEY);
-
   try {
     const parsed = JSON.parse(raw) as Partial<MatrixBuildSuiteChatHandoff>;
     if (
@@ -135,4 +131,22 @@ export function readMatrixBuildSuiteChatHandoff(
   } catch {
     return null;
   }
+}
+
+export function peekMatrixBuildSuiteChatHandoff(
+  storage: PeekableStorage
+): MatrixBuildSuiteChatHandoff | null {
+  const raw = storage.getItem(MATRIX_BUILD_SUITE_CHAT_HANDOFF_KEY);
+  if (!raw) return null;
+  return parseMatrixBuildSuiteChatHandoff(raw);
+}
+
+export function readMatrixBuildSuiteChatHandoff(
+  storage: ReadableStorage
+): MatrixBuildSuiteChatHandoff | null {
+  const raw = storage.getItem(MATRIX_BUILD_SUITE_CHAT_HANDOFF_KEY);
+  if (!raw) return null;
+
+  storage.removeItem(MATRIX_BUILD_SUITE_CHAT_HANDOFF_KEY);
+  return parseMatrixBuildSuiteChatHandoff(raw);
 }

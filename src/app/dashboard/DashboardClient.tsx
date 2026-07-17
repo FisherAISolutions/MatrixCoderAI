@@ -18,7 +18,8 @@ import {
   type DeploymentStatus,
   type DeploymentWorkspaceSnapshot,
 } from '@/lib/deployment/workspaceStatus';
-import { MATRIX_BUILD_SUITE_CHAT_HANDOFF_KEY } from '@/lib/build-suite/chatHandoff';
+import { peekMatrixBuildSuiteChatHandoff } from '@/lib/build-suite/chatHandoff';
+import WorkflowNav from '@/components/workflow/WorkflowNav';
 import {
   BUILD_SUITE_SAVED_BUILDS_STORAGE_KEY,
   type BuildSuiteSavedBuild,
@@ -117,24 +118,17 @@ function statusClassName(status?: DeploymentStatus): string {
 function readBuildSuiteSnapshot(): BuildSuiteSnapshot | null {
   if (typeof window === 'undefined') return null;
 
-  const handoffRaw = window.localStorage.getItem(MATRIX_BUILD_SUITE_CHAT_HANDOFF_KEY);
-  if (handoffRaw) {
-    try {
-      const parsed = JSON.parse(handoffRaw) as {
-        prompt?: unknown;
-        createdAt?: unknown;
+  for (const storage of [window.sessionStorage, window.localStorage]) {
+    const handoff = peekMatrixBuildSuiteChatHandoff(storage);
+    if (handoff) {
+      return {
+        type: 'handoff',
+        name: handoff.blueprintDraft ? 'Blueprint ready for chat' : 'Prompt ready for chat',
+        createdAt: handoff.createdAt,
+        detail: `${handoff.prompt.trim().length.toLocaleString()} prompt characters${
+          handoff.buildManifest ? ' - Build Manifest included' : ''
+        }`,
       };
-      if (typeof parsed.prompt === 'string' && parsed.prompt.trim()) {
-        return {
-          type: 'handoff',
-          name: 'Prompt ready for chat',
-          createdAt:
-            typeof parsed.createdAt === 'string' ? parsed.createdAt : undefined,
-          detail: `${parsed.prompt.trim().length.toLocaleString()} prompt characters`,
-        };
-      }
-    } catch {
-      // Ignore malformed handoff data and fall back to saved builds.
     }
   }
 
@@ -420,6 +414,15 @@ export default function DashboardClient() {
             </div>
           </div>
         </header>
+
+        <WorkflowNav
+          context={{
+            hasBuildManifest: Boolean(buildSuite),
+            hasBlueprintDraft: buildSuite?.type === 'handoff',
+            hasGeneratedProject: Boolean(snapshot),
+            deploymentReady: snapshot?.checklist.readyForDeployment === 'passed',
+          }}
+        />
 
         <section>
           <div className="mb-4 flex items-center justify-between gap-3">

@@ -74,6 +74,7 @@ import {
   type DeploymentHistoryStatus,
 } from '@/lib/deployment/deploymentHistory';
 import { runValidation } from '@/lib/validation';
+import WorkflowNav from '@/components/workflow/WorkflowNav';
 
 const emptySnapshot: DeploymentWorkspaceSnapshot = {
   projectName: 'Current Workspace',
@@ -869,6 +870,14 @@ export default function DeploymentCenterClient() {
             Workspace
           </Link>
         </header>
+
+        <WorkflowNav
+          context={{
+            hasGeneratedProject: exportFiles.length > 0,
+            deploymentReady: ready,
+          }}
+          className="mb-6"
+        />
 
         <section className="mb-6 grid gap-4 border border-matrix-border bg-matrix-card/80 p-4 shadow-neon-sm md:grid-cols-4">
           <div>
