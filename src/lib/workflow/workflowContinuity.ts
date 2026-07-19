@@ -7,6 +7,7 @@ export interface WorkflowStep {
 
 export interface WorkflowContext {
   hasProject?: boolean;
+  hasArchitectDraft?: boolean;
   hasBuildManifest?: boolean;
   hasBlueprintDraft?: boolean;
   hasGeneratedProject?: boolean;
@@ -27,10 +28,10 @@ export const MATRIX_CODER_WORKFLOW_STEPS: WorkflowStep[] = [
     description: 'Create, save, or reopen a project.',
   },
   {
-    id: 'build-suite',
-    label: 'Build Suite',
-    href: '/matrix-build-suite',
-    description: 'Shape the app visually and assemble the prompt.',
+    id: 'architect',
+    label: 'Architect',
+    href: '/matrix-ai-architect',
+    description: 'Gather requirements and create a structured app specification.',
   },
   {
     id: 'blueprint',
@@ -91,11 +92,14 @@ export function getContinueBuildTarget(context: WorkflowContext): WorkflowStep {
   if (context.hasBlueprintDraft) {
     return MATRIX_CODER_WORKFLOW_STEPS.find((step) => step.id === 'workspace')!;
   }
+  if (context.hasArchitectDraft) {
+    return MATRIX_CODER_WORKFLOW_STEPS.find((step) => step.id === 'blueprint')!;
+  }
   if (context.hasBuildManifest) {
     return MATRIX_CODER_WORKFLOW_STEPS.find((step) => step.id === 'blueprint')!;
   }
   if (context.hasProject) {
-    return MATRIX_CODER_WORKFLOW_STEPS.find((step) => step.id === 'workspace')!;
+    return MATRIX_CODER_WORKFLOW_STEPS.find((step) => step.id === 'architect')!;
   }
   return MATRIX_CODER_WORKFLOW_STEPS.find((step) => step.id === 'projects')!;
 }

@@ -12,6 +12,11 @@ import {
   serializeBlueprintDraft,
   type BlueprintDraft,
 } from '@/lib/blueprint-studio/blueprintDraft';
+import {
+  deserializeArchitectDraft,
+  serializeArchitectDraft,
+} from '@/lib/matrix-ai-architect/architectDraft';
+import type { ArchitectDraft } from '@/lib/matrix-ai-architect/types';
 import { supabase as defaultSupabase } from '@/lib/supabase';
 
 export const MATRIX_PROJECTS_STORAGE_KEY = 'matrix-coder:projects';
@@ -65,6 +70,7 @@ export interface MatrixProject {
   chatMessages: ChatMessage[];
   buildManifest?: BuildManifest;
   blueprintDraft?: BlueprintDraft;
+  architectDraft?: ArchitectDraft;
   validationStatus: MatrixProjectValidationStatus;
   deploymentStatus: MatrixProjectDeploymentStatus;
   workspaceState?: MatrixProjectWorkspaceState;
@@ -80,6 +86,7 @@ export interface MatrixProjectDraft {
   chatMessages?: ChatMessage[];
   buildManifest?: BuildManifest;
   blueprintDraft?: BlueprintDraft;
+  architectDraft?: ArchitectDraft;
   validationStatus?: MatrixProjectValidationStatus;
   deploymentStatus?: MatrixProjectDeploymentStatus;
   workspaceState?: MatrixProjectWorkspaceState;
@@ -90,6 +97,7 @@ export interface MatrixProjectWorkspaceContext {
   currentProjectName?: string;
   buildManifest?: BuildManifest;
   blueprintDraft?: BlueprintDraft;
+  architectDraft?: ArchitectDraft;
 }
 
 export interface MatrixProjectWorkspaceSnapshot {
@@ -100,6 +108,7 @@ export interface MatrixProjectWorkspaceSnapshot {
   chatMessages: ChatMessage[];
   buildManifest?: BuildManifest;
   blueprintDraft?: BlueprintDraft;
+  architectDraft?: ArchitectDraft;
   validationStatus: MatrixProjectValidationStatus;
   deploymentStatus: MatrixProjectDeploymentStatus;
   workspaceState?: MatrixProjectWorkspaceState;
@@ -285,12 +294,16 @@ function normalizeProjectPayload(
   const blueprintDraft = parsed.blueprintDraft
     ? (deserializeBlueprintDraft(JSON.stringify(parsed.blueprintDraft)) ?? undefined)
     : undefined;
+  const architectDraft = parsed.architectDraft
+    ? (deserializeArchitectDraft(JSON.stringify(parsed.architectDraft)) ?? undefined)
+    : undefined;
 
   return {
     files: cloneJson(parsed.files as FileNode[]),
     chatMessages: cloneJson(parsed.chatMessages as ChatMessage[]),
     buildManifest,
     blueprintDraft,
+    architectDraft,
     validationStatus:
       parsed.validationStatus === 'passed' ||
       parsed.validationStatus === 'failed' ||
@@ -377,6 +390,13 @@ function serializeProject(project: MatrixProject): MatrixProject {
           blueprintDraft: JSON.parse(
             serializeBlueprintDraft(project.blueprintDraft)
           ) as BlueprintDraft,
+        }
+      : {}),
+    ...(project.architectDraft
+      ? {
+          architectDraft: JSON.parse(
+            serializeArchitectDraft(project.architectDraft)
+          ) as ArchitectDraft,
         }
       : {}),
     workspaceState: project.workspaceState
@@ -622,6 +642,7 @@ export function createMatrixProject(
     chatMessages: cloneJson(draft.chatMessages ?? []),
     buildManifest: draft.buildManifest,
     blueprintDraft: draft.blueprintDraft,
+    architectDraft: draft.architectDraft,
     validationStatus: draft.validationStatus ?? 'unknown',
     deploymentStatus: draft.deploymentStatus ?? 'unknown',
     workspaceState: draft.workspaceState
@@ -670,6 +691,9 @@ export function duplicateMatrixProject(
     blueprintDraft: project.blueprintDraft
       ? (deserializeBlueprintDraft(serializeBlueprintDraft(project.blueprintDraft)) ?? undefined)
       : undefined,
+    architectDraft: project.architectDraft
+      ? (deserializeArchitectDraft(serializeArchitectDraft(project.architectDraft)) ?? undefined)
+      : undefined,
     workspaceState: project.workspaceState
       ? { ...project.workspaceState }
       : undefined,
@@ -691,6 +715,7 @@ export function createProjectFromWorkspaceSnapshot(
       chatMessages: snapshot.chatMessages,
       buildManifest: snapshot.buildManifest,
       blueprintDraft: snapshot.blueprintDraft,
+      architectDraft: snapshot.architectDraft,
       validationStatus: snapshot.validationStatus,
       deploymentStatus: snapshot.deploymentStatus,
       workspaceState: snapshot.workspaceState,
@@ -998,6 +1023,13 @@ export function saveMatrixProjectWorkspaceSnapshot(
             ),
           }
         : {}),
+      ...(snapshot.architectDraft
+        ? {
+            architectDraft: JSON.parse(
+              serializeArchitectDraft(snapshot.architectDraft)
+            ),
+          }
+        : {}),
     })
   );
 }
@@ -1042,6 +1074,9 @@ export function loadMatrixProjectWorkspaceSnapshot(
         : undefined,
       blueprintDraft: parsed.blueprintDraft
         ? (deserializeBlueprintDraft(JSON.stringify(parsed.blueprintDraft)) ?? undefined)
+        : undefined,
+      architectDraft: parsed.architectDraft
+        ? (deserializeArchitectDraft(JSON.stringify(parsed.architectDraft)) ?? undefined)
         : undefined,
       validationStatus:
         parsed.validationStatus === 'passed' ||
@@ -1096,6 +1131,13 @@ export function saveMatrixProjectWorkspaceContext(
             ),
           }
         : {}),
+      ...(context.architectDraft
+        ? {
+            architectDraft: JSON.parse(
+              serializeArchitectDraft(context.architectDraft)
+            ),
+          }
+        : {}),
     })
   );
 }
@@ -1124,6 +1166,9 @@ export function loadMatrixProjectWorkspaceContext(
         : undefined,
       blueprintDraft: parsed.blueprintDraft
         ? (deserializeBlueprintDraft(JSON.stringify(parsed.blueprintDraft)) ?? undefined)
+        : undefined,
+      architectDraft: parsed.architectDraft
+        ? (deserializeArchitectDraft(JSON.stringify(parsed.architectDraft)) ?? undefined)
         : undefined,
     };
   } catch {

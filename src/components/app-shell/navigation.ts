@@ -28,17 +28,19 @@ export interface AppShellQuickAction {
 
 export const APP_SHELL_NAV_ITEMS: AppShellNavItem[] = [
   { label: 'Dashboard', href: '/dashboard', icon: Home },
-  { label: 'Workspace', href: '/chat-workspace', icon: MessageSquare },
-  { label: 'Matrix Build Suite', href: '/matrix-build-suite', icon: Blocks },
-  { label: 'Blueprint Studio', href: '/blueprint-studio', icon: Ruler },
-  { label: 'Deployment Center', href: '/deployment-center', icon: Rocket },
   { label: 'Projects', href: '/projects', icon: FolderKanban },
+  { label: 'Matrix AI Architect', href: '/matrix-ai-architect', icon: Sparkles },
+  { label: 'Blueprint Studio', href: '/blueprint-studio', icon: Ruler },
+  { label: 'Workspace', href: '/chat-workspace', icon: MessageSquare },
+  { label: 'Deployment Center', href: '/deployment-center', icon: Rocket },
+  { label: 'Matrix Build Suite', href: '/matrix-build-suite', icon: Blocks },
   { label: 'History', href: '/history', icon: Clock, comingSoon: true },
   { label: 'Settings', href: '/settings', icon: Settings, comingSoon: true },
 ];
 
 export const APP_SHELL_QUICK_ACTIONS: AppShellQuickAction[] = [
   { label: 'New Chat', href: '/chat-workspace', icon: MessageSquare },
+  { label: 'Open Matrix AI Architect', href: '/matrix-ai-architect', icon: Sparkles },
   { label: 'Open Matrix Build Suite', href: '/matrix-build-suite', icon: Sparkles },
   { label: 'Deployment Center', href: '/deployment-center', icon: Rocket },
   { label: 'New Project', href: '/projects', icon: FolderKanban },

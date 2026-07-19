@@ -28,6 +28,7 @@ import {
   type SupabaseProjectClient,
   type SupabaseProjectMutationBuilder,
 } from '@/lib/projects/projectStore';
+import { createArchitectDraft } from '@/lib/matrix-ai-architect';
 
 function createMemoryStorage(): Storage {
   const values = new Map<string, string>();
@@ -83,6 +84,7 @@ function makeProject(overrides: Partial<MatrixProject> = {}): MatrixProject {
         ],
       validationStatus: overrides.validationStatus ?? 'unknown',
       deploymentStatus: overrides.deploymentStatus ?? 'unknown',
+      architectDraft: overrides.architectDraft,
       workspaceState: overrides.workspaceState,
     },
     new Date(overrides.createdAt ?? '2026-07-08T00:00:00.000Z'),
@@ -241,11 +243,17 @@ describe('projectStore', () => {
   });
 
   it('duplicates with a new identity and isolated persistent data', () => {
+    const architectDraft = createArchitectDraft({
+      projectId: 'source-project',
+      projectName: 'Source',
+      now: new Date('2026-07-08T00:00:00.000Z'),
+    });
     const project = makeProject({
       id: 'source-project',
       workspaceId: 'workspace-stable-id',
       name: 'Source',
       favorite: true,
+      architectDraft,
     });
 
     const duplicate = duplicateMatrixProject(
@@ -260,6 +268,8 @@ describe('projectStore', () => {
     expect(duplicate.favorite).toBe(false);
     expect(duplicate.saveVersion).toBe(1);
     expect(duplicate.files).not.toBe(project.files);
+    expect(duplicate.architectDraft).not.toBe(project.architectDraft);
+    expect(duplicate.architectDraft?.projectName).toBe('Source');
 
     const duplicateFile = duplicate.files[0];
     const sourceFile = project.files[0];
@@ -484,9 +494,15 @@ describe('projectStore', () => {
   });
 
   it('stores and reads complete workspace snapshot data safely', () => {
+    const architectDraft = createArchitectDraft({
+      projectId: 'project-1',
+      projectName: 'Project One',
+      now: new Date('2026-07-10T00:00:00.000Z'),
+    });
     const project = makeProject({
       favorite: true,
       workspaceState: { activeFilePath: 'src/app/page.tsx' },
+      architectDraft,
     });
 
     saveMatrixProjectWorkspaceSnapshot(localStorage, {
@@ -495,6 +511,7 @@ describe('projectStore', () => {
       description: 'Snapshot project',
       files: project.files,
       chatMessages: project.chatMessages,
+      architectDraft,
       validationStatus: 'passed',
       deploymentStatus: 'ready',
       workspaceState: project.workspaceState,
@@ -507,6 +524,7 @@ describe('projectStore', () => {
     expect(snapshot?.projectId).toBe(project.id);
     expect(snapshot?.name).toBe('Project One');
     expect(snapshot?.favorite).toBe(true);
+    expect(snapshot?.architectDraft?.projectName).toBe('Project One');
     expect(snapshot?.lastOpenedAt).toBe('2026-07-10T00:00:00.000Z');
     expect(snapshot?.workspaceState?.activeFilePath).toBe('src/app/page.tsx');
     expect(localStorage.getItem(MATRIX_PROJECTS_WORKSPACE_SNAPSHOT_KEY)).toContain(
@@ -535,13 +553,20 @@ describe('projectStore', () => {
   });
 
   it('stores and clears workspace context data', () => {
+    const architectDraft = createArchitectDraft({
+      projectId: 'project-1',
+      projectName: 'Project One',
+      now: new Date('2026-07-10T00:00:00.000Z'),
+    });
     saveMatrixProjectWorkspaceContext(localStorage, {
       currentProjectId: 'project-1',
       currentProjectName: 'Project One',
+      architectDraft,
     });
 
     const saved = loadMatrixProjectWorkspaceContext(localStorage);
     expect(saved.currentProjectId).toBe('project-1');
+    expect(saved.architectDraft?.projectName).toBe('Project One');
     expect(localStorage.getItem(MATRIX_PROJECTS_WORKSPACE_CONTEXT_KEY)).toContain(
       'Project One'
     );

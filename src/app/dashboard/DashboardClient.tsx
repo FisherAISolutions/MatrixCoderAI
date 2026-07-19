@@ -44,12 +44,20 @@ interface ActionCardConfig {
 
 const ACTION_CARDS: ActionCardConfig[] = [
   {
-    title: 'Start in Workspace',
-    description: 'Open the chat, files, validation, terminal, and generated app preview.',
-    href: '/chat-workspace',
-    icon: MessageSquare,
+    title: 'Start with Projects',
+    description: 'Create or reopen a saved app so work stays tied to one project.',
+    href: '/projects',
+    icon: FolderKanban,
     status: 'Ready',
-    accent: 'from-matrix-green/25 to-cyan-400/10',
+    accent: 'from-sky-400/15 to-matrix-green/5',
+  },
+  {
+    title: 'Plan with Matrix AI Architect',
+    description: 'Gather requirements and create a structured app specification before generation.',
+    href: '/matrix-ai-architect',
+    icon: Sparkles,
+    status: 'Ready',
+    accent: 'from-emerald-400/20 to-blue-400/10',
   },
   {
     title: 'Start with Matrix Build Suite',
@@ -76,12 +84,12 @@ const ACTION_CARDS: ActionCardConfig[] = [
     accent: 'from-amber-300/15 to-matrix-green/5',
   },
   {
-    title: 'Projects',
-    description: 'Manage saved generated projects, versions, exports, and shared workspaces.',
-    href: '/projects',
-    icon: FolderKanban,
+    title: 'Open Workspace',
+    description: 'Open chat, files, validation, terminal, and generated app preview.',
+    href: '/chat-workspace',
+    icon: MessageSquare,
     status: 'Ready',
-    accent: 'from-sky-400/15 to-matrix-green/5',
+    accent: 'from-matrix-green/25 to-cyan-400/10',
   },
 ];
 
@@ -415,8 +423,9 @@ export default function DashboardClient() {
           </div>
         </header>
 
-        <WorkflowNav
+          <WorkflowNav
           context={{
+            hasArchitectDraft: false,
             hasBuildManifest: Boolean(buildSuite),
             hasBlueprintDraft: buildSuite?.type === 'handoff',
             hasGeneratedProject: Boolean(snapshot),
