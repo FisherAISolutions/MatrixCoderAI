@@ -13,6 +13,11 @@ import {
   type BlueprintDraft,
 } from '@/lib/blueprint-studio/blueprintDraft';
 import {
+  deserializeBuildContract,
+  serializeBuildContract,
+  type BuildContract,
+} from '@/lib/build-contract';
+import {
   deserializeArchitectDraft,
   serializeArchitectDraft,
 } from '@/lib/matrix-ai-architect/architectDraft';
@@ -71,6 +76,7 @@ export interface MatrixProject {
   buildManifest?: BuildManifest;
   blueprintDraft?: BlueprintDraft;
   architectDraft?: ArchitectDraft;
+  buildContract?: BuildContract;
   validationStatus: MatrixProjectValidationStatus;
   deploymentStatus: MatrixProjectDeploymentStatus;
   workspaceState?: MatrixProjectWorkspaceState;
@@ -87,6 +93,7 @@ export interface MatrixProjectDraft {
   buildManifest?: BuildManifest;
   blueprintDraft?: BlueprintDraft;
   architectDraft?: ArchitectDraft;
+  buildContract?: BuildContract;
   validationStatus?: MatrixProjectValidationStatus;
   deploymentStatus?: MatrixProjectDeploymentStatus;
   workspaceState?: MatrixProjectWorkspaceState;
@@ -98,6 +105,7 @@ export interface MatrixProjectWorkspaceContext {
   buildManifest?: BuildManifest;
   blueprintDraft?: BlueprintDraft;
   architectDraft?: ArchitectDraft;
+  buildContract?: BuildContract;
 }
 
 export interface MatrixProjectWorkspaceSnapshot {
@@ -109,6 +117,7 @@ export interface MatrixProjectWorkspaceSnapshot {
   buildManifest?: BuildManifest;
   blueprintDraft?: BlueprintDraft;
   architectDraft?: ArchitectDraft;
+  buildContract?: BuildContract;
   validationStatus: MatrixProjectValidationStatus;
   deploymentStatus: MatrixProjectDeploymentStatus;
   workspaceState?: MatrixProjectWorkspaceState;
@@ -297,6 +306,9 @@ function normalizeProjectPayload(
   const architectDraft = parsed.architectDraft
     ? (deserializeArchitectDraft(JSON.stringify(parsed.architectDraft)) ?? undefined)
     : undefined;
+  const buildContract = parsed.buildContract
+    ? (deserializeBuildContract(JSON.stringify(parsed.buildContract)) ?? undefined)
+    : undefined;
 
   return {
     files: cloneJson(parsed.files as FileNode[]),
@@ -304,6 +316,7 @@ function normalizeProjectPayload(
     buildManifest,
     blueprintDraft,
     architectDraft,
+    buildContract,
     validationStatus:
       parsed.validationStatus === 'passed' ||
       parsed.validationStatus === 'failed' ||
@@ -397,6 +410,13 @@ function serializeProject(project: MatrixProject): MatrixProject {
           architectDraft: JSON.parse(
             serializeArchitectDraft(project.architectDraft)
           ) as ArchitectDraft,
+        }
+      : {}),
+    ...(project.buildContract
+      ? {
+          buildContract: JSON.parse(
+            serializeBuildContract(project.buildContract)
+          ) as BuildContract,
         }
       : {}),
     workspaceState: project.workspaceState
@@ -643,6 +663,7 @@ export function createMatrixProject(
     buildManifest: draft.buildManifest,
     blueprintDraft: draft.blueprintDraft,
     architectDraft: draft.architectDraft,
+    buildContract: draft.buildContract,
     validationStatus: draft.validationStatus ?? 'unknown',
     deploymentStatus: draft.deploymentStatus ?? 'unknown',
     workspaceState: draft.workspaceState
@@ -694,6 +715,9 @@ export function duplicateMatrixProject(
     architectDraft: project.architectDraft
       ? (deserializeArchitectDraft(serializeArchitectDraft(project.architectDraft)) ?? undefined)
       : undefined,
+    buildContract: project.buildContract
+      ? (deserializeBuildContract(serializeBuildContract(project.buildContract)) ?? undefined)
+      : undefined,
     workspaceState: project.workspaceState
       ? { ...project.workspaceState }
       : undefined,
@@ -716,6 +740,7 @@ export function createProjectFromWorkspaceSnapshot(
       buildManifest: snapshot.buildManifest,
       blueprintDraft: snapshot.blueprintDraft,
       architectDraft: snapshot.architectDraft,
+      buildContract: snapshot.buildContract,
       validationStatus: snapshot.validationStatus,
       deploymentStatus: snapshot.deploymentStatus,
       workspaceState: snapshot.workspaceState,
@@ -1030,6 +1055,13 @@ export function saveMatrixProjectWorkspaceSnapshot(
             ),
           }
         : {}),
+      ...(snapshot.buildContract
+        ? {
+            buildContract: JSON.parse(
+              serializeBuildContract(snapshot.buildContract)
+            ),
+          }
+        : {}),
     })
   );
 }
@@ -1077,6 +1109,9 @@ export function loadMatrixProjectWorkspaceSnapshot(
         : undefined,
       architectDraft: parsed.architectDraft
         ? (deserializeArchitectDraft(JSON.stringify(parsed.architectDraft)) ?? undefined)
+        : undefined,
+      buildContract: parsed.buildContract
+        ? (deserializeBuildContract(JSON.stringify(parsed.buildContract)) ?? undefined)
         : undefined,
       validationStatus:
         parsed.validationStatus === 'passed' ||
@@ -1138,6 +1173,13 @@ export function saveMatrixProjectWorkspaceContext(
             ),
           }
         : {}),
+      ...(context.buildContract
+        ? {
+            buildContract: JSON.parse(
+              serializeBuildContract(context.buildContract)
+            ),
+          }
+        : {}),
     })
   );
 }
@@ -1169,6 +1211,9 @@ export function loadMatrixProjectWorkspaceContext(
         : undefined,
       architectDraft: parsed.architectDraft
         ? (deserializeArchitectDraft(JSON.stringify(parsed.architectDraft)) ?? undefined)
+        : undefined,
+      buildContract: parsed.buildContract
+        ? (deserializeBuildContract(JSON.stringify(parsed.buildContract)) ?? undefined)
         : undefined,
     };
   } catch {
