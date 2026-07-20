@@ -70,6 +70,7 @@ function buildSnapshotFromProject(project: MatrixProject): MatrixProjectWorkspac
     blueprintDraft: project.blueprintDraft,
     architectDraft: project.architectDraft,
     buildContract: project.buildContract,
+    capabilityResolution: project.capabilityResolution,
     validationStatus: project.validationStatus,
     deploymentStatus: project.deploymentStatus,
     workspaceState: project.workspaceState,
@@ -324,6 +325,7 @@ export default function ProjectsClient() {
         blueprintDraft: projectToOpen.blueprintDraft,
         architectDraft: projectToOpen.architectDraft,
         buildContract: projectToOpen.buildContract,
+        capabilityResolution: projectToOpen.capabilityResolution,
       });
       writeMatrixProjectOpenHandoff(window.sessionStorage, projectToOpen);
       setActiveProjectId(projectToOpen.id);
