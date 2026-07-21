@@ -5,6 +5,7 @@ import { ChatMessage, AgentType, MemoryStage, FileNode } from './types';
 import MessageList from './MessageList';
 import ChatComposer from './ChatComposer';
 import AgentStatusBar from './AgentStatusBar';
+import GuidedBuildPanel from './GuidedBuildPanel';
 
 interface Props {
   messages: ChatMessage[];
@@ -68,6 +69,7 @@ export default function ChatPanel({
         messageCount={messages.length}
         activityStatus={activityStatus}
       />
+      <GuidedBuildPanel sessionId={sessionId} isStreaming={isStreaming} />
 
       {/* Messages */}
       <div className="flex-1 overflow-y-auto px-4 py-4 space-y-4">
