@@ -452,6 +452,63 @@ describe('Capability Registry and resolution', () => {
     ).toBe(false);
   });
 
+  it('does not infer children story capabilities from a business marketing story', () => {
+    const source = contract({
+      project: {
+        projectId: 'business-project',
+        workspaceId: 'business-workspace',
+        projectName: 'Harbor Studio',
+      },
+      projectSummary:
+        'Build a polished business website with services, testimonials, and contact capture.',
+      routes: [
+        { path: '/', label: 'Home', required: true, source: 'blueprint' },
+        {
+          path: '/about',
+          label: 'About',
+          purpose: 'Business story and trust signals.',
+          required: true,
+          source: 'blueprint',
+        },
+        {
+          path: '/services',
+          label: 'Services',
+          required: true,
+          source: 'blueprint',
+        },
+      ],
+      dataModels: [
+        {
+          name: 'ContactInquiry',
+          fields: ['name', 'email', 'message'],
+          source: 'blueprint',
+        },
+      ],
+      requirements: [
+        ...contract().requirements,
+        requirement('route', '/about', 'Route /about', 'About route must exist.'),
+        requirement(
+          'data-model',
+          'ContactInquiry',
+          'Data model: ContactInquiry'
+        ),
+      ],
+    });
+
+    const result = resolveCapabilities(source);
+
+    expect(result.domainPackContributions.map((item) => item.domainPackId)).not.toContain(
+      'childrens-story'
+    );
+    expect(capabilityIds(result)).not.toEqual(
+      expect.arrayContaining([
+        'child-profile-management',
+        'story-crud',
+        'story-library',
+      ])
+    );
+  });
+
   it('does not mutate the Build Contract while resolving capabilities', () => {
     const source = contract({
       dataModels: [{ name: 'Entry', fields: ['title'], source: 'blueprint' }],
@@ -539,4 +596,3 @@ describe('Capability Registry and resolution', () => {
     expect(loaded.projects[0]?.capabilityResolution).toBeUndefined();
   });
 });
-

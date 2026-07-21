@@ -139,6 +139,63 @@ function contractSearchText(contract: BuildContract): string {
     .toLowerCase();
 }
 
+function matchesTerm(text: string, term: string): boolean {
+  const escaped = term
+    .toLowerCase()
+    .replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+    .replace(/\\ /g, '\\s+');
+  return new RegExp(`(^|[^a-z0-9])${escaped}([^a-z0-9]|$)`).test(text);
+}
+
+function matchesChildrenStoryDomain(text: string): boolean {
+  const explicitEntitySignals = [
+    'childprofile',
+    'child profile',
+    'characterprofile',
+    'character profile',
+    'storypage',
+    'story page',
+  ];
+  if (explicitEntitySignals.some((term) => text.includes(term))) return true;
+
+  const childSignals = [
+    'children',
+    "children's",
+    'child',
+    'kid',
+    'kids',
+    'parent',
+    'parents',
+    'guardian',
+    'guardians',
+  ];
+  const storySignals = [
+    'story',
+    'stories',
+    'storybook',
+    'illustration',
+    'illustrations',
+    'character',
+    'characters',
+    'page editor',
+    'ai story generation',
+    'ai image generation',
+  ];
+
+  return (
+    childSignals.some((term) => matchesTerm(text, term)) &&
+    storySignals.some((term) => matchesTerm(text, term))
+  );
+}
+
+function matchesDomainPack(pack: CapabilityDomainPack, text: string): boolean {
+  if (pack.id === 'childrens-story') {
+    return matchesChildrenStoryDomain(text);
+  }
+
+  return pack.matchTags.some((tag) => matchesTerm(text, tag.toLowerCase()));
+}
+
 function sourceRequirementIdsForPack(
   pack: CapabilityDomainPack,
   requirements: BuildContractRequirement[]
@@ -160,9 +217,7 @@ export function applyDomainPacks(
 ): CapabilityDomainPackContribution[] {
   const text = contractSearchText(contract);
   return packs
-    .filter((pack) =>
-      pack.matchTags.some((tag) => text.includes(tag.toLowerCase()))
-    )
+    .filter((pack) => matchesDomainPack(pack, text))
     .map((pack) => ({
       domainPackId: pack.id,
       capabilityIds: [...pack.suggestedCapabilityIds],
