@@ -3,18 +3,21 @@
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { useEffect, useMemo, useState } from 'react';
-import { ArrowRight, BrainCircuit, CheckCircle2, Save, Sparkles } from 'lucide-react';
+import { ArrowRight, BrainCircuit, CheckCircle2, Save, SlidersHorizontal, Sparkles } from 'lucide-react';
 import WorkflowNav from '@/components/workflow/WorkflowNav';
 import {
   ARCHITECT_QUESTIONS,
+  approveArchitectConversationForBlueprint,
+  ensureArchitectConversation,
   getArchitectServiceRecommendations,
   handoffArchitectDraftToBlueprint,
   loadArchitectProjectState,
+  recordArchitectStructuredEdit,
   saveArchitectProjectDraft,
-  updateArchitectAnswer,
   type ArchitectAnswers,
   type ArchitectDraft,
 } from '@/lib/matrix-ai-architect';
+import ArchitectConversationPanel from './ArchitectConversationPanel';
 import ArchitectQuestionPanel from './ArchitectQuestionPanel';
 import ArchitectSummaryPanel from './ArchitectSummaryPanel';
 
@@ -38,7 +41,7 @@ export default function MatrixAIArchitectClient() {
 
   useEffect(() => {
     const state = loadArchitectProjectState(window.localStorage);
-    setDraft(state.draft);
+    setDraft(ensureArchitectConversation(state.draft));
     setSaveStatus('saved');
     setMessage(
       state.context.currentProjectName || state.snapshot?.name
@@ -77,12 +80,21 @@ export default function MatrixAIArchitectClient() {
     value: ArchitectAnswers[K]
   ) => {
     setDraft((current) =>
-      current ? updateArchitectAnswer(current, key, value) : current
+      current ? recordArchitectStructuredEdit(current, key, value) : current
     );
   };
 
   const handleHandoff = () => {
     if (!draft) return;
+    if (!draft.conversation?.approvedForBlueprint) {
+      setDraft(approveArchitectConversationForBlueprint(draft));
+      setSaveStatus('saved');
+      setMessage(
+        'Architect plan approved. Click Send to Blueprint Studio when you are ready.'
+      );
+      return;
+    }
+
     const localResult = handoffArchitectDraftToBlueprint(window.localStorage, draft);
 
     if (localResult.skipped) {
@@ -124,9 +136,10 @@ export default function MatrixAIArchitectClient() {
                 Plan the product before Matrix Coder generates it.
               </h1>
               <p className="mt-4 text-sm leading-7 text-slate-600 md:text-base">
-                Answer a few product and launch questions. Architect turns them
-                into structured routes, data models, recommendations, and a
-                Blueprint-ready plan without changing generation behavior.
+                Talk through your idea with a guided product architect. The
+                conversation updates structured routes, data models,
+                recommendations, and a Blueprint-ready plan without changing
+                generation behavior.
               </p>
             </div>
             <div className="min-w-64 rounded-2xl border border-slate-200 bg-slate-50 p-4 shadow-sm">
@@ -152,28 +165,41 @@ export default function MatrixAIArchitectClient() {
         </div>
       </div>
 
-      <main className="mx-auto grid max-w-7xl gap-6 px-4 py-6 md:px-8 lg:grid-cols-[minmax(0,1.05fr)_minmax(380px,0.95fr)] lg:px-10">
+      <main className="mx-auto grid max-w-7xl gap-6 px-4 py-6 md:px-8 lg:grid-cols-[minmax(0,1.1fr)_minmax(380px,0.9fr)] lg:px-10">
         <section className="space-y-5">
-          <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
-            <div className="flex flex-wrap items-center justify-between gap-3">
+          <ArchitectConversationPanel
+            draft={draft}
+            onDraftChange={setDraft}
+            onStatusMessage={setMessage}
+          />
+
+          <details className="group rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+            <summary className="flex cursor-pointer list-none items-center justify-between gap-4">
               <div>
-                <p className="text-[10px] font-bold uppercase tracking-[0.24em] text-slate-400">
-                  Guided planning
+                <p className="flex items-center gap-2 text-[10px] font-bold uppercase tracking-[0.24em] text-slate-400">
+                  <SlidersHorizontal size={14} aria-hidden="true" />
+                  Structured answers
                 </p>
                 <h2 className="mt-2 text-xl font-bold text-slate-950">
-                  Requirements interview
+                  Quick controls and advanced editing
                 </h2>
+                <p className="mt-1 text-sm text-slate-600">
+                  Use these controls when you want to inspect or edit the
+                  structured plan directly.
+                </p>
               </div>
-              <span className="rounded-full border border-emerald-200 bg-emerald-50 px-3 py-1 text-xs font-bold text-emerald-700">
-                Structured draft
+              <span className="rounded-full border border-slate-200 px-3 py-1 text-xs font-bold text-slate-600 transition group-open:bg-slate-950 group-open:text-white">
+                Open
               </span>
+            </summary>
+            <div className="mt-5">
+              <ArchitectQuestionPanel
+                questions={ARCHITECT_QUESTIONS}
+                answers={draft.answers}
+                onChange={handleChange}
+              />
             </div>
-          </div>
-          <ArchitectQuestionPanel
-            questions={ARCHITECT_QUESTIONS}
-            answers={draft.answers}
-            onChange={handleChange}
-          />
+          </details>
         </section>
 
         <aside className="space-y-5 lg:sticky lg:top-6 lg:self-start">
@@ -205,7 +231,9 @@ export default function MatrixAIArchitectClient() {
                 onClick={handleHandoff}
                 className="inline-flex items-center gap-2 rounded-xl bg-slate-950 px-4 py-3 text-sm font-bold text-white transition hover:bg-slate-800"
               >
-                Send to Blueprint Studio
+                {draft.conversation?.approvedForBlueprint
+                  ? 'Send to Blueprint Studio'
+                  : 'Approve Architect Plan'}
                 <ArrowRight size={16} />
               </button>
               <Link

@@ -22,6 +22,7 @@ import {
   type ArchitectRouteSpec,
   type ArchitectSpecification,
   type ArchitectBudgetMode,
+  type ArchitectConversationState,
 } from './types';
 
 type StorageLike = Pick<Storage, 'getItem' | 'setItem' | 'removeItem'>;
@@ -585,10 +586,34 @@ export function deserializeArchitectDraft(raw: string): ArchitectDraft | null {
     ) {
       return null;
     }
-    return parsed as ArchitectDraft;
+    const conversation = isArchitectConversationState(parsed.conversation)
+      ? parsed.conversation
+      : undefined;
+    return {
+      ...(parsed as ArchitectDraft),
+      ...(conversation ? { conversation } : { conversation: undefined }),
+    };
   } catch {
     return null;
   }
+}
+
+function isArchitectConversationState(
+  value: unknown
+): value is ArchitectConversationState {
+  if (!value || typeof value !== 'object') return false;
+  const candidate = value as Partial<ArchitectConversationState>;
+  return (
+    typeof candidate.id === 'string' &&
+    typeof candidate.draftId === 'string' &&
+    Array.isArray(candidate.messages) &&
+    Array.isArray(candidate.answeredTopicIds) &&
+    Array.isArray(candidate.acceptedRecommendations) &&
+    Array.isArray(candidate.rejectedRecommendations) &&
+    typeof candidate.createdAt === 'string' &&
+    typeof candidate.updatedAt === 'string' &&
+    typeof candidate.streamVersion === 'number'
+  );
 }
 
 export function saveArchitectDraft(

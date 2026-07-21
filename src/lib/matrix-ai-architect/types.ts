@@ -8,6 +8,17 @@ export type ArchitectBudgetMode =
   | 'professional'
   | 'growth';
 
+export type ArchitectExperienceLevel = 'beginner' | 'advanced';
+
+export type ArchitectConversationRole = 'architect' | 'user' | 'system';
+
+export type ArchitectConversationMessageStatus =
+  | 'streaming'
+  | 'complete'
+  | 'failed';
+
+export type ArchitectRecommendationDecision = 'accepted' | 'rejected';
+
 export type ArchitectQuestionType =
   | 'text'
   | 'textarea'
@@ -37,6 +48,75 @@ export interface ArchitectQuestion {
     | 'delivery';
   options?: ArchitectQuestionOption[];
   placeholder?: string;
+}
+
+export interface ArchitectConversationMessage {
+  id: string;
+  role: ArchitectConversationRole;
+  content: string;
+  createdAt: string;
+  topicId?: keyof ArchitectAnswers | 'review';
+  status?: ArchitectConversationMessageStatus;
+}
+
+export interface ArchitectConversationDecision {
+  recommendationId: string;
+  title: string;
+  decision: ArchitectRecommendationDecision;
+  reason?: string;
+  createdAt: string;
+}
+
+export interface ArchitectConversationUnresolvedQuestion {
+  topicId: keyof ArchitectAnswers | 'review';
+  question: string;
+  reason: string;
+  createdAt: string;
+}
+
+export interface ArchitectConversationCheckpoint {
+  id: string;
+  summary: string;
+  createdAt: string;
+}
+
+export interface ArchitectConversationState {
+  id: string;
+  draftId: string;
+  projectId?: string;
+  activeTopicId?: keyof ArchitectAnswers | 'review';
+  experienceLevel: ArchitectExperienceLevel;
+  messages: ArchitectConversationMessage[];
+  answeredTopicIds: (keyof ArchitectAnswers)[];
+  acceptedRecommendations: ArchitectConversationDecision[];
+  rejectedRecommendations: ArchitectConversationDecision[];
+  unresolvedQuestions: ArchitectConversationUnresolvedQuestion[];
+  summaryCheckpoints: ArchitectConversationCheckpoint[];
+  approvalRequired: boolean;
+  approvedForBlueprint: boolean;
+  completed: boolean;
+  turnCount: number;
+  lastProcessedMessageId?: string;
+  streamVersion: number;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface ArchitectConversationExtraction {
+  updatedAnswers: Partial<ArchitectAnswers>;
+  newRequirements: string[];
+  rejectedRecommendations: string[];
+  unresolvedQuestions: string[];
+  confidence: number;
+  nextQuestion?: string;
+}
+
+export interface ArchitectConversationReadiness {
+  readyForBlueprint: boolean;
+  canCreateInitialBuildContract: boolean;
+  confidence: number;
+  missingTopics: (keyof ArchitectAnswers)[];
+  reason: string;
 }
 
 export interface ArchitectAnswers {
@@ -119,6 +199,7 @@ export interface ArchitectDraft {
   projectName: string;
   answers: ArchitectAnswers;
   specification: ArchitectSpecification;
+  conversation?: ArchitectConversationState;
   sourceBuildManifest?: BuildManifest;
   createdAt: string;
   updatedAt: string;
