@@ -28,6 +28,11 @@ import {
   type TaskGraph,
 } from '@/lib/task-graph';
 import {
+  deserializeRepositoryModel,
+  serializeRepositoryModel,
+  type RepositoryModel,
+} from '@/lib/repository-model';
+import {
   deserializeArchitectDraft,
   serializeArchitectDraft,
 } from '@/lib/matrix-ai-architect/architectDraft';
@@ -89,6 +94,7 @@ export interface MatrixProject {
   buildContract?: BuildContract;
   capabilityResolution?: CapabilityResolutionResult;
   taskGraph?: TaskGraph;
+  repositoryModel?: RepositoryModel;
   validationStatus: MatrixProjectValidationStatus;
   deploymentStatus: MatrixProjectDeploymentStatus;
   workspaceState?: MatrixProjectWorkspaceState;
@@ -108,6 +114,7 @@ export interface MatrixProjectDraft {
   buildContract?: BuildContract;
   capabilityResolution?: CapabilityResolutionResult;
   taskGraph?: TaskGraph;
+  repositoryModel?: RepositoryModel;
   validationStatus?: MatrixProjectValidationStatus;
   deploymentStatus?: MatrixProjectDeploymentStatus;
   workspaceState?: MatrixProjectWorkspaceState;
@@ -122,6 +129,7 @@ export interface MatrixProjectWorkspaceContext {
   buildContract?: BuildContract;
   capabilityResolution?: CapabilityResolutionResult;
   taskGraph?: TaskGraph;
+  repositoryModel?: RepositoryModel;
 }
 
 export interface MatrixProjectWorkspaceSnapshot {
@@ -136,6 +144,7 @@ export interface MatrixProjectWorkspaceSnapshot {
   buildContract?: BuildContract;
   capabilityResolution?: CapabilityResolutionResult;
   taskGraph?: TaskGraph;
+  repositoryModel?: RepositoryModel;
   validationStatus: MatrixProjectValidationStatus;
   deploymentStatus: MatrixProjectDeploymentStatus;
   workspaceState?: MatrixProjectWorkspaceState;
@@ -334,6 +343,10 @@ function normalizeProjectPayload(
   const taskGraph = parsed.taskGraph
     ? (deserializeTaskGraph(JSON.stringify(parsed.taskGraph)) ?? undefined)
     : undefined;
+  const repositoryModel = parsed.repositoryModel
+    ? (deserializeRepositoryModel(JSON.stringify(parsed.repositoryModel)) ??
+      undefined)
+    : undefined;
 
   return {
     files: cloneJson(parsed.files as FileNode[]),
@@ -344,6 +357,7 @@ function normalizeProjectPayload(
     buildContract,
     capabilityResolution,
     taskGraph,
+    repositoryModel,
     validationStatus:
       parsed.validationStatus === 'passed' ||
       parsed.validationStatus === 'failed' ||
@@ -458,6 +472,13 @@ function serializeProject(project: MatrixProject): MatrixProject {
           taskGraph: JSON.parse(
             serializeTaskGraph(project.taskGraph)
           ) as TaskGraph,
+        }
+      : {}),
+    ...(project.repositoryModel
+      ? {
+          repositoryModel: JSON.parse(
+            serializeRepositoryModel(project.repositoryModel)
+          ) as RepositoryModel,
         }
       : {}),
     workspaceState: project.workspaceState
@@ -707,6 +728,7 @@ export function createMatrixProject(
     buildContract: draft.buildContract,
     capabilityResolution: draft.capabilityResolution,
     taskGraph: draft.taskGraph,
+    repositoryModel: draft.repositoryModel,
     validationStatus: draft.validationStatus ?? 'unknown',
     deploymentStatus: draft.deploymentStatus ?? 'unknown',
     workspaceState: draft.workspaceState
@@ -769,6 +791,11 @@ export function duplicateMatrixProject(
     taskGraph: project.taskGraph
       ? (deserializeTaskGraph(serializeTaskGraph(project.taskGraph)) ?? undefined)
       : undefined,
+    repositoryModel: project.repositoryModel
+      ? (deserializeRepositoryModel(
+          serializeRepositoryModel(project.repositoryModel)
+        ) ?? undefined)
+      : undefined,
     workspaceState: project.workspaceState
       ? { ...project.workspaceState }
       : undefined,
@@ -794,6 +821,7 @@ export function createProjectFromWorkspaceSnapshot(
       buildContract: snapshot.buildContract,
       capabilityResolution: snapshot.capabilityResolution,
       taskGraph: snapshot.taskGraph,
+      repositoryModel: snapshot.repositoryModel,
       validationStatus: snapshot.validationStatus,
       deploymentStatus: snapshot.deploymentStatus,
       workspaceState: snapshot.workspaceState,
@@ -1127,6 +1155,13 @@ export function saveMatrixProjectWorkspaceSnapshot(
             taskGraph: JSON.parse(serializeTaskGraph(snapshot.taskGraph)),
           }
         : {}),
+      ...(snapshot.repositoryModel
+        ? {
+            repositoryModel: JSON.parse(
+              serializeRepositoryModel(snapshot.repositoryModel)
+            ),
+          }
+        : {}),
     })
   );
 }
@@ -1185,6 +1220,10 @@ export function loadMatrixProjectWorkspaceSnapshot(
         : undefined,
       taskGraph: parsed.taskGraph
         ? (deserializeTaskGraph(JSON.stringify(parsed.taskGraph)) ?? undefined)
+        : undefined,
+      repositoryModel: parsed.repositoryModel
+        ? (deserializeRepositoryModel(JSON.stringify(parsed.repositoryModel)) ??
+          undefined)
         : undefined,
       validationStatus:
         parsed.validationStatus === 'passed' ||
@@ -1265,6 +1304,13 @@ export function saveMatrixProjectWorkspaceContext(
             taskGraph: JSON.parse(serializeTaskGraph(context.taskGraph)),
           }
         : {}),
+      ...(context.repositoryModel
+        ? {
+            repositoryModel: JSON.parse(
+              serializeRepositoryModel(context.repositoryModel)
+            ),
+          }
+        : {}),
     })
   );
 }
@@ -1307,6 +1353,10 @@ export function loadMatrixProjectWorkspaceContext(
         : undefined,
       taskGraph: parsed.taskGraph
         ? (deserializeTaskGraph(JSON.stringify(parsed.taskGraph)) ?? undefined)
+        : undefined,
+      repositoryModel: parsed.repositoryModel
+        ? (deserializeRepositoryModel(JSON.stringify(parsed.repositoryModel)) ??
+          undefined)
         : undefined,
     };
   } catch {

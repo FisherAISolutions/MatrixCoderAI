@@ -72,6 +72,7 @@ function buildSnapshotFromProject(project: MatrixProject): MatrixProjectWorkspac
     buildContract: project.buildContract,
     capabilityResolution: project.capabilityResolution,
     taskGraph: project.taskGraph,
+    repositoryModel: project.repositoryModel,
     validationStatus: project.validationStatus,
     deploymentStatus: project.deploymentStatus,
     workspaceState: project.workspaceState,
@@ -328,6 +329,7 @@ export default function ProjectsClient() {
         buildContract: projectToOpen.buildContract,
         capabilityResolution: projectToOpen.capabilityResolution,
         taskGraph: projectToOpen.taskGraph,
+        repositoryModel: projectToOpen.repositoryModel,
       });
       writeMatrixProjectOpenHandoff(window.sessionStorage, projectToOpen);
       setActiveProjectId(projectToOpen.id);
