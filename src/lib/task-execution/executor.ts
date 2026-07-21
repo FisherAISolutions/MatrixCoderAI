@@ -17,6 +17,7 @@ import {
 import { buildTaskEngineeringInstruction } from './instructionBuilders';
 import { applyTaskExecutionResponse } from './patchApplication';
 import { createOperationId, createRunId, createTaskExecutionState } from './state';
+import { runTargetedTaskRepair } from './targetedRepair';
 import type {
   TaskExecutionAiClient,
   TaskExecutionGuard,
@@ -176,6 +177,21 @@ function createResult(
 
 function isAbort(signal?: AbortSignal): boolean {
   return signal?.aborted === true;
+}
+
+function validationIsBlocked(validation: TaskValidationResult): boolean {
+  return (
+    validation.outcome === 'blocked by environment' ||
+    validation.outcome === 'manual review required'
+  );
+}
+
+function validationIsCancelled(validation: TaskValidationResult): boolean {
+  return validation.outcome === 'cancelled';
+}
+
+function validationIsRecoverable(validation: TaskValidationResult): boolean {
+  return validation.outcome === 'recoverable' || (!validation.ok && !validation.outcome);
 }
 
 function guardAccepted(
@@ -407,7 +423,7 @@ export async function executeNextTask(
   }
 
   graph = updateTask(graph, runningTask.id, { status: 'validating' }, now);
-  const validation = await validationRunner.validate(files, runningTask, latestModel, {
+  let validation = await validationRunner.validate(files, runningTask, latestModel, {
     signal: options.signal,
     runId,
     operationId,
@@ -472,6 +488,53 @@ export async function executeNextTask(
     };
   }
 
+  if (
+    !validation.ok &&
+    rejectedChanges.length === 0 &&
+    options.targetedRepair?.enabled &&
+    validationIsRecoverable(validation) &&
+    runningTask.retryCount < runningTask.maximumRetryCount
+  ) {
+    const repair = await runTargetedTaskRepair({
+      task: runningTask,
+      files,
+      repositoryModel: latestModel,
+      validation,
+      maxAttempts: options.targetedRepair.maxAttempts ?? 1,
+      aiClient: options.targetedRepair.aiClient,
+      signal: options.signal,
+      runId,
+      operationId,
+      projectId: options.projectId,
+      now,
+      generatedFilePaths: options.generatedFilePaths,
+      userEditedFilePaths: options.userEditedFilePaths,
+      protectedPaths: options.protectedPaths,
+    });
+
+    files = repair.files;
+    latestModel = repair.repositoryModel;
+    appliedChanges.push(...repair.appliedChanges);
+    rejectedChanges.push(...repair.rejectedChanges);
+
+    if (repair.stoppedByEnvironment) {
+      validation = {
+        ...validation,
+        ok: false,
+        outcome: 'blocked by environment',
+        summary: repair.errors[0] ?? validation.summary,
+        errors: [...validation.errors, ...repair.errors],
+        warnings: [...validation.warnings, ...repair.warnings],
+      };
+    } else if (repair.repaired && !isAbort(options.signal)) {
+      validation = await validationRunner.validate(files, runningTask, latestModel, {
+        signal: options.signal,
+        runId,
+        operationId: `${operationId}:post-repair`,
+      });
+    }
+  }
+
   if (validation.ok && rejectedChanges.length === 0) {
     graph = markTaskPassed(
       graph,
@@ -521,6 +584,77 @@ export async function executeNextTask(
     };
   }
 
+  if (validationIsCancelled(validation)) {
+    graph = updateTask(
+      graph,
+      runningTask.id,
+      {
+        status: 'cancelled',
+        blockedReason: validation.summary,
+        completedAt: now.toISOString(),
+        resumable: false,
+      },
+      now
+    );
+    return {
+      status: 'cancelled',
+      task: runningTask,
+      graph,
+      files,
+      repositoryModel: latestModel,
+      state: createTaskExecutionState('cancelled', now, {
+        projectId: options.projectId,
+        activeTaskId: runningTask.id,
+        activeRunId: runId,
+        activeOperationId: operationId,
+        validationSummary: validation.summary,
+        errors: validation.errors,
+      }),
+      extracted,
+      validation,
+      appliedChanges,
+      rejectedChanges,
+      warnings: validation.warnings,
+      errors: validation.errors,
+    };
+  }
+
+  if (validationIsBlocked(validation)) {
+    graph = updateTask(
+      graph,
+      runningTask.id,
+      {
+        status: 'blocked',
+        blockedReason: validation.summary,
+        completedAt: now.toISOString(),
+        resumable: false,
+      },
+      now
+    );
+    return {
+      status: 'blocked',
+      task: graph.tasks.find((item) => item.id === runningTask.id) ?? runningTask,
+      graph,
+      files,
+      repositoryModel: latestModel,
+      state: createTaskExecutionState('blocked', now, {
+        projectId: options.projectId,
+        activeTaskId: runningTask.id,
+        activeRunId: runId,
+        activeOperationId: operationId,
+        validationSummary: validation.summary,
+        warnings: validation.warnings,
+        errors: validation.errors,
+      }),
+      extracted,
+      validation,
+      appliedChanges,
+      rejectedChanges,
+      warnings: validation.warnings,
+      errors: validation.errors,
+    };
+  }
+
   const failureReason =
     rejectedChanges[0]?.reason ??
     validation.errors[0] ??
@@ -563,4 +697,3 @@ export async function executeNextTask(
     errors: [...validation.errors, ...rejectedChanges.map((change) => change.reason)],
   };
 }
-

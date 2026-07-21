@@ -55,6 +55,7 @@ export interface TaskExecutionAiClient {
 
 export interface TaskValidationResult {
   ok: boolean;
+  outcome?: TaskValidationOutcome;
   summary: string;
   commands: Array<{
     command: string;
@@ -63,6 +64,7 @@ export interface TaskValidationResult {
   }>;
   errors: string[];
   warnings: string[];
+  evidence?: TaskValidationEvidence[];
 }
 
 export interface TaskExecutionValidationRunner {
@@ -72,6 +74,47 @@ export interface TaskExecutionValidationRunner {
     repositoryModel: RepositoryModel,
     options: { signal?: AbortSignal; runId: string; operationId: string }
   ) => Promise<TaskValidationResult>;
+}
+
+export type TaskValidationOutcome =
+  | 'passed'
+  | 'failed'
+  | 'recoverable'
+  | 'blocked by environment'
+  | 'cancelled'
+  | 'manual review required';
+
+export type TaskValidationKind =
+  | 'required-files'
+  | 'package-manifest'
+  | 'typescript-config'
+  | 'import-integrity'
+  | 'schema'
+  | 'server-only-env'
+  | 'type-check'
+  | 'build'
+  | 'runtime-smoke'
+  | 'generated-quality'
+  | 'style-audit'
+  | 'contract-acceptance';
+
+export interface TaskValidationEvidence {
+  kind: TaskValidationKind | 'command' | 'error';
+  status: 'passed' | 'failed' | 'skipped' | 'blocked';
+  message: string;
+  file?: string;
+  raw?: string;
+}
+
+export interface TaskValidationPlan {
+  taskId: string;
+  kinds: TaskValidationKind[];
+  typeCheckOnly: boolean;
+  build: boolean;
+  runtimeSmoke: boolean;
+  generatedQuality: boolean;
+  styleAudit: boolean;
+  milestone: boolean;
 }
 
 export interface TaskExecutionState {
@@ -99,6 +142,7 @@ export interface TaskExecutionOptions {
   repositoryModel?: RepositoryModel | null;
   aiClient?: TaskExecutionAiClient;
   validationRunner?: TaskExecutionValidationRunner;
+  targetedRepair?: TaskExecutionRepairOptions;
   signal?: AbortSignal;
   runId?: string;
   operationId?: string;
@@ -107,6 +151,12 @@ export interface TaskExecutionOptions {
   userEditedFilePaths?: string[];
   protectedPaths?: string[];
   shouldAcceptResult?: (guard: TaskExecutionGuard) => boolean;
+}
+
+export interface TaskExecutionRepairOptions {
+  enabled: boolean;
+  maxAttempts?: number;
+  aiClient?: TaskExecutionAiClient;
 }
 
 export interface AppliedTaskChange {
@@ -134,4 +184,3 @@ export interface TaskExecutionResult {
   warnings: string[];
   errors: string[];
 }
-

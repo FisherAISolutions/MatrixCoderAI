@@ -4,5 +4,6 @@ export * from './instructionBuilders';
 export * from './patchApplication';
 export * from './skip';
 export * from './state';
+export * from './targetedRepair';
 export * from './types';
-
+export * from './validation';
