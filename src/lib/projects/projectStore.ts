@@ -39,6 +39,12 @@ import {
   type EngineeringMemory,
 } from '@/lib/engineering-memory';
 import {
+  cloneBuildChangePlanForProject,
+  deserializeBuildChangePlan,
+  serializeBuildChangePlan,
+  type BuildChangePlan,
+} from '@/lib/change-planning';
+import {
   deserializeArchitectDraft,
   serializeArchitectDraft,
 } from '@/lib/matrix-ai-architect/architectDraft';
@@ -102,6 +108,7 @@ export interface MatrixProject {
   taskGraph?: TaskGraph;
   repositoryModel?: RepositoryModel;
   engineeringMemory?: EngineeringMemory;
+  changePlan?: BuildChangePlan;
   validationStatus: MatrixProjectValidationStatus;
   deploymentStatus: MatrixProjectDeploymentStatus;
   workspaceState?: MatrixProjectWorkspaceState;
@@ -123,6 +130,7 @@ export interface MatrixProjectDraft {
   taskGraph?: TaskGraph;
   repositoryModel?: RepositoryModel;
   engineeringMemory?: EngineeringMemory;
+  changePlan?: BuildChangePlan;
   validationStatus?: MatrixProjectValidationStatus;
   deploymentStatus?: MatrixProjectDeploymentStatus;
   workspaceState?: MatrixProjectWorkspaceState;
@@ -139,6 +147,7 @@ export interface MatrixProjectWorkspaceContext {
   taskGraph?: TaskGraph;
   repositoryModel?: RepositoryModel;
   engineeringMemory?: EngineeringMemory;
+  changePlan?: BuildChangePlan;
 }
 
 export interface MatrixProjectWorkspaceSnapshot {
@@ -155,6 +164,7 @@ export interface MatrixProjectWorkspaceSnapshot {
   taskGraph?: TaskGraph;
   repositoryModel?: RepositoryModel;
   engineeringMemory?: EngineeringMemory;
+  changePlan?: BuildChangePlan;
   validationStatus: MatrixProjectValidationStatus;
   deploymentStatus: MatrixProjectDeploymentStatus;
   workspaceState?: MatrixProjectWorkspaceState;
@@ -361,6 +371,10 @@ function normalizeProjectPayload(
     ? (deserializeEngineeringMemory(JSON.stringify(parsed.engineeringMemory)) ??
       undefined)
     : undefined;
+  const changePlan = parsed.changePlan
+    ? (deserializeBuildChangePlan(JSON.stringify(parsed.changePlan)) ??
+      undefined)
+    : undefined;
 
   return {
     files: cloneJson(parsed.files as FileNode[]),
@@ -373,6 +387,7 @@ function normalizeProjectPayload(
     taskGraph,
     repositoryModel,
     engineeringMemory,
+    changePlan,
     validationStatus:
       parsed.validationStatus === 'passed' ||
       parsed.validationStatus === 'failed' ||
@@ -501,6 +516,13 @@ function serializeProject(project: MatrixProject): MatrixProject {
           engineeringMemory: JSON.parse(
             serializeEngineeringMemory(project.engineeringMemory)
           ) as EngineeringMemory,
+        }
+      : {}),
+    ...(project.changePlan
+      ? {
+          changePlan: JSON.parse(
+            serializeBuildChangePlan(project.changePlan)
+          ) as BuildChangePlan,
         }
       : {}),
     workspaceState: project.workspaceState
@@ -752,6 +774,7 @@ export function createMatrixProject(
     taskGraph: draft.taskGraph,
     repositoryModel: draft.repositoryModel,
     engineeringMemory: draft.engineeringMemory,
+    changePlan: draft.changePlan,
     validationStatus: draft.validationStatus ?? 'unknown',
     deploymentStatus: draft.deploymentStatus ?? 'unknown',
     workspaceState: draft.workspaceState
@@ -822,6 +845,9 @@ export function duplicateMatrixProject(
     engineeringMemory: project.engineeringMemory
       ? cloneEngineeringMemoryForProject(project.engineeringMemory, id, now)
       : undefined,
+    changePlan: project.changePlan
+      ? cloneBuildChangePlanForProject(project.changePlan, id, now)
+      : undefined,
     workspaceState: project.workspaceState
       ? { ...project.workspaceState }
       : undefined,
@@ -849,6 +875,7 @@ export function createProjectFromWorkspaceSnapshot(
       taskGraph: snapshot.taskGraph,
       repositoryModel: snapshot.repositoryModel,
       engineeringMemory: snapshot.engineeringMemory,
+      changePlan: snapshot.changePlan,
       validationStatus: snapshot.validationStatus,
       deploymentStatus: snapshot.deploymentStatus,
       workspaceState: snapshot.workspaceState,
@@ -1196,6 +1223,13 @@ export function saveMatrixProjectWorkspaceSnapshot(
             ),
           }
         : {}),
+      ...(snapshot.changePlan
+        ? {
+            changePlan: JSON.parse(
+              serializeBuildChangePlan(snapshot.changePlan)
+            ),
+          }
+        : {}),
     })
   );
 }
@@ -1261,6 +1295,10 @@ export function loadMatrixProjectWorkspaceSnapshot(
         : undefined,
       engineeringMemory: parsed.engineeringMemory
         ? (deserializeEngineeringMemory(JSON.stringify(parsed.engineeringMemory)) ??
+          undefined)
+        : undefined,
+      changePlan: parsed.changePlan
+        ? (deserializeBuildChangePlan(JSON.stringify(parsed.changePlan)) ??
           undefined)
         : undefined,
       validationStatus:
@@ -1356,6 +1394,13 @@ export function saveMatrixProjectWorkspaceContext(
             ),
           }
         : {}),
+      ...(context.changePlan
+        ? {
+            changePlan: JSON.parse(
+              serializeBuildChangePlan(context.changePlan)
+            ),
+          }
+        : {}),
     })
   );
 }
@@ -1405,6 +1450,10 @@ export function loadMatrixProjectWorkspaceContext(
         : undefined,
       engineeringMemory: parsed.engineeringMemory
         ? (deserializeEngineeringMemory(JSON.stringify(parsed.engineeringMemory)) ??
+          undefined)
+        : undefined,
+      changePlan: parsed.changePlan
+        ? (deserializeBuildChangePlan(JSON.stringify(parsed.changePlan)) ??
           undefined)
         : undefined,
     };
