@@ -1,6 +1,10 @@
 ﻿import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import {
+  createEngineeringMemory,
+  getEngineeringMemorySummary,
+} from '@/lib/engineering-memory';
+import {
   MATRIX_PROJECTS_OPEN_HANDOFF_KEY,
   MATRIX_PROJECTS_STORAGE_KEY,
   MATRIX_PROJECTS_VERSION,
@@ -277,6 +281,70 @@ describe('projectStore', () => {
       duplicateFile.content = 'changed copy';
       expect(sourceFile.content).not.toBe('changed copy');
     }
+  });
+
+  it('persists engineering memory through projects, snapshots, and duplication', async () => {
+    const engineeringMemory = createEngineeringMemory({
+      projectId: 'source-project',
+      now: new Date('2026-07-08T00:00:00.000Z'),
+    });
+    const project = createMatrixProject(
+      {
+        name: 'Memory Project',
+        files: [],
+        chatMessages: [],
+        engineeringMemory,
+      },
+      new Date('2026-07-08T00:00:00.000Z'),
+      'source-project'
+    );
+
+    const saved = await saveMatrixProject(project, [], {
+      storage: localStorage,
+      supabaseClient: null,
+    });
+    const loaded = await loadMatrixProjects({
+      storage: localStorage,
+      supabaseClient: null,
+    });
+    const duplicate = duplicateMatrixProject(
+      loaded.projects[0]!,
+      new Date('2026-07-09T00:00:00.000Z'),
+      'copy-project'
+    );
+
+    saveMatrixProjectWorkspaceSnapshot(sessionStorage, {
+      projectId: loaded.projects[0]!.id,
+      name: loaded.projects[0]!.name,
+      description: loaded.projects[0]!.description,
+      files: loaded.projects[0]!.files,
+      chatMessages: loaded.projects[0]!.chatMessages,
+      engineeringMemory: loaded.projects[0]!.engineeringMemory,
+      validationStatus: 'unknown',
+      deploymentStatus: 'unknown',
+      updatedAt: '2026-07-08T00:00:00.000Z',
+    });
+
+    saveMatrixProjectWorkspaceContext(sessionStorage, {
+      currentProjectId: loaded.projects[0]!.id,
+      currentProjectName: loaded.projects[0]!.name,
+      engineeringMemory: loaded.projects[0]!.engineeringMemory,
+    });
+
+    expect(saved.projects[0]?.engineeringMemory?.projectId).toBe('source-project');
+    expect(loaded.projects[0]?.engineeringMemory?.projectId).toBe('source-project');
+    expect(duplicate.engineeringMemory?.projectId).toBe('copy-project');
+    expect(duplicate.engineeringMemory).not.toBe(loaded.projects[0]?.engineeringMemory);
+    expect(loadMatrixProjectWorkspaceSnapshot(sessionStorage)?.engineeringMemory?.id).toBe(
+      engineeringMemory.id
+    );
+    expect(loadMatrixProjectWorkspaceContext(sessionStorage).engineeringMemory?.id).toBe(
+      engineeringMemory.id
+    );
+    expect(
+      getEngineeringMemorySummary(loaded.projects[0]!.engineeringMemory!)
+        .overallBuildStatus
+    ).toBe('planning');
   });
 
   it('deletes a saved project from local storage', async () => {
