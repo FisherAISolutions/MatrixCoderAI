@@ -8,6 +8,26 @@ import {
   serializeBlueprintDraft,
   type BlueprintDraft,
 } from '@/lib/blueprint-studio/blueprintDraft';
+import {
+  deserializeBuildContract,
+  serializeBuildContract,
+  type BuildContract,
+} from '@/lib/build-contract';
+import {
+  deserializeCapabilityResolution,
+  serializeCapabilityResolution,
+  type CapabilityResolutionResult,
+} from '@/lib/capabilities';
+import {
+  deserializeArchitectDraft,
+  serializeArchitectDraft,
+} from '@/lib/matrix-ai-architect/architectDraft';
+import type { ArchitectDraft } from '@/lib/matrix-ai-architect/types';
+import {
+  deserializeIntelligenceCore,
+  serializeIntelligenceCore,
+  type MatrixIntelligenceCore,
+} from '@/lib/intelligence-core';
 
 export const MATRIX_BUILD_SUITE_CHAT_HANDOFF_KEY =
   'matrix-build-suite:chat-prompt-handoff';
@@ -20,8 +40,19 @@ export interface MatrixBuildSuiteChatHandoff {
   prompt: string;
   buildManifest?: BuildManifest;
   blueprintDraft?: BlueprintDraft;
+  architectDraft?: ArchitectDraft;
+  buildContract?: BuildContract;
+  capabilityResolution?: CapabilityResolutionResult;
+  intelligenceCore?: MatrixIntelligenceCore;
   createdAt: string;
   message: string;
+}
+
+export interface MatrixBuildSuiteChatHandoffPlanningState {
+  architectDraft?: ArchitectDraft | null;
+  buildContract?: BuildContract | null;
+  capabilityResolution?: CapabilityResolutionResult | null;
+  intelligenceCore?: MatrixIntelligenceCore | null;
 }
 
 type WritableStorage = Pick<Storage, 'setItem'>;
@@ -32,7 +63,8 @@ export function createMatrixBuildSuiteChatHandoff(
   prompt: string,
   now = new Date(),
   buildManifest?: BuildManifest,
-  blueprintDraft?: BlueprintDraft
+  blueprintDraft?: BlueprintDraft,
+  planningState: MatrixBuildSuiteChatHandoffPlanningState = {}
 ): MatrixBuildSuiteChatHandoff {
   if (!prompt.trim()) {
     throw new Error('Matrix Build Suite prompt is empty.');
@@ -51,6 +83,18 @@ export function createMatrixBuildSuiteChatHandoff(
   if (blueprintDraft) {
     handoff.blueprintDraft = blueprintDraft;
   }
+  if (planningState.architectDraft) {
+    handoff.architectDraft = planningState.architectDraft;
+  }
+  if (planningState.buildContract) {
+    handoff.buildContract = planningState.buildContract;
+  }
+  if (planningState.capabilityResolution) {
+    handoff.capabilityResolution = planningState.capabilityResolution;
+  }
+  if (planningState.intelligenceCore) {
+    handoff.intelligenceCore = planningState.intelligenceCore;
+  }
 
   return handoff;
 }
@@ -60,13 +104,15 @@ export function writeMatrixBuildSuiteChatHandoff(
   prompt: string,
   now = new Date(),
   buildManifest?: BuildManifest,
-  blueprintDraft?: BlueprintDraft
+  blueprintDraft?: BlueprintDraft,
+  planningState: MatrixBuildSuiteChatHandoffPlanningState = {}
 ): MatrixBuildSuiteChatHandoff {
   const handoff = createMatrixBuildSuiteChatHandoff(
     prompt,
     now,
     buildManifest,
-    blueprintDraft
+    blueprintDraft,
+    planningState
   );
   storage.setItem(
     MATRIX_BUILD_SUITE_CHAT_HANDOFF_KEY,
@@ -77,6 +123,36 @@ export function writeMatrixBuildSuiteChatHandoff(
         : {}),
       ...(blueprintDraft
         ? { blueprintDraft: JSON.parse(serializeBlueprintDraft(blueprintDraft)) }
+        : {}),
+      ...(planningState.architectDraft
+        ? {
+            architectDraft: JSON.parse(
+              serializeArchitectDraft(planningState.architectDraft)
+            ),
+          }
+        : {}),
+      ...(planningState.buildContract
+        ? {
+            buildContract: JSON.parse(
+              serializeBuildContract(planningState.buildContract)
+            ),
+          }
+        : {}),
+      ...(planningState.capabilityResolution
+        ? {
+            capabilityResolution: JSON.parse(
+              serializeCapabilityResolution(
+                planningState.capabilityResolution
+              )
+            ),
+          }
+        : {}),
+      ...(planningState.intelligenceCore
+        ? {
+            intelligenceCore: JSON.parse(
+              serializeIntelligenceCore(planningState.intelligenceCore)
+            ),
+          }
         : {}),
     })
   );
@@ -109,6 +185,20 @@ function parseMatrixBuildSuiteChatHandoff(
     const blueprintDraft = parsed.blueprintDraft
       ? deserializeBlueprintDraft(JSON.stringify(parsed.blueprintDraft))
       : undefined;
+    const architectDraft = parsed.architectDraft
+      ? deserializeArchitectDraft(JSON.stringify(parsed.architectDraft))
+      : undefined;
+    const buildContract = parsed.buildContract
+      ? deserializeBuildContract(JSON.stringify(parsed.buildContract))
+      : undefined;
+    const capabilityResolution = parsed.capabilityResolution
+      ? deserializeCapabilityResolution(
+          JSON.stringify(parsed.capabilityResolution)
+        )
+      : undefined;
+    const intelligenceCore = parsed.intelligenceCore
+      ? deserializeIntelligenceCore(JSON.stringify(parsed.intelligenceCore))
+      : undefined;
 
     const handoff: MatrixBuildSuiteChatHandoff = {
       source: 'matrix-build-suite',
@@ -125,6 +215,18 @@ function parseMatrixBuildSuiteChatHandoff(
     }
     if (blueprintDraft) {
       handoff.blueprintDraft = blueprintDraft;
+    }
+    if (architectDraft) {
+      handoff.architectDraft = architectDraft;
+    }
+    if (buildContract) {
+      handoff.buildContract = buildContract;
+    }
+    if (capabilityResolution) {
+      handoff.capabilityResolution = capabilityResolution;
+    }
+    if (intelligenceCore) {
+      handoff.intelligenceCore = intelligenceCore;
     }
 
     return handoff;

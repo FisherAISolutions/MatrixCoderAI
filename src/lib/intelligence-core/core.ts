@@ -194,7 +194,13 @@ function repositoryRecords(repositoryModel: RepositoryModel): AddIntelligenceRec
 
 function sourceRecords(options: IntelligenceCoreSources): AddIntelligenceRecordInput[] {
   const records: AddIntelligenceRecordInput[] = [];
-  const { architectDraft, buildManifest, blueprintDraft, buildContract } = options;
+  const {
+    architectDraft,
+    buildManifest,
+    blueprintDraft,
+    buildContract,
+    capabilityResolution,
+  } = options;
 
   if (buildManifest?.appType) {
     records.push({
@@ -340,6 +346,48 @@ function sourceRecords(options: IntelligenceCoreSources): AddIntelligenceRecordI
       },
       ...buildContract.requirements.map(requirementRecord)
     );
+  }
+
+  if (capabilityResolution) {
+    records.push({
+      domain: 'engineering',
+      category: 'capability',
+      key: 'capability-resolution-authoritative',
+      value: {
+        contractId: capabilityResolution.contractId,
+        contractVersion: capabilityResolution.contractVersion,
+        requiredCapabilityIds: capabilityResolution.capabilities
+          .filter((capability) => capability.status === 'required')
+          .map((capability) => capability.capabilityId),
+        optionalCapabilityIds: capabilityResolution.capabilities
+          .filter((capability) => capability.status === 'optional')
+          .map((capability) => capability.capabilityId),
+        conflicts: capabilityResolution.conflicts.map((conflict) => ({
+          capabilityIds: conflict.capabilityIds,
+          severity: conflict.severity,
+          explanation: conflict.explanation,
+        })),
+        warnings: capabilityResolution.warnings.map((warning) => ({
+          code: warning.code,
+          message: warning.message,
+          ...(warning.capabilityId
+            ? { capabilityId: warning.capabilityId }
+            : {}),
+          ...(warning.requirementId
+            ? { requirementId: warning.requirementId }
+            : {}),
+        })),
+      },
+      source: {
+        kind: 'build-contract',
+        id: capabilityResolution.contractId,
+        version: capabilityResolution.contractVersion,
+        updatedAt: capabilityResolution.createdAt,
+      },
+      status: 'approved',
+      confidence: 1,
+      validationStrategy: 'contract-evidence',
+    });
   }
 
   if (options.repositoryModel) {

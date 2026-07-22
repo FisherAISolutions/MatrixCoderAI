@@ -9,6 +9,14 @@ import {
 } from '@/lib/build-suite/chatHandoff';
 import { createBuildManifest } from '@/lib/build-suite/buildManifest';
 import type { BuildSuiteSelection } from '@/lib/build-suite/types';
+import { createBlueprintDraftFromManifest } from '@/lib/blueprint-studio/blueprintDraft';
+import { createBuildContract } from '@/lib/build-contract';
+import { resolveCapabilities } from '@/lib/capabilities';
+import { createIntelligenceCore } from '@/lib/intelligence-core';
+import {
+  createArchitectDraft,
+  updateArchitectAnswer,
+} from '@/lib/matrix-ai-architect';
 
 class MemoryStorage {
   private values = new Map<string, string>();
@@ -94,6 +102,85 @@ describe('Matrix Build Suite chat handoff', () => {
     expect(handoff?.buildManifest).toEqual(buildManifest);
     expect(handoff?.buildManifest?.source).toBe('saved-build');
     expect(handoff?.buildManifest?.selection.appTypeId).toBe('personal-crm');
+  });
+
+  it('writes and reads approved structured planning state without changing prompt text', () => {
+    const storage = new MemoryStorage();
+    const prompt = 'Build from the approved Blueprint.';
+    const selection: BuildSuiteSelection = {
+      appTypeId: 'personal-crm',
+      appearance: 'dark',
+      paletteId: 'dark-matrix-green',
+      styleId: 'quiet-saas',
+      layoutId: 'sidebar-workspace',
+      componentIds: ['data-tables'],
+      aiFeatureIds: [],
+      integrationIds: ['local-storage'],
+      animationId: 'minimal-motion',
+      mobileId: 'responsive-web',
+    };
+    const buildManifest = createBuildManifest({
+      selection,
+      now: new Date('2026-07-07T12:00:00.000Z'),
+    });
+    let architectDraft = createArchitectDraft({
+      projectId: 'project-1',
+      projectName: 'Founder CRM',
+      now: new Date('2026-07-07T12:01:00.000Z'),
+    });
+    architectDraft = updateArchitectAnswer(
+      architectDraft,
+      'appIdea',
+      'Build a personal CRM with contacts, companies, tasks, and pipeline.',
+      new Date('2026-07-07T12:02:00.000Z')
+    );
+    const blueprintDraft = createBlueprintDraftFromManifest(
+      buildManifest,
+      new Date('2026-07-07T12:03:00.000Z')
+    );
+    const buildContract = createBuildContract({
+      projectId: 'project-1',
+      architectDraft,
+      buildManifest,
+      blueprintDraft,
+      now: new Date('2026-07-07T12:04:00.000Z'),
+    });
+    const capabilityResolution = resolveCapabilities(buildContract, {
+      now: new Date('2026-07-07T12:05:00.000Z'),
+    });
+    const intelligenceCore = createIntelligenceCore({
+      projectId: 'project-1',
+      architectDraft,
+      buildManifest,
+      blueprintDraft,
+      buildContract,
+      capabilityResolution,
+      now: new Date('2026-07-07T12:06:00.000Z'),
+    });
+
+    writeMatrixBuildSuiteChatHandoff(
+      storage,
+      prompt,
+      new Date('2026-07-07T12:07:00.000Z'),
+      buildManifest,
+      blueprintDraft,
+      {
+        architectDraft,
+        buildContract,
+        capabilityResolution,
+        intelligenceCore,
+      }
+    );
+
+    const handoff = readMatrixBuildSuiteChatHandoff(storage);
+
+    expect(handoff?.prompt).toBe(prompt);
+    expect(handoff?.buildManifest).toEqual(buildManifest);
+    expect(handoff?.blueprintDraft?.id).toBe(blueprintDraft.id);
+    expect(handoff?.architectDraft?.id).toBe(architectDraft.id);
+    expect(handoff?.buildContract?.id).toBe(buildContract.id);
+    expect(handoff?.capabilityResolution?.contractId).toBe(buildContract.id);
+    expect(handoff?.intelligenceCore?.projectId).toBe('project-1');
   });
 
   it('peeks at a handoff without consuming it', () => {

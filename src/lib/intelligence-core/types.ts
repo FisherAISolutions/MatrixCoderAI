@@ -1,6 +1,7 @@
 import type { BuildManifest } from '@/lib/build-suite/buildManifest';
 import type { BuildContract } from '@/lib/build-contract';
 import type { BlueprintDraft } from '@/lib/blueprint-studio/blueprintDraft';
+import type { CapabilityResolutionResult } from '@/lib/capabilities';
 import type { ArchitectDraft } from '@/lib/matrix-ai-architect/types';
 import type { RepositoryModel, RepositoryTaskContext } from '@/lib/repository-model';
 import type { TaskGraph, TaskGraphTask } from '@/lib/task-graph';
@@ -219,6 +220,7 @@ export interface IntelligenceCoreSources {
   buildManifest?: BuildManifest | null;
   blueprintDraft?: BlueprintDraft | null;
   buildContract?: BuildContract | null;
+  capabilityResolution?: CapabilityResolutionResult | null;
   taskGraph?: TaskGraph | null;
   repositoryModel?: RepositoryModel | null;
   engineeringMemory?: EngineeringMemory | null;
@@ -311,6 +313,74 @@ export interface IntelligenceArchitectContextPacket
   budgetConstraints: IntelligenceMemoryRecord[];
   readinessStage: string;
   assumptions: string[];
+}
+
+export interface IntelligenceBlueprintDecisionSummary {
+  routes: string[];
+  dataModels: string[];
+  components: string[];
+  integrations: string[];
+  roles: string[];
+  navigation: string[];
+  folderStructure: string[];
+  deploymentTarget?: string;
+}
+
+export interface IntelligenceBlueprintSourceSnapshot {
+  kind: IntelligenceSourceKind;
+  id?: string;
+  version?: string | number;
+  updatedAt?: string;
+  stale?: boolean;
+  label?: string;
+}
+
+export interface IntelligenceBlueprintContextPacket
+  extends Omit<IntelligenceSummaryPacket, 'kind'> {
+  kind: 'blueprint';
+  visionPrinciples: string[];
+  projectPurpose?: string;
+  targetUsers?: string;
+  approvedFeatures: string[];
+  rejectedFeatures: string[];
+  deferredFeatures: string[];
+  budgetConstraints: string[];
+  userExperienceLevel?: string;
+  preferredExplanationDepth?: string;
+  providerPreferences: string[];
+  providerRejections: string[];
+  privacyRequirements: string[];
+  accessibilityRequirements: string[];
+  deploymentExpectations: string[];
+  unresolvedQuestions: string[];
+  approvedArchitectRecommendations: string[];
+  existingBlueprintDecisions: IntelligenceBlueprintDecisionSummary;
+  sourceVersions: IntelligenceBlueprintSourceSnapshot[];
+  staleStateIndicators: string[];
+  confidence: number;
+  assumptions: string[];
+  contractSummary?: {
+    contractId: string;
+    contractVersion: number;
+    requiredRequirements: number;
+    optionalRequirements: number;
+    updatedAt: string;
+  };
+  capabilitySummary?: {
+    requiredCapabilities: string[];
+    optionalCapabilities: string[];
+    conflicts: string[];
+    warnings: string[];
+  };
+}
+
+export interface IntelligenceBlueprintPacketOptions {
+  architectDraft?: ArchitectDraft | null;
+  buildManifest?: BuildManifest | null;
+  blueprintDraft?: BlueprintDraft | null;
+  buildContract?: BuildContract | null;
+  capabilityResolution?: CapabilityResolutionResult | null;
+  now?: Date;
 }
 
 export interface IntelligenceTaskPacketOptions {

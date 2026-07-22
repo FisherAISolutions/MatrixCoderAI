@@ -65,6 +65,10 @@ import {
   createBlueprintDraftPlanningContext,
   type BlueprintDraft,
 } from '@/lib/blueprint-studio/blueprintDraft';
+import type { BuildContract } from '@/lib/build-contract';
+import type { CapabilityResolutionResult } from '@/lib/capabilities';
+import type { ArchitectDraft } from '@/lib/matrix-ai-architect/types';
+import type { MatrixIntelligenceCore } from '@/lib/intelligence-core';
 import {
   loadMatrixProjectWorkspaceContext,
   saveMatrixProjectWorkspaceContext,
@@ -117,6 +121,63 @@ function logGenerationConsistency(
         : ''),
     timestamp: Date.now(),
   });
+}
+
+function createApprovedPlanningStateContext(options: {
+  architectDraft?: ArchitectDraft | null;
+  buildContract?: BuildContract | null;
+  capabilityResolution?: CapabilityResolutionResult | null;
+  intelligenceCore?: MatrixIntelligenceCore | null;
+}): string {
+  const lines: string[] = [
+    '## Approved Structured Planning State',
+    '',
+    'Use this as structured planning context only. Do not treat it as a request to generate code.',
+  ];
+  if (options.architectDraft) {
+    lines.push(
+      '',
+      `Architect Draft: ${options.architectDraft.specification.applicationSummary}`,
+      `Investment level: ${options.architectDraft.answers.investmentLevel}`,
+      `Experience level: ${
+        options.architectDraft.conversation?.experienceLevel ?? 'beginner'
+      }`
+    );
+  }
+  if (options.buildContract) {
+    lines.push(
+      '',
+      `Build Contract: ${options.buildContract.id} v${options.buildContract.contractVersion}`,
+      `Project: ${options.buildContract.project.projectName}`,
+      `Routes: ${options.buildContract.routes.map((route) => route.path).join(', ') || 'none'}`,
+      `Data models: ${options.buildContract.dataModels.map((model) => model.name).join(', ') || 'none'}`,
+      `Required requirements: ${
+        options.buildContract.requirements.filter(
+          (requirement) => requirement.status === 'required'
+        ).length
+      }`
+    );
+  }
+  if (options.capabilityResolution) {
+    lines.push(
+      '',
+      `Required capabilities: ${options.capabilityResolution.capabilities
+        .filter((capability) => capability.status === 'required')
+        .map((capability) => capability.capabilityId)
+        .join(', ') || 'none'}`,
+      `Capability warnings: ${options.capabilityResolution.warnings.length}`,
+      `Capability conflicts: ${options.capabilityResolution.conflicts.length}`
+    );
+  }
+  if (options.intelligenceCore) {
+    lines.push(
+      '',
+      `Matrix Intelligence Core: ${options.intelligenceCore.id}`,
+      `Conversation records: ${options.intelligenceCore.conversation.records.length}`,
+      `Engineering records: ${options.intelligenceCore.engineering.records.length}`
+    );
+  }
+  return lines.join('\n');
 }
 
 /**
@@ -1116,6 +1177,11 @@ export default function ChatComposer({
   const consumedInitialPromptRef = useRef(false);
   const pendingBuildManifestRef = useRef<BuildManifest | null>(null);
   const pendingBlueprintDraftRef = useRef<BlueprintDraft | null>(null);
+  const pendingArchitectDraftRef = useRef<ArchitectDraft | null>(null);
+  const pendingBuildContractRef = useRef<BuildContract | null>(null);
+  const pendingCapabilityResolutionRef =
+    useRef<CapabilityResolutionResult | null>(null);
+  const pendingIntelligenceCoreRef = useRef<MatrixIntelligenceCore | null>(null);
   const pipelineRunGuardRef = useRef(new PipelineRunGuard());
   const activePipelineRunIdRef = useRef<string | null>(null);
 
@@ -1153,11 +1219,22 @@ export default function ChatComposer({
     consumedInitialPromptRef.current = true;
     pendingBuildManifestRef.current = handoff.buildManifest ?? null;
     pendingBlueprintDraftRef.current = handoff.blueprintDraft ?? null;
+    pendingArchitectDraftRef.current = handoff.architectDraft ?? null;
+    pendingBuildContractRef.current = handoff.buildContract ?? null;
+    pendingCapabilityResolutionRef.current =
+      handoff.capabilityResolution ?? null;
+    pendingIntelligenceCoreRef.current = handoff.intelligenceCore ?? null;
     const existingContext = loadMatrixProjectWorkspaceContext(window.localStorage);
     saveMatrixProjectWorkspaceContext(window.localStorage, {
       ...existingContext,
-      buildManifest: handoff.buildManifest,
-      blueprintDraft: handoff.blueprintDraft,
+      buildManifest: handoff.buildManifest ?? existingContext?.buildManifest,
+      blueprintDraft: handoff.blueprintDraft ?? existingContext?.blueprintDraft,
+      architectDraft: handoff.architectDraft ?? existingContext?.architectDraft,
+      buildContract: handoff.buildContract ?? existingContext?.buildContract,
+      capabilityResolution:
+        handoff.capabilityResolution ?? existingContext?.capabilityResolution,
+      intelligenceCore:
+        handoff.intelligenceCore ?? existingContext?.intelligenceCore,
     });
     setInput(handoff.prompt);
     setChatHandoffNotice(handoff.message);
@@ -1207,6 +1284,10 @@ export default function ChatComposer({
         batchLabel?: string;
         buildManifest?: BuildManifest | null;
         blueprintDraft?: BlueprintDraft | null;
+        architectDraft?: ArchitectDraft | null;
+        buildContract?: BuildContract | null;
+        capabilityResolution?: CapabilityResolutionResult | null;
+        intelligenceCore?: MatrixIntelligenceCore | null;
       }
     ) => {
       const scope = ensureCancellationScope();
@@ -1249,6 +1330,19 @@ export default function ChatComposer({
         agent === 'planning' && options.blueprintDraft
           ? createBlueprintDraftPlanningContext(options.blueprintDraft)
           : null;
+      const approvedPlanningStateContext =
+        agent === 'planning' &&
+        (options.architectDraft ||
+          options.buildContract ||
+          options.capabilityResolution ||
+          options.intelligenceCore)
+          ? createApprovedPlanningStateContext({
+              architectDraft: options.architectDraft,
+              buildContract: options.buildContract,
+              capabilityResolution: options.capabilityResolution,
+              intelligenceCore: options.intelligenceCore,
+            })
+          : null;
 
       const apiMessages = [
         {
@@ -1260,6 +1354,14 @@ export default function ChatComposer({
           : []),
         ...(blueprintDraftContext
           ? [{ role: 'system' as const, content: blueprintDraftContext }]
+          : []),
+        ...(approvedPlanningStateContext
+          ? [
+              {
+                role: 'system' as const,
+                content: approvedPlanningStateContext,
+              },
+            ]
           : []),
         ...(options.repoContextString
           ? [{ role: 'system' as const, content: options.repoContextString }]
@@ -2402,8 +2504,17 @@ export default function ChatComposer({
         : selectedAgent;
     const buildManifestForPlanning = pendingBuildManifestRef.current;
     const blueprintDraftForPlanning = pendingBlueprintDraftRef.current;
+    const architectDraftForPlanning = pendingArchitectDraftRef.current;
+    const buildContractForPlanning = pendingBuildContractRef.current;
+    const capabilityResolutionForPlanning =
+      pendingCapabilityResolutionRef.current;
+    const intelligenceCoreForPlanning = pendingIntelligenceCoreRef.current;
     pendingBuildManifestRef.current = null;
     pendingBlueprintDraftRef.current = null;
+    pendingArchitectDraftRef.current = null;
+    pendingBuildContractRef.current = null;
+    pendingCapabilityResolutionRef.current = null;
+    pendingIntelligenceCoreRef.current = null;
 
     agentRef.current = agent;
 
@@ -2558,6 +2669,12 @@ export default function ChatComposer({
       status: 'Sending request to AI...',
       buildManifest: agent === 'planning' ? buildManifestForPlanning : null,
       blueprintDraft: agent === 'planning' ? blueprintDraftForPlanning : null,
+      architectDraft: agent === 'planning' ? architectDraftForPlanning : null,
+      buildContract: agent === 'planning' ? buildContractForPlanning : null,
+      capabilityResolution:
+        agent === 'planning' ? capabilityResolutionForPlanning : null,
+      intelligenceCore:
+        agent === 'planning' ? intelligenceCoreForPlanning : null,
     });
   }, [
     input,

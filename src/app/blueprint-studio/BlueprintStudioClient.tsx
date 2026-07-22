@@ -48,7 +48,24 @@ import {
   type BlueprintDraftListKey,
   type BlueprintRouteItem,
 } from '@/lib/blueprint-studio/blueprintDraft';
+import {
+  approveBlueprintTechnicalPlan,
+  createBlueprintTechnicalPlan,
+} from '@/lib/blueprint-studio/intelligence';
+import type { BuildContract } from '@/lib/build-contract';
+import type { CapabilityResolutionResult } from '@/lib/capabilities';
+import type { MatrixIntelligenceCore } from '@/lib/intelligence-core';
+import type { ArchitectDraft } from '@/lib/matrix-ai-architect/types';
+import {
+  loadMatrixProjectWorkspaceContext,
+  loadMatrixProjectWorkspaceSnapshot,
+  saveMatrixProjectWorkspaceContext,
+  saveMatrixProjectWorkspaceSnapshot,
+  type MatrixProjectWorkspaceContext,
+  type MatrixProjectWorkspaceSnapshot,
+} from '@/lib/projects/projectStore';
 import WorkflowNav from '@/components/workflow/WorkflowNav';
+import BlueprintPlanningReviewPanel from './components/BlueprintPlanningReviewPanel';
 
 const LIST_SECTIONS: Array<{
   key: BlueprintDraftListKey;
@@ -114,6 +131,63 @@ function persistDraft(draft: BlueprintDraft): void {
   if (typeof window === 'undefined') return;
   saveBlueprintDraft(window.sessionStorage, draft);
   saveBlueprintDraft(window.localStorage, draft);
+}
+
+function loadProjectPlanningState(): {
+  context: MatrixProjectWorkspaceContext;
+  snapshot: MatrixProjectWorkspaceSnapshot | null;
+} {
+  if (typeof window === 'undefined') {
+    return { context: {}, snapshot: null };
+  }
+  return {
+    context: loadMatrixProjectWorkspaceContext(window.localStorage),
+    snapshot: loadMatrixProjectWorkspaceSnapshot(window.localStorage),
+  };
+}
+
+function persistProjectPlanningState(options: {
+  context: MatrixProjectWorkspaceContext;
+  snapshot?: MatrixProjectWorkspaceSnapshot | null;
+  buildManifest?: BuildManifest | null;
+  blueprintDraft?: BlueprintDraft | null;
+  architectDraft?: ArchitectDraft | null;
+  buildContract?: BuildContract | null;
+  capabilityResolution?: CapabilityResolutionResult | null;
+  intelligenceCore?: MatrixIntelligenceCore | null;
+}): void {
+  if (typeof window === 'undefined') return;
+  const nextContext: MatrixProjectWorkspaceContext = {
+    ...options.context,
+    buildManifest: options.buildManifest ?? options.context.buildManifest,
+    blueprintDraft: options.blueprintDraft ?? options.context.blueprintDraft,
+    architectDraft: options.architectDraft ?? options.context.architectDraft,
+    buildContract: options.buildContract ?? options.context.buildContract,
+    capabilityResolution:
+      options.capabilityResolution ?? options.context.capabilityResolution,
+    intelligenceCore:
+      options.intelligenceCore ?? options.context.intelligenceCore,
+  };
+  saveMatrixProjectWorkspaceContext(window.localStorage, nextContext);
+
+  if (options.snapshot) {
+    saveMatrixProjectWorkspaceSnapshot(window.localStorage, {
+      ...options.snapshot,
+      name:
+        options.blueprintDraft?.projectName ??
+        options.snapshot.name,
+      description:
+        options.blueprintDraft?.appDescription ??
+        options.snapshot.description,
+      buildManifest: nextContext.buildManifest,
+      blueprintDraft: nextContext.blueprintDraft,
+      architectDraft: nextContext.architectDraft,
+      buildContract: nextContext.buildContract,
+      capabilityResolution: nextContext.capabilityResolution,
+      intelligenceCore: nextContext.intelligenceCore,
+      updatedAt: new Date().toISOString(),
+    });
+  }
 }
 
 function FieldLabel({ children }: { children: ReactNode }) {
@@ -384,15 +458,54 @@ export default function BlueprintStudioClient() {
   const router = useRouter();
   const [sourceManifest, setSourceManifest] = useState<BuildManifest | null>(null);
   const [draft, setDraft] = useState<BlueprintDraft | null>(null);
+  const [architectDraft, setArchitectDraft] = useState<ArchitectDraft | null>(null);
+  const [buildContract, setBuildContract] = useState<BuildContract | null>(null);
+  const [capabilityResolution, setCapabilityResolution] =
+    useState<CapabilityResolutionResult | null>(null);
+  const [intelligenceCore, setIntelligenceCore] =
+    useState<MatrixIntelligenceCore | null>(null);
+  const [projectContext, setProjectContext] =
+    useState<MatrixProjectWorkspaceContext>({});
+  const [projectSnapshot, setProjectSnapshot] =
+    useState<MatrixProjectWorkspaceSnapshot | null>(null);
   const [savedMessage, setSavedMessage] = useState<string | null>(null);
 
   useEffect(() => {
-    const manifest = readManifestFromAvailableStorage();
-    const storedDraft = loadDraftFromAvailableStorage();
-    const initialDraft = storedDraft ?? createBlueprintDraftFromManifest(manifest);
+    const { context, snapshot } = loadProjectPlanningState();
+    const manifest =
+      context.buildManifest ??
+      snapshot?.buildManifest ??
+      readManifestFromAvailableStorage();
+    const storedDraft =
+      context.blueprintDraft ??
+      snapshot?.blueprintDraft ??
+      loadDraftFromAvailableStorage();
+    const initialDraft =
+      storedDraft ?? createBlueprintDraftFromManifest(manifest);
+    setProjectContext(context);
+    setProjectSnapshot(snapshot);
     setSourceManifest(manifest);
+    setArchitectDraft(context.architectDraft ?? snapshot?.architectDraft ?? null);
+    setBuildContract(context.buildContract ?? snapshot?.buildContract ?? null);
+    setCapabilityResolution(
+      context.capabilityResolution ?? snapshot?.capabilityResolution ?? null
+    );
+    setIntelligenceCore(
+      context.intelligenceCore ?? snapshot?.intelligenceCore ?? null
+    );
     setDraft(initialDraft);
     persistDraft(initialDraft);
+    persistProjectPlanningState({
+      context,
+      snapshot,
+      buildManifest: manifest,
+      blueprintDraft: initialDraft,
+      architectDraft: context.architectDraft ?? snapshot?.architectDraft ?? null,
+      buildContract: context.buildContract ?? snapshot?.buildContract ?? null,
+      capabilityResolution:
+        context.capabilityResolution ?? snapshot?.capabilityResolution ?? null,
+      intelligenceCore: context.intelligenceCore ?? snapshot?.intelligenceCore ?? null,
+    });
   }, []);
 
   const warnings = useMemo(
@@ -400,9 +513,51 @@ export default function BlueprintStudioClient() {
     [draft]
   );
 
+  const technicalPlan = useMemo(() => {
+    if (!draft) return null;
+    return createBlueprintTechnicalPlan({
+      projectId:
+        projectContext.currentProjectId ??
+        projectSnapshot?.projectId ??
+        draft.id,
+      projectName:
+        projectContext.currentProjectName ??
+        projectSnapshot?.name ??
+        draft.projectName,
+      workspaceId: projectSnapshot?.projectId ?? projectContext.currentProjectId,
+      architectDraft,
+      buildManifest: draft.sourceManifest ?? sourceManifest,
+      blueprintDraft: draft,
+      existingBuildContract: buildContract,
+      existingCapabilityResolution: capabilityResolution,
+      existingIntelligenceCore: intelligenceCore,
+    });
+  }, [
+    architectDraft,
+    buildContract,
+    capabilityResolution,
+    draft,
+    intelligenceCore,
+    projectContext.currentProjectId,
+    projectContext.currentProjectName,
+    projectSnapshot?.name,
+    projectSnapshot?.projectId,
+    sourceManifest,
+  ]);
+
   function commit(nextDraft: BlueprintDraft, message = 'Blueprint draft saved') {
     setDraft(nextDraft);
     persistDraft(nextDraft);
+    persistProjectPlanningState({
+      context: projectContext,
+      snapshot: projectSnapshot,
+      buildManifest: nextDraft.sourceManifest ?? sourceManifest,
+      blueprintDraft: nextDraft,
+      architectDraft,
+      buildContract,
+      capabilityResolution,
+      intelligenceCore,
+    });
     setSavedMessage(message);
   }
 
@@ -426,8 +581,60 @@ export default function BlueprintStudioClient() {
     commit(nextDraft, 'Blueprint draft reset from Build Manifest');
   }
 
+  function approveTechnicalPlan() {
+    if (!draft) return;
+    const approved = approveBlueprintTechnicalPlan({
+      projectId:
+        projectContext.currentProjectId ??
+        projectSnapshot?.projectId ??
+        draft.id,
+      projectName:
+        projectContext.currentProjectName ??
+        projectSnapshot?.name ??
+        draft.projectName,
+      workspaceId: projectSnapshot?.projectId ?? projectContext.currentProjectId,
+      architectDraft,
+      buildManifest: draft.sourceManifest ?? sourceManifest,
+      blueprintDraft: draft,
+      existingBuildContract: buildContract,
+      existingCapabilityResolution: capabilityResolution,
+      existingIntelligenceCore: intelligenceCore,
+    });
+    setBuildContract(approved.buildContract);
+    setCapabilityResolution(approved.capabilityResolution);
+    setIntelligenceCore(approved.intelligenceCore);
+    const nextContext: MatrixProjectWorkspaceContext = {
+      ...projectContext,
+      buildManifest: draft.sourceManifest ?? sourceManifest ?? undefined,
+      blueprintDraft: draft,
+      architectDraft: architectDraft ?? undefined,
+      buildContract: approved.buildContract,
+      capabilityResolution: approved.capabilityResolution,
+      intelligenceCore: approved.intelligenceCore,
+    };
+    setProjectContext(nextContext);
+    persistProjectPlanningState({
+      context: nextContext,
+      snapshot: projectSnapshot,
+      buildManifest: draft.sourceManifest ?? sourceManifest,
+      blueprintDraft: draft,
+      architectDraft,
+      buildContract: approved.buildContract,
+      capabilityResolution: approved.capabilityResolution,
+      intelligenceCore: approved.intelligenceCore,
+    });
+    setSavedMessage('Blueprint technical plan approved');
+  }
+
   function sendBlueprintToWorkspace() {
     if (!draft) return;
+    if (!technicalPlan?.gate.canStartBuild) {
+      setSavedMessage(
+        technicalPlan?.gate.reasons[0] ??
+          'Approve the Blueprint technical plan before sending it to Workspace'
+      );
+      return;
+    }
     const prompt = buildBlueprintGenerationPrompt(draft);
     persistDraft(draft);
     writeMatrixBuildSuiteChatHandoff(
@@ -435,7 +642,13 @@ export default function BlueprintStudioClient() {
       prompt,
       new Date(),
       draft.sourceManifest ?? sourceManifest ?? undefined,
-      draft
+      draft,
+      {
+        architectDraft,
+        buildContract,
+        capabilityResolution,
+        intelligenceCore,
+      }
     );
     router.push('/chat-workspace');
   }
@@ -489,10 +702,11 @@ export default function BlueprintStudioClient() {
               <button
                 type="button"
                 onClick={sendBlueprintToWorkspace}
-                className="inline-flex items-center gap-2 rounded-lg border border-matrix-green/70 bg-matrix-green px-4 py-3 text-xs font-semibold uppercase tracking-[0.16em] text-black transition-colors hover:bg-matrix-green-bright"
+                disabled={!technicalPlan?.gate.canStartBuild}
+                className="inline-flex items-center gap-2 rounded-lg border border-matrix-green/70 bg-matrix-green px-4 py-3 text-xs font-semibold uppercase tracking-[0.16em] text-black transition-colors hover:bg-matrix-green-bright disabled:cursor-not-allowed disabled:opacity-45"
               >
                 <Send size={15} aria-hidden="true" />
-                Send Blueprint to Workspace
+                Send Approved Blueprint
               </button>
             </div>
           </div>
@@ -510,6 +724,18 @@ export default function BlueprintStudioClient() {
           }}
           className="rounded-2xl border-slate-800/90 bg-[#0d1117]/92 text-slate-300"
         />
+
+        {technicalPlan ? (
+          <BlueprintPlanningReviewPanel
+            sections={technicalPlan.sections}
+            gate={technicalPlan.gate}
+            contractDiff={technicalPlan.contractDiff}
+            capabilityDiff={technicalPlan.capabilityDiff}
+            approved={technicalPlan.gate.approved}
+            onApprove={approveTechnicalPlan}
+            onSendToWorkspace={sendBlueprintToWorkspace}
+          />
+        ) : null}
 
         <section className="grid gap-4 lg:grid-cols-[1.1fr_0.9fr]">
           <Panel
