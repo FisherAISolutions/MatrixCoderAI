@@ -125,6 +125,14 @@ export default function ArchitectConversationPanel({
 
   const recordDecision = (title: string, decision: 'accepted' | 'rejected') => {
     const nextDraft = recordArchitectRecommendationDecision(draft, title, decision);
+    if (nextDraft === draft) {
+      onStatusMessage?.(
+        decision === 'accepted'
+          ? 'Recommendation is already accepted.'
+          : 'Recommendation is already skipped.'
+      );
+      return;
+    }
     onDraftChange(nextDraft);
     onConversationIntelligenceUpdate?.({
       beforeDraft: draft,
@@ -324,9 +332,10 @@ export default function ArchitectConversationPanel({
                   <button
                     type="button"
                     onClick={() => recordDecision(item.title, 'accepted')}
+                    disabled={state === 'accepted'}
                     className={`inline-flex items-center gap-1 rounded-lg px-2 py-1 text-xs font-bold ${
                       state === 'accepted'
-                        ? 'bg-emerald-600 text-white'
+                        ? 'cursor-not-allowed bg-emerald-600 text-white'
                         : 'bg-emerald-50 text-emerald-700 hover:bg-emerald-100'
                     }`}
                   >
@@ -335,9 +344,10 @@ export default function ArchitectConversationPanel({
                   <button
                     type="button"
                     onClick={() => recordDecision(item.title, 'rejected')}
+                    disabled={state === 'rejected'}
                     className={`inline-flex items-center gap-1 rounded-lg px-2 py-1 text-xs font-bold ${
                       state === 'rejected'
-                        ? 'bg-rose-600 text-white'
+                        ? 'cursor-not-allowed bg-rose-600 text-white'
                         : 'bg-rose-50 text-rose-700 hover:bg-rose-100'
                     }`}
                   >

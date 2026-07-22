@@ -3,16 +3,26 @@
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { useEffect, useMemo, useState } from 'react';
-import { ArrowRight, BrainCircuit, CheckCircle2, Save, SlidersHorizontal, Sparkles } from 'lucide-react';
+import {
+  ArrowRight,
+  BrainCircuit,
+  CheckCircle2,
+  RotateCcw,
+  Save,
+  SlidersHorizontal,
+  Sparkles,
+} from 'lucide-react';
 import WorkflowNav from '@/components/workflow/WorkflowNav';
 import {
   applyArchitectConversationEnvelopeToCore,
   ARCHITECT_QUESTIONS,
   approveArchitectConversationForBlueprint,
   createArchitectConversationResponseEnvelope,
+  createArchitectDraft,
   ensureArchitectConversation,
   getArchitectServiceRecommendations,
   handoffArchitectDraftToBlueprint,
+  initializeArchitectIntelligenceCore,
   loadArchitectProjectState,
   recordArchitectStructuredEdit,
   saveArchitectProjectDraft,
@@ -181,6 +191,49 @@ export default function MatrixAIArchitectClient() {
     router.push('/blueprint-studio');
   };
 
+  const handleStartFreshPlan = () => {
+    if (typeof window === 'undefined') return;
+    const state = loadArchitectProjectState(window.localStorage);
+    const now = new Date();
+    const projectId =
+      state.context.currentProjectId ?? state.snapshot?.projectId ?? draft?.projectId;
+    const projectName =
+      state.context.currentProjectName ??
+      state.snapshot?.name ??
+      draft?.projectName ??
+      'Untitled Matrix Project';
+    const freshDraft = ensureArchitectConversation(
+      createArchitectDraft({
+        projectId,
+        projectName,
+        sourceBuildManifest:
+          state.context.buildManifest ??
+          state.snapshot?.buildManifest ??
+          draft?.sourceBuildManifest,
+        now,
+      }),
+      now
+    );
+    const freshCore = initializeArchitectIntelligenceCore({
+      projectId: projectId ?? 'local-architect-project',
+      architectDraft: freshDraft,
+      existingCore: null,
+      buildContract:
+        state.context.buildContract ?? state.snapshot?.buildContract ?? null,
+      now,
+    });
+    setDraft(freshDraft);
+    setIntelligenceCore(freshCore);
+    saveArchitectProjectDraft(window.localStorage, freshDraft, {
+      now,
+      intelligenceCore: freshCore,
+    });
+    setSaveStatus('saved');
+    setMessage(
+      'Started a fresh Architect plan for the active project. Existing Blueprint and generated files were left alone.'
+    );
+  };
+
   if (!draft) {
     return (
       <div className="min-h-full bg-[#f8fafc] p-8 text-slate-900">
@@ -220,6 +273,14 @@ export default function MatrixAIArchitectClient() {
               <p className="mt-3 text-[11px] uppercase tracking-[0.2em] text-slate-400">
                 Updated {formatDate(draft.updatedAt)}
               </p>
+              <button
+                type="button"
+                onClick={handleStartFreshPlan}
+                className="mt-4 inline-flex items-center gap-2 rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs font-bold text-slate-700 transition hover:border-slate-400 hover:bg-slate-100"
+              >
+                <RotateCcw size={14} aria-hidden="true" />
+                Start fresh plan
+              </button>
             </div>
           </div>
 

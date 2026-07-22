@@ -26,6 +26,15 @@ const ESSENTIAL_TOPICS: (keyof ArchitectAnswers)[] = [
   'customRequirements',
 ];
 
+const BLUEPRINT_READY_TOPICS: (keyof ArchitectAnswers)[] = [
+  'appIdea',
+  'investmentLevel',
+  'primaryUsers',
+  'accountsRequired',
+  'database',
+  'deploymentTarget',
+];
+
 const MAX_TURNS = 18;
 
 interface ConversationTurnOptions {
@@ -282,6 +291,11 @@ function questionText(topicId: keyof ArchitectAnswers | 'review', level: Archite
       ? 'The core planning data is strong enough for a Blueprint handoff. Do you want to approve this architecture draft now, or adjust routes, data models, integrations, or constraints first?'
       : 'I have enough to prepare a Blueprint. Would you like to review and approve this plan, or change anything first?';
   }
+  if (topicId === 'investmentLevel') {
+    return level === 'advanced'
+      ? 'What cost posture should I optimize for: free-first prototype, lean startup, professional managed services, or growth/scale?'
+      : 'Should I keep this build as free or low-cost as possible for launch, or can I recommend paid services when they add real value?';
+  }
   const question = questionById(topicId);
   if (!question) return 'What should I know next about this app?';
   if (level === 'advanced') return `${question.label} ${question.description}`;
@@ -346,16 +360,22 @@ export function getArchitectConversationReadiness(
   draft: ArchitectDraft,
   conversation = draft.conversation
 ): ArchitectConversationReadiness {
-  const missingTopics = ESSENTIAL_TOPICS.filter((topic) => {
-    if (topic === 'customRequirements') return false;
-    return isBlankAnswer(topic, draft.answers);
+  const answered = new Set(conversation?.answeredTopicIds ?? []);
+  const missingTopics = BLUEPRINT_READY_TOPICS.filter((topic) => {
+    return !answered.has(topic) || isBlankAnswer(topic, draft.answers);
   });
-  const answeredCount = conversation?.answeredTopicIds.length ?? 0;
+  const answeredCount = BLUEPRINT_READY_TOPICS.filter(
+    (topic) => answered.has(topic) && !isBlankAnswer(topic, draft.answers)
+  ).length;
+  const turnCount = conversation?.turnCount ?? 0;
   const confidence = Math.min(
     95,
     Math.max(35, draft.specification.confidenceScore + answeredCount * 2 - missingTopics.length * 8)
   );
-  const readyForBlueprint = missingTopics.length === 0 && confidence >= 68;
+  const hasEnoughConversation =
+    answeredCount >= BLUEPRINT_READY_TOPICS.length || turnCount >= 4;
+  const readyForBlueprint =
+    missingTopics.length === 0 && hasEnoughConversation && confidence >= 68;
   return {
     readyForBlueprint,
     canCreateInitialBuildContract: readyForBlueprint && confidence >= 72,
@@ -363,7 +383,7 @@ export function getArchitectConversationReadiness(
     missingTopics,
     reason: readyForBlueprint
       ? 'Core product, users, budget, data, and deployment choices are available.'
-      : `Missing ${missingTopics.length} core planning topic(s).`,
+      : `Still gathering ${missingTopics.length} core planning topic(s).`,
   };
 }
 
@@ -522,7 +542,7 @@ export function applyArchitectConversationTurn({
       ? 'We have enough to stop here and review the Blueprint instead of asking more questions.'
       : questionText(nextActiveTopic, nextConversationBase.experienceLevel);
   const readinessSentence = readiness.readyForBlueprint
-    ? ' The plan is now strong enough for a Blueprint review, but I will wait for your explicit approval.'
+    ? ' I have enough core planning details to prepare a Blueprint review when you are ready.'
     : '';
 
   const nextConversation: ArchitectConversationState = {
@@ -625,6 +645,18 @@ export function recordArchitectRecommendationDecision(
   const rejected = conversation.rejectedRecommendations.filter(
     (item) => item.recommendationId !== record.recommendationId
   );
+  const alreadyAccepted = conversation.acceptedRecommendations.some(
+    (item) => item.recommendationId === record.recommendationId
+  );
+  const alreadyRejected = conversation.rejectedRecommendations.some(
+    (item) => item.recommendationId === record.recommendationId
+  );
+  if (
+    (decision === 'accepted' && alreadyAccepted) ||
+    (decision === 'rejected' && alreadyRejected)
+  ) {
+    return draft;
+  }
   return {
     ...draft,
     conversation: {

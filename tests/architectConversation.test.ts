@@ -7,6 +7,7 @@ import {
   deserializeArchitectDraft,
   ensureArchitectConversation,
   getArchitectConversationReadiness,
+  recordArchitectRecommendationDecision,
   recordArchitectStructuredEdit,
   serializeArchitectDraft,
   setArchitectConversationExperienceLevel,
@@ -44,7 +45,13 @@ describe('Matrix AI Architect conversation', () => {
     expect(result.conversation.answeredTopicIds).toContain('appIdea');
     expect(result.conversation.activeTopicId).toBe('investmentLevel');
     expect(result.conversation.messages.at(-1)?.content).toContain(
-      'How much do you want to invest'
+      'free or low-cost'
+    );
+    expect(result.conversation.messages.at(-1)?.content).not.toContain(
+      'Blueprint review'
+    );
+    expect(getArchitectConversationReadiness(result.draft).readyForBlueprint).toBe(
+      false
     );
   });
 
@@ -201,5 +208,29 @@ describe('Matrix AI Architect conversation', () => {
 
     expect(readiness.readyForBlueprint).toBe(true);
     expect(readiness.canCreateInitialBuildContract).toBe(true);
+  });
+
+  it('does not duplicate recommendation decision messages on repeated clicks', () => {
+    let draft = ensureArchitectConversation(createArchitectDraft({ now: NOW }), NOW);
+    draft = recordArchitectRecommendationDecision(
+      draft,
+      'Launch free-first with local persistence',
+      'accepted',
+      undefined,
+      NOW
+    );
+    const messageCount = draft.conversation?.messages.length ?? 0;
+
+    const repeated = recordArchitectRecommendationDecision(
+      draft,
+      'Launch free-first with local persistence',
+      'accepted',
+      undefined,
+      new Date('2026-07-20T12:08:00.000Z')
+    );
+
+    expect(repeated).toBe(draft);
+    expect(repeated.conversation?.acceptedRecommendations).toHaveLength(1);
+    expect(repeated.conversation?.messages).toHaveLength(messageCount);
   });
 });

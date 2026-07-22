@@ -214,13 +214,34 @@ export default function ProjectsClient() {
         });
       }
 
-      await persistProjectList(
+      const result = await persistProjectList(
         nextProject,
         projects,
         mode === 'workspace'
           ? 'Current workspace saved as a project.'
           : 'Blank project created.'
       );
+      if (result.saveState !== 'conflict' && result.saveState !== 'save-failed') {
+        const projectToOpen =
+          result.projects.find((item) => item.id === nextProject.id) ??
+          nextProject;
+        const snapshot = buildSnapshotFromProject(projectToOpen);
+        saveMatrixProjectWorkspaceSnapshot(window.localStorage, snapshot);
+        saveMatrixProjectWorkspaceContext(window.localStorage, {
+          currentProjectId: projectToOpen.id,
+          currentProjectName: projectToOpen.name,
+          buildManifest: projectToOpen.buildManifest,
+          blueprintDraft: projectToOpen.blueprintDraft,
+          architectDraft: projectToOpen.architectDraft,
+          buildContract: projectToOpen.buildContract,
+          capabilityResolution: projectToOpen.capabilityResolution,
+          taskGraph: projectToOpen.taskGraph,
+          repositoryModel: projectToOpen.repositoryModel,
+        });
+        writeMatrixProjectOpenHandoff(window.sessionStorage, projectToOpen);
+        setWorkspaceSnapshot(snapshot);
+        setActiveProjectId(projectToOpen.id);
+      }
       setProjectName('');
       setProjectDescription('');
     },

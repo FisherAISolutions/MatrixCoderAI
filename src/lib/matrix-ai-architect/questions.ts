@@ -11,9 +11,9 @@ export const ARCHITECT_QUESTIONS: ArchitectQuestion[] = [
   },
   {
     id: 'investmentLevel',
-    label: 'How much do you want to invest right now?',
+    label: 'How should Matrix optimize project costs?',
     description:
-      'This helps the Architect recommend free-first, managed, or scale-ready services.',
+      'Choose whether to keep launch costs free/low-cost or allow managed paid services when they add real value.',
     type: 'select',
     category: 'foundation',
     options: [
