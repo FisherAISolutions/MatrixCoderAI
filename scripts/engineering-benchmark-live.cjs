@@ -51,11 +51,13 @@ async function main() {
   const confirmation = process.env.MATRIX_CODER_LIVE_BENCHMARK_CONFIRM;
   const allowLiveProvider =
     process.env.MATRIX_CODER_LIVE_BENCHMARK_PROVIDER === '1';
+  const appBaseUrl = process.env.MATRIX_CODER_APP_BASE_URL;
 
   console.log('Matrix Coder live engineering benchmark');
   console.log('WARNING: this command can make real model/API requests.');
   console.log('Fixture:', fixtureId ?? '(missing)');
   console.log('Provider enabled:', allowLiveProvider ? 'yes' : 'no');
+  console.log('App base URL:', appBaseUrl ?? '(missing)');
   console.log(
     `Required confirmation: MATRIX_CODER_LIVE_BENCHMARK_CONFIRM=${LIVE_ENGINEERING_BENCHMARK_CONFIRMATION}`
   );
@@ -64,6 +66,7 @@ async function main() {
     fixtureId: fixtureId ?? 'simple-business-website',
     confirmation,
     allowLiveProvider,
+    appBaseUrl,
     limits: {
       maxTasks: Number(process.env.MATRIX_CODER_LIVE_BENCHMARK_MAX_TASKS ?? 14),
       maxAiRequests: Number(

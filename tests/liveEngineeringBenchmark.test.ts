@@ -3,9 +3,11 @@ import { describe, expect, it } from 'vitest';
 import type { FileNode } from '@/app/chat-workspace/components/types';
 import {
   canStartLiveEngineeringBenchmark,
+  createBenchmarkApiRouteAiClient,
   DEFAULT_LIVE_ENGINEERING_BENCHMARK_LIMITS,
   getEngineeringAcceptanceFixture,
   LIVE_ENGINEERING_BENCHMARK_CONFIRMATION,
+  resolveBenchmarkProviderEndpoint,
   runLiveEngineeringBenchmark,
 } from '@/lib/engineering-benchmarks';
 import type { RepositoryModel } from '@/lib/repository-model';
@@ -85,6 +87,15 @@ function fakeAiClient(): TaskExecutionAiClient & { requests: string[] } {
   };
 }
 
+function jsonResponse(data: unknown, init: { status?: number; ok?: boolean } = {}) {
+  const status = init.status ?? 200;
+  return {
+    ok: init.ok ?? (status >= 200 && status < 300),
+    status,
+    json: async () => data,
+  } as Response;
+}
+
 function fileExists(files: FileNode[], path: string): boolean {
   const stack = [...files];
   while (stack.length) {
@@ -149,6 +160,28 @@ function validationRunner(
 }
 
 describe('live engineering benchmark harness', () => {
+  it('rejects relative app URLs in CLI provider mode', () => {
+    expect(() => resolveBenchmarkProviderEndpoint('/api/ai/chat-completion')).toThrow(
+      /invalid MATRIX_CODER_APP_BASE_URL/i
+    );
+  });
+
+  it('accepts a valid absolute localhost base URL and resolves the chat endpoint', () => {
+    expect(resolveBenchmarkProviderEndpoint('http://localhost:3000')).toEqual({
+      baseUrl: 'http://localhost:3000',
+      endpoint: 'http://localhost:3000/api/ai/chat-completion',
+    });
+  });
+
+  it('rejects invalid provider URL protocols and embedded credentials', () => {
+    expect(() => resolveBenchmarkProviderEndpoint('file:///tmp/app')).toThrow(
+      /http or https/i
+    );
+    expect(() =>
+      resolveBenchmarkProviderEndpoint('http://user:pass@localhost:3000')
+    ).toThrow(/credentials/i);
+  });
+
   it('requires explicit opt-in and refuses all-benchmark execution', () => {
     expect(
       canStartLiveEngineeringBenchmark({
@@ -174,6 +207,136 @@ describe('live engineering benchmark harness', () => {
     expect(result.stopReason).toBe('safety-refused');
     expect(result.aiRequestCount).toBe(0);
     expect(result.errors.join('\n')).toMatch(/provider use is disabled/i);
+  });
+
+  it('fails provider configuration before spending a request when base URL is missing', async () => {
+    const result = await runLiveEngineeringBenchmark({
+      fixtureId: 'simple-business-website',
+      confirmation: LIVE_ENGINEERING_BENCHMARK_CONFIRMATION,
+      allowLiveProvider: true,
+      now: new Date('2026-07-21T00:00:00.000Z'),
+    });
+
+    expect(result.stopReason).toBe('provider-configuration');
+    expect(result.providerErrorKind).toBe('configuration');
+    expect(result.aiRequestCount).toBe(0);
+    expect(result.taskResults).toHaveLength(0);
+    expect(result.generatedFileCount).toBe(0);
+    expect(result.errors.join('\n')).toMatch(/MATRIX_CODER_APP_BASE_URL is required/i);
+  });
+
+  it('keeps injected fake clients working without app URL configuration', async () => {
+    const result = await runLiveEngineeringBenchmark({
+      fixtureId: 'simple-business-website',
+      confirmation: LIVE_ENGINEERING_BENCHMARK_CONFIRMATION,
+      aiClient: fakeAiClient(),
+      validationRunner: validationRunner(),
+      limits: { maxTasks: 1, maxAiRequests: 3 },
+      now: new Date('2026-07-21T00:00:00.000Z'),
+    });
+
+    expect(result.stopReason).toBe('completed');
+    expect(result.aiRequestCount).toBe(1);
+  });
+
+  it('builds provider requests through a validated absolute app URL', async () => {
+    const calls: Array<{ url: string; body: any }> = [];
+    const firstTask = getEngineeringAcceptanceFixture(
+      'simple-business-website'
+    )!.taskGraph.tasks[0];
+    const client = createBenchmarkApiRouteAiClient({
+      appBaseUrl: 'http://localhost:3000',
+      fetchImpl: (async (url, init) => {
+        calls.push({
+          url: String(url),
+          body: JSON.parse(String(init?.body ?? '{}')),
+        });
+        return jsonResponse({
+          choices: [
+            {
+              message: {
+                content: firstTask.expectedFiles.map(fencedCreate).join('\n\n'),
+              },
+              finish_reason: 'stop',
+            },
+          ],
+          usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 },
+        });
+      }) as typeof fetch,
+    });
+
+    const response = await client.complete([{ role: 'user', content: 'hello' }], {
+      task: firstTask,
+      context: {} as any,
+      runId: 'run',
+      operationId: 'op',
+    });
+
+    expect(calls).toHaveLength(1);
+    expect(calls[0].url).toBe('http://localhost:3000/api/ai/chat-completion');
+    expect(calls[0].body).toMatchObject({
+      provider: 'OPEN_AI',
+      model: 'gpt-5.5',
+      stream: false,
+    });
+    expect(response.content).toContain('package.json');
+  });
+
+  it('meters provider calls from the live harness', async () => {
+    const firstTask = getEngineeringAcceptanceFixture(
+      'simple-business-website'
+    )!.taskGraph.tasks[0];
+    let providerCalls = 0;
+    const result = await runLiveEngineeringBenchmark({
+      fixtureId: 'simple-business-website',
+      confirmation: LIVE_ENGINEERING_BENCHMARK_CONFIRMATION,
+      allowLiveProvider: true,
+      appBaseUrl: 'http://localhost:3000',
+      providerFetchImpl: (async () => {
+        providerCalls += 1;
+        return jsonResponse({
+          choices: [
+            {
+              message: {
+                content: firstTask.expectedFiles.map(fencedCreate).join('\n\n'),
+              },
+              finish_reason: 'stop',
+            },
+          ],
+        });
+      }) as typeof fetch,
+      validationRunner: validationRunner(),
+      limits: { maxTasks: 1, maxAiRequests: 2 },
+      now: new Date('2026-07-21T00:00:00.000Z'),
+    });
+
+    expect(providerCalls).toBe(1);
+    expect(result.aiRequestCount).toBe(1);
+    expect(result.taskResults).toHaveLength(1);
+  });
+
+  it('classifies provider authentication failures separately from task failures', async () => {
+    const result = await runLiveEngineeringBenchmark({
+      fixtureId: 'simple-business-website',
+      confirmation: LIVE_ENGINEERING_BENCHMARK_CONFIRMATION,
+      allowLiveProvider: true,
+      appBaseUrl: 'http://localhost:3000',
+      providerFetchImpl: (async () =>
+        jsonResponse(
+          { error: 'OPEN_AI API error: 401', details: 'Bearer abc.def rejected' },
+          { status: 401, ok: false }
+        )) as typeof fetch,
+      validationRunner: validationRunner(),
+      limits: { maxTasks: 1, maxAiRequests: 2 },
+      now: new Date('2026-07-21T00:00:00.000Z'),
+    });
+
+    const serialized = JSON.stringify(result);
+    expect(result.stopReason).toBe('provider-error');
+    expect(result.providerErrorKind).toBe('authentication');
+    expect(result.taskResults).toHaveLength(0);
+    expect(result.generatedFileCount).toBe(0);
+    expect(serialized).not.toContain('Bearer abc.def');
   });
 
   it('creates an isolated workspace and executes one task at a time', async () => {

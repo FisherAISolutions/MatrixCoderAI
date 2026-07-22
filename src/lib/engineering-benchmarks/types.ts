@@ -106,6 +106,8 @@ export type LiveEngineeringBenchmarkStopReason =
   | 'time-limit'
   | 'file-limit'
   | 'byte-limit'
+  | 'provider-configuration'
+  | 'provider-error'
   | 'safety-refused'
   | 'error';
 
@@ -150,6 +152,7 @@ export interface LiveEngineeringBenchmarkResult {
   missingRequirements: string[];
   blockedChecks: string[];
   failureReasons: string[];
+  providerErrorKind?: string;
   cancelled: boolean;
   finalScore: number;
   estimatedUsage: {

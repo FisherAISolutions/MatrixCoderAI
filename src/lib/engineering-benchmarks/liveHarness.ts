@@ -1,6 +1,4 @@
 import type { FileNode } from '@/app/chat-workspace/components/types';
-import { getChatCompletion } from '@/lib/ai/chatCompletion';
-import { AI_PROVIDER } from '@/lib/ai/modelConfig';
 import { PRIMARY_MODEL } from '@/lib/ai/modelConfig';
 import { createContractReviewReport } from '@/lib/contract-review';
 import {
@@ -21,6 +19,11 @@ import {
 } from '@/lib/task-execution';
 import { cancelTaskGraph, getNextReadyTask } from '@/lib/task-graph';
 import { getEngineeringAcceptanceFixture } from './fixtures';
+import {
+  createBenchmarkApiRouteAiClient,
+  isBenchmarkProviderError,
+  type BenchmarkProviderErrorKind,
+} from './providerAdapter';
 import {
   LIVE_ENGINEERING_BENCHMARK_CONFIRMATION,
   type EngineeringAcceptanceFixture,
@@ -49,6 +52,8 @@ export interface LiveEngineeringBenchmarkOptions {
   allowLiveProvider?: boolean;
   limits?: Partial<LiveEngineeringBenchmarkLimits>;
   aiClient?: TaskExecutionAiClient;
+  appBaseUrl?: string;
+  providerFetchImpl?: typeof fetch;
   validationRunner?: TaskExecutionValidationRunner;
   signal?: AbortSignal;
   now?: Date;
@@ -137,6 +142,7 @@ function createEmptyResult(options: {
   isolatedWorkspaceId: string;
   errors?: string[];
   warnings?: string[];
+  providerErrorKind?: BenchmarkProviderErrorKind;
 }): LiveEngineeringBenchmarkResult {
   return {
     runId: options.runId,
@@ -163,6 +169,7 @@ function createEmptyResult(options: {
     missingRequirements: [],
     blockedChecks: [],
     failureReasons: [],
+    providerErrorKind: options.providerErrorKind,
     cancelled: options.stopReason === 'cancelled',
     finalScore: 0,
     estimatedUsage: { aiRequests: 0, retryRequests: 0 },
@@ -199,37 +206,11 @@ function checkLimit(options: {
 
 function createMeteredAiClient(options: {
   aiClient?: TaskExecutionAiClient;
-  allowLiveProvider?: boolean;
   limits: LiveEngineeringBenchmarkLimits;
   requestCount: () => number;
   increment: () => void;
 }): TaskExecutionAiClient | undefined {
-  if (!options.aiClient && !options.allowLiveProvider) return undefined;
-  const baseClient: TaskExecutionAiClient =
-    options.aiClient ??
-    {
-      complete: async (messages, requestOptions) => {
-        const response = await getChatCompletion(
-          AI_PROVIDER,
-          PRIMARY_MODEL,
-          messages,
-          { temperature: 0.2 },
-          { signal: requestOptions.signal }
-        );
-        const choice = response?.choices?.[0];
-        return {
-          content: choice?.message?.content ?? response?.content ?? '',
-          finishReason: choice?.finish_reason ?? choice?.finishReason,
-          usage: response?.usage
-            ? {
-                promptTokens: response.usage.prompt_tokens,
-                completionTokens: response.usage.completion_tokens,
-                totalTokens: response.usage.total_tokens,
-              }
-            : undefined,
-        };
-      },
-    };
+  if (!options.aiClient) return undefined;
 
   return {
     complete: async (messages, requestOptions) => {
@@ -237,7 +218,7 @@ function createMeteredAiClient(options: {
         throw new Error('Live benchmark AI request limit reached.');
       }
       options.increment();
-      return baseClient.complete(messages, requestOptions);
+      return options.aiClient!.complete(messages, requestOptions);
     },
   };
 }
@@ -323,15 +304,40 @@ export async function runLiveEngineeringBenchmark(
     });
   }
 
-  activeRunId = runId;
   const limits: LiveEngineeringBenchmarkLimits = {
     ...DEFAULT_LIVE_ENGINEERING_BENCHMARK_LIMITS,
     ...options.limits,
   };
+  let benchmarkAiClient = options.aiClient;
+  if (!benchmarkAiClient && options.allowLiveProvider) {
+    try {
+      benchmarkAiClient = createBenchmarkApiRouteAiClient({
+        appBaseUrl: options.appBaseUrl,
+        fetchImpl: options.providerFetchImpl,
+      });
+    } catch (error) {
+      const providerError = isBenchmarkProviderError(error) ? error : undefined;
+      activeRunId = null;
+      return createEmptyResult({
+        fixture,
+        runId,
+        startedAt,
+        endedAt: currentTime(),
+        stopReason:
+          providerError?.kind === 'configuration'
+            ? 'provider-configuration'
+            : 'provider-error',
+        isolatedProjectId,
+        isolatedWorkspaceId,
+        errors: [redactedError(error)],
+        providerErrorKind: providerError?.kind,
+      });
+    }
+  }
+  activeRunId = runId;
   let aiRequestCount = 0;
   const meteredAiClient = createMeteredAiClient({
-    aiClient: options.aiClient,
-    allowLiveProvider: options.allowLiveProvider,
+    aiClient: benchmarkAiClient,
     limits,
     requestCount: () => aiRequestCount,
     increment: () => {
@@ -372,6 +378,7 @@ export async function runLiveEngineeringBenchmark(
   const failureReasons: string[] = [];
   let stopReason: LiveEngineeringBenchmarkStopReason = 'completed';
   let lastError: string | undefined;
+  let providerErrorKind: BenchmarkProviderErrorKind | undefined;
 
   const validationRunner =
     options.validationRunner ??
@@ -526,7 +533,13 @@ export async function runLiveEngineeringBenchmark(
     }
   } catch (error) {
     lastError = redactedError(error);
-    stopReason = /request limit/i.test(lastError) ? 'cost-limit' : 'error';
+    if (isBenchmarkProviderError(error)) {
+      providerErrorKind = error.kind;
+      stopReason =
+        error.kind === 'configuration' ? 'provider-configuration' : 'provider-error';
+    } else {
+      stopReason = /request limit/i.test(lastError) ? 'cost-limit' : 'error';
+    }
     failureReasons.push(lastError);
   } finally {
     activeRunId = null;
@@ -577,6 +590,7 @@ export async function runLiveEngineeringBenchmark(
     missingRequirements,
     blockedChecks,
     failureReasons,
+    providerErrorKind,
     cancelled: stopReason === 'cancelled',
     finalScore: scoreFromContractReview(contractReview),
     estimatedUsage: {
