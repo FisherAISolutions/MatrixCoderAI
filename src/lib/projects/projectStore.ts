@@ -39,6 +39,12 @@ import {
   type EngineeringMemory,
 } from '@/lib/engineering-memory';
 import {
+  cloneIntelligenceCoreForProject,
+  deserializeIntelligenceCore,
+  serializeIntelligenceCore,
+  type MatrixIntelligenceCore,
+} from '@/lib/intelligence-core';
+import {
   cloneBuildChangePlanForProject,
   deserializeBuildChangePlan,
   serializeBuildChangePlan,
@@ -108,6 +114,7 @@ export interface MatrixProject {
   taskGraph?: TaskGraph;
   repositoryModel?: RepositoryModel;
   engineeringMemory?: EngineeringMemory;
+  intelligenceCore?: MatrixIntelligenceCore;
   changePlan?: BuildChangePlan;
   validationStatus: MatrixProjectValidationStatus;
   deploymentStatus: MatrixProjectDeploymentStatus;
@@ -130,6 +137,7 @@ export interface MatrixProjectDraft {
   taskGraph?: TaskGraph;
   repositoryModel?: RepositoryModel;
   engineeringMemory?: EngineeringMemory;
+  intelligenceCore?: MatrixIntelligenceCore;
   changePlan?: BuildChangePlan;
   validationStatus?: MatrixProjectValidationStatus;
   deploymentStatus?: MatrixProjectDeploymentStatus;
@@ -147,6 +155,7 @@ export interface MatrixProjectWorkspaceContext {
   taskGraph?: TaskGraph;
   repositoryModel?: RepositoryModel;
   engineeringMemory?: EngineeringMemory;
+  intelligenceCore?: MatrixIntelligenceCore;
   changePlan?: BuildChangePlan;
 }
 
@@ -164,6 +173,7 @@ export interface MatrixProjectWorkspaceSnapshot {
   taskGraph?: TaskGraph;
   repositoryModel?: RepositoryModel;
   engineeringMemory?: EngineeringMemory;
+  intelligenceCore?: MatrixIntelligenceCore;
   changePlan?: BuildChangePlan;
   validationStatus: MatrixProjectValidationStatus;
   deploymentStatus: MatrixProjectDeploymentStatus;
@@ -371,6 +381,12 @@ function normalizeProjectPayload(
     ? (deserializeEngineeringMemory(JSON.stringify(parsed.engineeringMemory)) ??
       undefined)
     : undefined;
+  const intelligenceCore = parsed.intelligenceCore
+    ? (deserializeIntelligenceCore(
+        JSON.stringify(parsed.intelligenceCore),
+        typeof parsed.id === 'string' ? parsed.id : undefined
+      ) ?? undefined)
+    : undefined;
   const changePlan = parsed.changePlan
     ? (deserializeBuildChangePlan(JSON.stringify(parsed.changePlan)) ??
       undefined)
@@ -387,6 +403,7 @@ function normalizeProjectPayload(
     taskGraph,
     repositoryModel,
     engineeringMemory,
+    intelligenceCore,
     changePlan,
     validationStatus:
       parsed.validationStatus === 'passed' ||
@@ -516,6 +533,13 @@ function serializeProject(project: MatrixProject): MatrixProject {
           engineeringMemory: JSON.parse(
             serializeEngineeringMemory(project.engineeringMemory)
           ) as EngineeringMemory,
+        }
+      : {}),
+    ...(project.intelligenceCore
+      ? {
+          intelligenceCore: JSON.parse(
+            serializeIntelligenceCore(project.intelligenceCore)
+          ) as MatrixIntelligenceCore,
         }
       : {}),
     ...(project.changePlan
@@ -774,6 +798,7 @@ export function createMatrixProject(
     taskGraph: draft.taskGraph,
     repositoryModel: draft.repositoryModel,
     engineeringMemory: draft.engineeringMemory,
+    intelligenceCore: draft.intelligenceCore,
     changePlan: draft.changePlan,
     validationStatus: draft.validationStatus ?? 'unknown',
     deploymentStatus: draft.deploymentStatus ?? 'unknown',
@@ -845,6 +870,9 @@ export function duplicateMatrixProject(
     engineeringMemory: project.engineeringMemory
       ? cloneEngineeringMemoryForProject(project.engineeringMemory, id, now)
       : undefined,
+    intelligenceCore: project.intelligenceCore
+      ? cloneIntelligenceCoreForProject(project.intelligenceCore, id, now)
+      : undefined,
     changePlan: project.changePlan
       ? cloneBuildChangePlanForProject(project.changePlan, id, now)
       : undefined,
@@ -875,6 +903,7 @@ export function createProjectFromWorkspaceSnapshot(
       taskGraph: snapshot.taskGraph,
       repositoryModel: snapshot.repositoryModel,
       engineeringMemory: snapshot.engineeringMemory,
+      intelligenceCore: snapshot.intelligenceCore,
       changePlan: snapshot.changePlan,
       validationStatus: snapshot.validationStatus,
       deploymentStatus: snapshot.deploymentStatus,
@@ -1223,6 +1252,13 @@ export function saveMatrixProjectWorkspaceSnapshot(
             ),
           }
         : {}),
+      ...(snapshot.intelligenceCore
+        ? {
+            intelligenceCore: JSON.parse(
+              serializeIntelligenceCore(snapshot.intelligenceCore)
+            ),
+          }
+        : {}),
       ...(snapshot.changePlan
         ? {
             changePlan: JSON.parse(
@@ -1296,6 +1332,12 @@ export function loadMatrixProjectWorkspaceSnapshot(
       engineeringMemory: parsed.engineeringMemory
         ? (deserializeEngineeringMemory(JSON.stringify(parsed.engineeringMemory)) ??
           undefined)
+        : undefined,
+      intelligenceCore: parsed.intelligenceCore
+        ? (deserializeIntelligenceCore(
+            JSON.stringify(parsed.intelligenceCore),
+            typeof parsed.projectId === 'string' ? parsed.projectId : undefined
+          ) ?? undefined)
         : undefined,
       changePlan: parsed.changePlan
         ? (deserializeBuildChangePlan(JSON.stringify(parsed.changePlan)) ??
@@ -1394,6 +1436,13 @@ export function saveMatrixProjectWorkspaceContext(
             ),
           }
         : {}),
+      ...(context.intelligenceCore
+        ? {
+            intelligenceCore: JSON.parse(
+              serializeIntelligenceCore(context.intelligenceCore)
+            ),
+          }
+        : {}),
       ...(context.changePlan
         ? {
             changePlan: JSON.parse(
@@ -1451,6 +1500,12 @@ export function loadMatrixProjectWorkspaceContext(
       engineeringMemory: parsed.engineeringMemory
         ? (deserializeEngineeringMemory(JSON.stringify(parsed.engineeringMemory)) ??
           undefined)
+        : undefined,
+      intelligenceCore: parsed.intelligenceCore
+        ? (deserializeIntelligenceCore(
+            JSON.stringify(parsed.intelligenceCore),
+            parsed.currentProjectId
+          ) ?? undefined)
         : undefined,
       changePlan: parsed.changePlan
         ? (deserializeBuildChangePlan(JSON.stringify(parsed.changePlan)) ??
