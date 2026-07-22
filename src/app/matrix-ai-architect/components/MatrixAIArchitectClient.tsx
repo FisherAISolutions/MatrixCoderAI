@@ -6,8 +6,10 @@ import { useEffect, useMemo, useState } from 'react';
 import { ArrowRight, BrainCircuit, CheckCircle2, Save, SlidersHorizontal, Sparkles } from 'lucide-react';
 import WorkflowNav from '@/components/workflow/WorkflowNav';
 import {
+  applyArchitectConversationEnvelopeToCore,
   ARCHITECT_QUESTIONS,
   approveArchitectConversationForBlueprint,
+  createArchitectConversationResponseEnvelope,
   ensureArchitectConversation,
   getArchitectServiceRecommendations,
   handoffArchitectDraftToBlueprint,
@@ -15,8 +17,10 @@ import {
   recordArchitectStructuredEdit,
   saveArchitectProjectDraft,
   type ArchitectAnswers,
+  type ArchitectConversationExtraction,
   type ArchitectDraft,
 } from '@/lib/matrix-ai-architect';
+import type { MatrixIntelligenceCore } from '@/lib/intelligence-core';
 import ArchitectConversationPanel from './ArchitectConversationPanel';
 import ArchitectQuestionPanel from './ArchitectQuestionPanel';
 import ArchitectSummaryPanel from './ArchitectSummaryPanel';
@@ -36,12 +40,15 @@ function formatDate(value?: string): string {
 export default function MatrixAIArchitectClient() {
   const router = useRouter();
   const [draft, setDraft] = useState<ArchitectDraft | null>(null);
+  const [intelligenceCore, setIntelligenceCore] =
+    useState<MatrixIntelligenceCore | null>(null);
   const [saveStatus, setSaveStatus] = useState<SaveStatus>('loading');
   const [message, setMessage] = useState('Loading Architect Draft...');
 
   useEffect(() => {
     const state = loadArchitectProjectState(window.localStorage);
     setDraft(ensureArchitectConversation(state.draft));
+    setIntelligenceCore(state.intelligenceCore);
     setSaveStatus('saved');
     setMessage(
       state.context.currentProjectName || state.snapshot?.name
@@ -55,7 +62,9 @@ export default function MatrixAIArchitectClient() {
     setSaveStatus('saving');
     const timer = window.setTimeout(() => {
       try {
-        saveArchitectProjectDraft(window.localStorage, draft);
+        saveArchitectProjectDraft(window.localStorage, draft, {
+          intelligenceCore,
+        });
         setSaveStatus('saved');
         setMessage('Architect Draft saved to the current project context.');
       } catch (error) {
@@ -68,7 +77,7 @@ export default function MatrixAIArchitectClient() {
       }
     }, 180);
     return () => window.clearTimeout(timer);
-  }, [draft]);
+  }, [draft, intelligenceCore]);
 
   const recommendations = useMemo(
     () => (draft ? getArchitectServiceRecommendations(draft.answers) : []),
@@ -79,15 +88,75 @@ export default function MatrixAIArchitectClient() {
     key: K,
     value: ArchitectAnswers[K]
   ) => {
-    setDraft((current) =>
-      current ? recordArchitectStructuredEdit(current, key, value) : current
-    );
+    setDraft((current) => {
+      if (!current) return current;
+      const next = recordArchitectStructuredEdit(current, key, value);
+      applyIntelligenceUpdate({
+        beforeDraft: current,
+        afterDraft: next,
+        extraction: {
+          updatedAnswers: { [key]: value } as Partial<ArchitectAnswers>,
+          newRequirements: key === 'customRequirements' && typeof value === 'string'
+            ? [value]
+            : [],
+          rejectedRecommendations: [],
+          unresolvedQuestions: [],
+          confidence: 90,
+        },
+        userInput: `Structured edit: ${String(key)}`,
+        naturalLanguageResponse:
+          next.conversation?.messages.at(-1)?.content ??
+          'Structured Architect answer updated.',
+      });
+      return next;
+    });
+  };
+
+  const applyIntelligenceUpdate = (input: {
+    beforeDraft: ArchitectDraft;
+    afterDraft: ArchitectDraft;
+    extraction: ArchitectConversationExtraction;
+    userInput: string;
+    naturalLanguageResponse: string;
+  }) => {
+    const conversation = input.afterDraft.conversation;
+    if (!conversation) return;
+    const envelope = createArchitectConversationResponseEnvelope({
+      beforeDraft: input.beforeDraft,
+      afterDraft: input.afterDraft,
+      conversation,
+      extraction: input.extraction,
+      userInput: input.userInput,
+      naturalLanguageResponse: input.naturalLanguageResponse,
+    });
+    setIntelligenceCore((current) => {
+      if (!current) return current;
+      const result = applyArchitectConversationEnvelopeToCore(current, envelope, {
+        expectedProjectId: current.projectId,
+      });
+      if (result.skipped) return current;
+      return result.core;
+    });
   };
 
   const handleHandoff = () => {
     if (!draft) return;
     if (!draft.conversation?.approvedForBlueprint) {
-      setDraft(approveArchitectConversationForBlueprint(draft));
+      const approved = approveArchitectConversationForBlueprint(draft);
+      setDraft(approved);
+      applyIntelligenceUpdate({
+        beforeDraft: draft,
+        afterDraft: approved,
+        extraction: {
+          updatedAnswers: {},
+          newRequirements: [],
+          rejectedRecommendations: [],
+          unresolvedQuestions: [],
+          confidence: 96,
+        },
+        userInput: 'Approve Architect plan for Blueprint Studio.',
+        naturalLanguageResponse: 'Architect plan approved for Blueprint Studio handoff.',
+      });
       setSaveStatus('saved');
       setMessage(
         'Architect plan approved. Click Send to Blueprint Studio when you are ready.'
@@ -171,6 +240,7 @@ export default function MatrixAIArchitectClient() {
             draft={draft}
             onDraftChange={setDraft}
             onStatusMessage={setMessage}
+            onConversationIntelligenceUpdate={applyIntelligenceUpdate}
           />
 
           <details className="group rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">

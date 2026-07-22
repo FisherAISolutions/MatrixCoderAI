@@ -3,6 +3,7 @@ import {
   getArchitectServiceRecommendations,
   updateArchitectAnswer,
 } from './architectDraft';
+import { serviceRuleToRecommendation } from './recommendationRules';
 import type {
   ArchitectAnswers,
   ArchitectConversationDecision,
@@ -297,7 +298,14 @@ function buildSummary(draft: ArchitectDraft): string {
 }
 
 function recommendationNote(draft: ArchitectDraft, level: ArchitectExperienceLevel): string {
-  const rec = getArchitectServiceRecommendations(draft.answers)[0];
+  const rejected = new Set(
+    draft.conversation?.rejectedRecommendations.map(
+      (item) => item.recommendationId
+    ) ?? []
+  );
+  const rec = getArchitectServiceRecommendations(draft.answers).find(
+    (item) => !rejected.has(decisionId(serviceRuleToRecommendation(item).title))
+  );
   if (!rec) return '';
   const freeTier = rec.hasFreeTier ? 'It has a free-tier path.' : 'I am treating cost as an estimate.';
   return level === 'advanced'

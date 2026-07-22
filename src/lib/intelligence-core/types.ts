@@ -298,6 +298,21 @@ export interface IntelligenceSummaryPacket {
   createdAt: string;
 }
 
+export interface IntelligenceArchitectContextPacket
+  extends Omit<IntelligenceSummaryPacket, 'kind'> {
+  kind: 'architect';
+  visionPrinciples: string[];
+  projectContext: IntelligenceMemoryRecord[];
+  approvedProductDecisions: IntelligenceMemoryRecord[];
+  userPreferences: IntelligenceMemoryRecord[];
+  recentConversationDecisions: IntelligenceMemoryRecord[];
+  unresolvedQuestions: IntelligenceMemoryRecord[];
+  rejectedRecommendations: IntelligenceMemoryRecord[];
+  budgetConstraints: IntelligenceMemoryRecord[];
+  readinessStage: string;
+  assumptions: string[];
+}
+
 export interface IntelligenceTaskPacketOptions {
   task: TaskGraphTask;
   buildContract?: BuildContract | null;

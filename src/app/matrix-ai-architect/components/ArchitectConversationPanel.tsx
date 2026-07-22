@@ -15,6 +15,7 @@ import {
   getArchitectConversationReadiness,
   recordArchitectRecommendationDecision,
   setArchitectConversationExperienceLevel,
+  type ArchitectConversationExtraction,
   type ArchitectDraft,
   type ArchitectExperienceLevel,
 } from '@/lib/matrix-ai-architect';
@@ -23,6 +24,13 @@ interface ArchitectConversationPanelProps {
   draft: ArchitectDraft;
   onDraftChange: (draft: ArchitectDraft) => void;
   onStatusMessage?: (message: string) => void;
+  onConversationIntelligenceUpdate?: (input: {
+    beforeDraft: ArchitectDraft;
+    afterDraft: ArchitectDraft;
+    extraction: ArchitectConversationExtraction;
+    userInput: string;
+    naturalLanguageResponse: string;
+  }) => void;
 }
 
 function decisionId(title: string): string {
@@ -42,6 +50,7 @@ export default function ArchitectConversationPanel({
   draft,
   onDraftChange,
   onStatusMessage,
+  onConversationIntelligenceUpdate,
 }: ArchitectConversationPanelProps) {
   const conversation = draft.conversation;
   const [input, setInput] = useState('');
@@ -91,6 +100,15 @@ export default function ArchitectConversationPanel({
     });
     if (!result.stale) {
       onDraftChange(result.draft);
+      onConversationIntelligenceUpdate?.({
+        beforeDraft: draft,
+        afterDraft: result.draft,
+        extraction: result.extraction,
+        userInput: input,
+        naturalLanguageResponse:
+          result.conversation.messages.at(-1)?.content ??
+          'Architect updated the structured project plan.',
+      });
       onStatusMessage?.(
         result.extraction.confidence > 50
           ? 'Architect updated the structured draft from your answer.'
@@ -106,7 +124,23 @@ export default function ArchitectConversationPanel({
   };
 
   const recordDecision = (title: string, decision: 'accepted' | 'rejected') => {
-    onDraftChange(recordArchitectRecommendationDecision(draft, title, decision));
+    const nextDraft = recordArchitectRecommendationDecision(draft, title, decision);
+    onDraftChange(nextDraft);
+    onConversationIntelligenceUpdate?.({
+      beforeDraft: draft,
+      afterDraft: nextDraft,
+      extraction: {
+        updatedAnswers: {},
+        newRequirements: [],
+        rejectedRecommendations: decision === 'rejected' ? [title] : [],
+        unresolvedQuestions: [],
+        confidence: 92,
+      },
+      userInput: `${decision === 'accepted' ? 'Accept' : 'Reject'} recommendation: ${title}`,
+      naturalLanguageResponse:
+        nextDraft.conversation?.messages.at(-1)?.content ??
+        `${decision === 'accepted' ? 'Accepted' : 'Rejected'} recommendation: ${title}.`,
+    });
     onStatusMessage?.(
       decision === 'accepted'
         ? 'Recommendation accepted into the Architect conversation.'

@@ -5,6 +5,7 @@ import type { TaskGraphTask } from '@/lib/task-graph';
 import {
   INTELLIGENCE_CONTEXT_PACKET_VERSION,
   type IntelligenceBrainDomain,
+  type IntelligenceArchitectContextPacket,
   type IntelligenceConflict,
   type IntelligenceMemoryRecord,
   type IntelligenceSummaryPacket,
@@ -242,6 +243,24 @@ function summaryRecords(
     .slice(0, 24);
 }
 
+function currentRecords(
+  records: IntelligenceMemoryRecord[],
+  limit = 12
+): IntelligenceMemoryRecord[] {
+  return records
+    .filter((record) => !record.replacedBy && record.status !== 'expired')
+    .sort((a, b) => Date.parse(b.updatedAt) - Date.parse(a.updatedAt))
+    .slice(0, limit);
+}
+
+function recordsBy(
+  records: IntelligenceMemoryRecord[],
+  predicate: (record: IntelligenceMemoryRecord) => boolean,
+  limit = 10
+): IntelligenceMemoryRecord[] {
+  return currentRecords(records.filter(predicate), limit);
+}
+
 function unresolvedConflicts(core: MatrixIntelligenceCore): IntelligenceConflict[] {
   return core.conflicts.filter((conflict) => conflict.status === 'unresolved');
 }
@@ -258,7 +277,16 @@ export function createArchitectIntelligencePacket(
   core: MatrixIntelligenceCore,
   buildContract?: BuildContract | null,
   now = new Date()
-): IntelligenceSummaryPacket {
+): IntelligenceArchitectContextPacket {
+  const projectRecords = currentRecords(core.project.records, 10);
+  const productRecords = recordsBy(
+    core.product.records,
+    (record) => record.status !== 'rejected',
+    12
+  );
+  const userRecords = currentRecords(core.user.records, 8);
+  const conversationRecords = currentRecords(core.conversation.records, 12);
+  const workingRecords = currentRecords(core.working.records, 8);
   return {
     packetVersion: INTELLIGENCE_CONTEXT_PACKET_VERSION,
     kind: 'architect',
@@ -266,8 +294,61 @@ export function createArchitectIntelligencePacket(
     summary:
       'Use approved user, product, and project decisions as structured planning context.',
     authoritativeRequirementIds: requiredRequirementIds(buildContract),
-    relevantMemory: summaryRecords(core, ['project', 'product', 'user', 'conversation']),
+    relevantMemory: [
+      ...projectRecords,
+      ...productRecords,
+      ...userRecords,
+      ...conversationRecords,
+      ...workingRecords,
+    ].slice(0, 32),
     unresolvedConflicts: unresolvedConflicts(core),
+    visionPrinciples: [
+      core.vision.productMission,
+      ...core.vision.operatingPrinciples,
+      ...core.vision.qualityBar,
+    ],
+    projectContext: projectRecords,
+    approvedProductDecisions: recordsBy(
+      core.product.records,
+      (record) =>
+        record.status === 'approved' ||
+        record.status === 'verified' ||
+        record.userApproved,
+      12
+    ),
+    userPreferences: userRecords,
+    recentConversationDecisions: recordsBy(
+      core.conversation.records,
+      (record) =>
+        record.category === 'decision' || record.category === 'summary',
+      10
+    ),
+    unresolvedQuestions: recordsBy(
+      core.conversation.records,
+      (record) => record.category === 'temporary' && record.key.startsWith('unresolved-'),
+      8
+    ),
+    rejectedRecommendations: recordsBy(
+      core.conversation.records,
+      (record) => record.status === 'rejected' || record.key.startsWith('rejected-'),
+      8
+    ),
+    budgetConstraints: recordsBy(
+      [...core.project.records, ...core.user.records],
+      (record) =>
+        record.key.includes('budget') ||
+        record.key.includes('investment') ||
+        record.key.includes('cost'),
+      8
+    ),
+    readinessStage:
+      (workingRecords.find((record) => record.key === 'readiness-status')
+        ?.value as string | undefined) ?? 'discovering',
+    assumptions: recordsBy(
+      core.conversation.records,
+      (record) => record.key.startsWith('assumption-'),
+      8
+    ).map((record) => String(record.value)),
     createdAt: nowIso(now),
   };
 }
