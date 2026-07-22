@@ -279,6 +279,7 @@ describe('live engineering benchmark harness', () => {
       model: 'gpt-5.5',
       stream: false,
     });
+    expect(calls[0].body.parameters).not.toHaveProperty('temperature');
     expect(response.content).toContain('package.json');
   });
 

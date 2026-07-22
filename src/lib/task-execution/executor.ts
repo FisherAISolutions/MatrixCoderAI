@@ -1,6 +1,7 @@
 import type { FileNode } from '@/app/chat-workspace/components/types';
 import { getChatCompletion } from '@/lib/ai/chatCompletion';
 import { AI_PROVIDER, PRIMARY_MODEL } from '@/lib/ai/modelConfig';
+import { CHAT_REQUEST_PROFILES } from '@/lib/ai/requestProfiles';
 import {
   createRepositoryModel,
   getRepositoryContextForTask,
@@ -36,7 +37,7 @@ function defaultAiClient(): TaskExecutionAiClient {
         AI_PROVIDER,
         PRIMARY_MODEL,
         messages,
-        { temperature: 0.2 },
+        CHAT_REQUEST_PROFILES.engineeringTask,
         { signal: options.signal }
       );
       const choice = response?.choices?.[0];

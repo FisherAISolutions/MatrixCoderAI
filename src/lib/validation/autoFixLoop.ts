@@ -28,6 +28,7 @@
  */
 
 import { getChatCompletion } from '@/lib/ai/chatCompletion';
+import { CHAT_REQUEST_PROFILES } from '@/lib/ai/requestProfiles';
 import {
   detectTruncatedEditPatch,
   extractFromAssistantResponse,
@@ -68,9 +69,6 @@ import {
   AUTO_FIX_MODEL,
   PRIMARY_MODEL,
 } from '@/lib/ai/modelConfig';
-
-/** Hard ceiling on tokens we allow the auto-fix LLM call to spend. */
-const AUTO_FIX_MAX_TOKENS = 8192;
 
 export interface ChatSystemMessage {
   id: string;
@@ -236,7 +234,7 @@ function renderPromptDiagnostics(
     `attempt=${attempt}/${maxAttempts}`,
     `primary_model=${PRIMARY_MODEL}`,
     `auto_fix_model=${AUTO_FIX_MODEL}`,
-    `max_completion_tokens=${AUTO_FIX_MAX_TOKENS}`,
+    `max_completion_tokens=${CHAT_REQUEST_PROFILES.autoFix.max_completion_tokens}`,
     `compact=${diagnostics.compact}`,
     `prompt_chars=${diagnostics.promptChars}`,
     `estimated_tokens=${diagnostics.estimatedTokens}`,
@@ -867,7 +865,7 @@ export async function runAutoFixLoop(
             { role: 'system', content: AUTO_FIX_SYSTEM_PROMPT },
             { role: 'user', content: userPrompt },
           ],
-          { max_completion_tokens: AUTO_FIX_MAX_TOKENS },
+          CHAT_REQUEST_PROFILES.autoFix,
           { signal }
         );
         throwIfCancelled(signal);

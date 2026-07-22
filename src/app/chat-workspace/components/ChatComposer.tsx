@@ -5,6 +5,7 @@ import toast from 'react-hot-toast';
 
 import { useChat } from '@/lib/hooks/useChat';
 import { PRIMARY_MODEL, AUTO_FIX_MODEL, AI_PROVIDER } from '@/lib/ai/modelConfig';
+import { CHAT_REQUEST_PROFILES } from '@/lib/ai/requestProfiles';
 import { ChatMessage, AgentType, MemoryStage, FileNode } from './types';
 import {
   buildContextForPrompt,
@@ -934,7 +935,6 @@ interface ActiveBatchGeneration {
   continuationRetryCounts: Record<string, number>;
 }
 
-const GENERATION_MAX_COMPLETION_TOKENS = 8192;
 const BATCH_MAX_FILES = 2;
 const BATCH_TARGET_FILE_LINES = 220;
 const BATCH_HARD_FILE_LINES = 320;
@@ -1279,9 +1279,9 @@ export default function ChatComposer({
         });
       }
 
-      sendMessage(apiMessages, {
-        max_completion_tokens: GENERATION_MAX_COMPLETION_TOKENS,
-      }, { signal: scope.signal });
+      sendMessage(apiMessages, CHAT_REQUEST_PROFILES.generation, {
+        signal: scope.signal,
+      });
     },
     [
       ensureCancellationScope,

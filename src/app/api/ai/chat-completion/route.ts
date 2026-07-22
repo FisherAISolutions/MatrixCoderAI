@@ -1,6 +1,6 @@
 ﻿import { NextRequest, NextResponse } from 'next/server';
 import OpenAI from 'openai';
-import { normalizeChatCompletionParameters } from '@/lib/ai/parameterNormalization';
+import { buildChatCompletionParameters } from '@/lib/ai/chatRequestBuilder';
 import { getOptionalServerEnv } from '@/lib/env';
 import { logError, publicErrorMessage } from '@/lib/logger';
 import { rejectIfRequestTooLarge } from '@/lib/api/hardening';
@@ -131,7 +131,7 @@ export async function POST(request: NextRequest) {
     }
 
     const openai = new OpenAI({ apiKey });
-    const params = normalizeChatCompletionParameters(model, parameters);
+    const params = buildChatCompletionParameters(provider, model, parameters);
 
     if (stream) {
       const encoder = new TextEncoder();

@@ -1,4 +1,6 @@
+import { buildChatCompletionRequest } from '@/lib/ai/chatRequestBuilder';
 import { AI_PROVIDER, PRIMARY_MODEL } from '@/lib/ai/modelConfig';
+import { CHAT_REQUEST_PROFILES } from '@/lib/ai/requestProfiles';
 import type {
   TaskExecutionAiClient,
   TaskExecutionAiMessage,
@@ -147,13 +149,13 @@ export function createBenchmarkApiRouteAiClient(
         response = await fetchImpl(endpoint, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
+          body: JSON.stringify(buildChatCompletionRequest({
             provider,
             model,
             messages,
             stream: false,
-            parameters: { temperature: 0.2 },
-          }),
+            parameters: CHAT_REQUEST_PROFILES.liveBenchmark,
+          })),
           signal: requestOptions.signal,
         });
       } catch (error) {
@@ -202,4 +204,3 @@ export function isBenchmarkProviderError(
 ): error is BenchmarkProviderError {
   return error instanceof BenchmarkProviderError;
 }
-

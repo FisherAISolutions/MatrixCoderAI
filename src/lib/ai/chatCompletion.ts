@@ -1,4 +1,5 @@
 import { callAIEndpoint } from './aiClient';
+import { buildChatCompletionRequest } from './chatRequestBuilder';
 import { createAbortError, isAbortLikeError } from '@/lib/generation/cancellation';
 
 const ENDPOINT = '/api/ai/chat-completion';
@@ -10,13 +11,13 @@ export async function getChatCompletion(
   parameters: object = {},
   options: { signal?: AbortSignal } = {}
 ) {
-  return callAIEndpoint(ENDPOINT, {
+  return callAIEndpoint(ENDPOINT, buildChatCompletionRequest({
     provider,
     model,
     messages,
     stream: false,
     parameters,
-  }, options);
+  }), options);
 }
 
 export async function getStreamingChatCompletion(
@@ -35,7 +36,13 @@ export async function getStreamingChatCompletion(
     const response = await fetch(ENDPOINT, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ provider, model, messages, stream: true, parameters }),
+      body: JSON.stringify(buildChatCompletionRequest({
+        provider,
+        model,
+        messages,
+        stream: true,
+        parameters,
+      })),
       signal,
     });
 
