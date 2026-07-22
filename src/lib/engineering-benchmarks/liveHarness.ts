@@ -13,12 +13,21 @@ import {
 import { flattenTree } from '@/lib/repo/heuristics';
 import {
   executeNextTask,
-  createTaskValidationRunner,
   type TaskExecutionAiClient,
   type TaskExecutionValidationRunner,
 } from '@/lib/task-execution';
 import { cancelTaskGraph, getNextReadyTask } from '@/lib/task-graph';
 import { getEngineeringAcceptanceFixture } from './fixtures';
+import {
+  createNodeCliTaskValidationRunner,
+  type NodeValidationCommandRunner,
+} from './nodeValidation';
+import {
+  createIsolatedBenchmarkWorkspace,
+  prepareIsolatedBenchmarkWorkspace,
+  readGeneratedFilesFromWorkspace,
+  writeGeneratedFilesToWorkspace,
+} from './nodeWorkspace';
 import {
   createBenchmarkApiRouteAiClient,
   isBenchmarkProviderError,
@@ -55,6 +64,8 @@ export interface LiveEngineeringBenchmarkOptions {
   appBaseUrl?: string;
   providerFetchImpl?: typeof fetch;
   validationRunner?: TaskExecutionValidationRunner;
+  nodeValidationCommandRunner?: NodeValidationCommandRunner;
+  isolatedWorkspaceRootDir?: string;
   signal?: AbortSignal;
   now?: Date;
   onProgress?: (result: {
@@ -140,6 +151,7 @@ function createEmptyResult(options: {
   stopReason: LiveEngineeringBenchmarkStopReason;
   isolatedProjectId: string;
   isolatedWorkspaceId: string;
+  isolatedWorkspacePath: string;
   errors?: string[];
   warnings?: string[];
   providerErrorKind?: BenchmarkProviderErrorKind;
@@ -154,6 +166,7 @@ function createEmptyResult(options: {
     durationMs: Math.max(0, options.endedAt.getTime() - options.startedAt.getTime()),
     isolatedProjectId: options.isolatedProjectId,
     isolatedWorkspaceId: options.isolatedWorkspaceId,
+    isolatedWorkspacePath: options.isolatedWorkspacePath,
     taskCount: options.fixture.taskGraph.tasks.length,
     taskStatuses: taskStatuses(options.fixture),
     taskResults: [],
@@ -271,6 +284,11 @@ export async function runLiveEngineeringBenchmark(
   const fixture = getEngineeringAcceptanceFixture(options.fixtureId);
   const isolatedProjectId = `${options.fixtureId}-${runId}-project`;
   const isolatedWorkspaceId = `${options.fixtureId}-${runId}-workspace`;
+  const isolatedWorkspace = createIsolatedBenchmarkWorkspace({
+    runId,
+    fixtureId: options.fixtureId,
+    rootDir: options.isolatedWorkspaceRootDir,
+  });
 
   if (!fixture) {
     return createEmptyResult({
@@ -281,6 +299,7 @@ export async function runLiveEngineeringBenchmark(
       stopReason: 'safety-refused',
       isolatedProjectId,
       isolatedWorkspaceId,
+      isolatedWorkspacePath: isolatedWorkspace.path,
       errors: [`Unknown benchmark fixture: ${options.fixtureId}`],
     });
   }
@@ -300,6 +319,7 @@ export async function runLiveEngineeringBenchmark(
       stopReason: 'safety-refused',
       isolatedProjectId,
       isolatedWorkspaceId,
+      isolatedWorkspacePath: isolatedWorkspace.path,
       errors: safety.errors,
     });
   }
@@ -329,6 +349,7 @@ export async function runLiveEngineeringBenchmark(
             : 'provider-error',
         isolatedProjectId,
         isolatedWorkspaceId,
+        isolatedWorkspacePath: isolatedWorkspace.path,
         errors: [redactedError(error)],
         providerErrorKind: providerError?.kind,
       });
@@ -382,11 +403,14 @@ export async function runLiveEngineeringBenchmark(
 
   const validationRunner =
     options.validationRunner ??
-    createTaskValidationRunner({
+    createNodeCliTaskValidationRunner({
+      workspacePath: isolatedWorkspace.path,
       requirements: fixture.prompt,
+      commandRunner: options.nodeValidationCommandRunner,
     });
 
   try {
+    await prepareIsolatedBenchmarkWorkspace(isolatedWorkspace.path);
     while (taskResults.length < limits.maxTasks) {
       const now = currentTime();
       if (options.signal?.aborted) {
@@ -441,6 +465,10 @@ export async function runLiveEngineeringBenchmark(
 
       graph = result.graph;
       files = result.files;
+      await writeGeneratedFilesToWorkspace({
+        files,
+        workspacePath: isolatedWorkspace.path,
+      });
       repositoryModel = refreshRepositoryModel(repositoryModel, {
         files,
         projectId: isolatedProjectId,
@@ -545,6 +573,10 @@ export async function runLiveEngineeringBenchmark(
     activeRunId = null;
   }
 
+  const persistedFiles = await readGeneratedFilesFromWorkspace(isolatedWorkspace.path);
+  if (persistedFiles.length > 0 || files.length === 0) {
+    files = persistedFiles;
+  }
   const finalRepositoryModel = refreshRepositoryModel(repositoryModel, {
     files,
     projectId: isolatedProjectId,
@@ -574,6 +606,7 @@ export async function runLiveEngineeringBenchmark(
     durationMs: Math.max(0, endedAt.getTime() - startedAt.getTime()),
     isolatedProjectId,
     isolatedWorkspaceId,
+    isolatedWorkspacePath: isolatedWorkspace.path,
     taskCount: graph.tasks.length,
     taskStatuses: taskStatuses(fixture, graph),
     taskResults,
@@ -600,6 +633,7 @@ export async function runLiveEngineeringBenchmark(
     stopReason,
     warnings: [
       `Isolated benchmark workspace: ${isolatedWorkspaceId}`,
+      `Isolated benchmark workspace path: ${isolatedWorkspace.path}`,
       `Engineering memory captured ${memory.taskExecutionHistory.length} task event(s).`,
     ],
     errors: lastError ? [lastError] : [],

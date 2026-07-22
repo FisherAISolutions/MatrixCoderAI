@@ -931,13 +931,18 @@ function summaryForReport(
         : manual.length > 0
           ? 'manual review required'
           : 'ready';
+  const builtRoutes = satisfied.flatMap((item) =>
+    item.relatedRoutes.map((route) => `Route ${route}`)
+  );
+  const builtModels = satisfied.flatMap((item) =>
+    item.relatedModels.map((model) => `Model ${model}`)
+  );
+  const builtApis = satisfied.flatMap((item) =>
+    item.relatedApis.map((api) => `API ${api}`)
+  );
 
   return {
-    whatWasBuilt: unique([
-      ...contract.routes.map((route) => `Route ${route.path}`),
-      ...contract.dataModels.map((model) => `Model ${model.name}`),
-      ...contract.apis.map((api) => `API ${api.path}`),
-    ]),
+    whatWasBuilt: unique([...builtRoutes, ...builtModels, ...builtApis]),
     whatPassed: satisfied.map((item) => item.requirementDescription),
     whatRemains: remaining.map(
       (item) => item.missingImplementation ?? item.requirementDescription

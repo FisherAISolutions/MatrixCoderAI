@@ -136,6 +136,7 @@ export interface LiveEngineeringBenchmarkResult {
   durationMs: number;
   isolatedProjectId: string;
   isolatedWorkspaceId: string;
+  isolatedWorkspacePath: string;
   taskCount: number;
   taskStatuses: Record<string, number>;
   taskResults: LiveEngineeringBenchmarkTaskResult[];

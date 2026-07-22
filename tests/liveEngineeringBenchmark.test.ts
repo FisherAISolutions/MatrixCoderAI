@@ -1,16 +1,22 @@
 import { describe, expect, it } from 'vitest';
+import { promises as fs } from 'fs';
+import os from 'os';
+import path from 'path';
 
 import type { FileNode } from '@/app/chat-workspace/components/types';
 import {
   canStartLiveEngineeringBenchmark,
   createBenchmarkApiRouteAiClient,
+  createNodeCliTaskValidationRunner,
   DEFAULT_LIVE_ENGINEERING_BENCHMARK_LIMITS,
   getEngineeringAcceptanceFixture,
   LIVE_ENGINEERING_BENCHMARK_CONFIRMATION,
+  readGeneratedFilesFromWorkspace,
   resolveBenchmarkProviderEndpoint,
   runLiveEngineeringBenchmark,
+  type NodeValidationCommandRunner,
 } from '@/lib/engineering-benchmarks';
-import type { RepositoryModel } from '@/lib/repository-model';
+import { createRepositoryModel, type RepositoryModel } from '@/lib/repository-model';
 import type { TaskGraphTask } from '@/lib/task-graph';
 import type {
   TaskExecutionAiClient,
@@ -159,6 +165,30 @@ function validationRunner(
   };
 }
 
+async function createTempBenchmarkRoot(): Promise<string> {
+  return fs.mkdtemp(path.join(os.tmpdir(), 'matrix-benchmark-test-'));
+}
+
+function successfulCommandRunner(
+  onCommand?: (command: { command: string; args: string[]; cwd: string }) => Promise<void> | void
+): NodeValidationCommandRunner & { calls: string[] } {
+  const calls: string[] = [];
+  return Object.assign(
+    async (command: { command: string; args: string[]; cwd: string }) => {
+      calls.push([command.command, ...command.args].join(' '));
+      await onCommand?.(command);
+      return {
+        status: 'ok' as const,
+        exitCode: 0,
+        stdout: 'ok',
+        stderr: '',
+        durationMs: 1,
+      };
+    },
+    { calls }
+  );
+}
+
 describe('live engineering benchmark harness', () => {
   it('rejects relative app URLs in CLI provider mode', () => {
     expect(() => resolveBenchmarkProviderEndpoint('/api/ai/chat-completion')).toThrow(
@@ -237,6 +267,168 @@ describe('live engineering benchmark harness', () => {
 
     expect(result.stopReason).toBe('completed');
     expect(result.aiRequestCount).toBe(1);
+  });
+
+  it('uses the Node CLI validation adapter when no custom validation runner is provided', async () => {
+    const tempRoot = await createTempBenchmarkRoot();
+    const commands = successfulCommandRunner();
+
+    const result = await runLiveEngineeringBenchmark({
+      fixtureId: 'simple-business-website',
+      confirmation: LIVE_ENGINEERING_BENCHMARK_CONFIRMATION,
+      aiClient: fakeAiClient(),
+      nodeValidationCommandRunner: commands,
+      isolatedWorkspaceRootDir: tempRoot,
+      limits: { maxTasks: 4, maxAiRequests: 8 },
+      now: new Date('2026-07-21T00:00:00.000Z'),
+    });
+
+    expect(result.isolatedWorkspacePath).toContain(tempRoot);
+    expect(result.warnings.join('\n')).toContain('Isolated benchmark workspace path:');
+    expect(commands.calls).toContain('npm install --no-audit --no-fund');
+    expect(commands.calls).toContain('npm run type-check');
+    expect(result.validationResults.join('\n')).not.toMatch(/WebContainer is browser-only/i);
+  });
+
+  it('persists generated files in the isolated workspace between tasks', async () => {
+    const tempRoot = await createTempBenchmarkRoot();
+    const result = await runLiveEngineeringBenchmark({
+      fixtureId: 'simple-business-website',
+      confirmation: LIVE_ENGINEERING_BENCHMARK_CONFIRMATION,
+      aiClient: fakeAiClient(),
+      nodeValidationCommandRunner: successfulCommandRunner(),
+      isolatedWorkspaceRootDir: tempRoot,
+      limits: { maxTasks: 2, maxAiRequests: 5 },
+      now: new Date('2026-07-21T00:00:00.000Z'),
+    });
+    const diskFiles = await readGeneratedFilesFromWorkspace(result.isolatedWorkspacePath);
+
+    expect(diskFiles.map((file) => file.path)).toEqual(
+      expect.arrayContaining(result.filesCreated)
+    );
+    expect(result.isolatedWorkspacePath).not.toBe(process.cwd());
+  });
+
+  it('writes generated files before Node validation commands run', async () => {
+    const tempRoot = await createTempBenchmarkRoot();
+    const workspacePath = path.join(tempRoot, 'single-task');
+    const task = {
+      ...getEngineeringAcceptanceFixture('simple-business-website')!.taskGraph.tasks[0],
+      title: 'Type-check generated files',
+      description: 'Validate generated files with TypeScript.',
+      category: 'frontend',
+      assignedDiscipline: 'frontend',
+      expectedFiles: ['package.json', 'tsconfig.json', 'src/app/page.tsx'],
+      expectedOutputs: ['TypeScript passes.'],
+      validationCommands: ['npm run type-check'],
+      acceptanceChecks: ['TypeScript validation passes.'],
+    } as TaskGraphTask;
+    const files = task.expectedFiles.map((filePath) => ({
+      id: filePath,
+      name: filePath.split('/').pop() ?? filePath,
+      path: filePath,
+      type: 'file' as const,
+      content: contentFor(filePath),
+    }));
+    const runner = createNodeCliTaskValidationRunner({
+      workspacePath,
+      commandRunner: successfulCommandRunner(async (command) => {
+        await expect(fs.stat(path.join(command.cwd, 'package.json'))).resolves.toBeTruthy();
+        await expect(fs.stat(path.join(command.cwd, 'src/app/page.tsx'))).resolves.toBeTruthy();
+      }),
+    });
+
+    const result = await runner.validate(files, task, createRepositoryModel({ files }), {
+      runId: 'run',
+      operationId: 'op',
+    });
+
+    expect(result.outcome).toBe('passed');
+  });
+
+  it('keeps browser-only runtime smoke checks blocked in Node CLI mode', async () => {
+    const tempRoot = await createTempBenchmarkRoot();
+    const workspacePath = path.join(tempRoot, 'runtime-smoke');
+    const task = {
+      ...getEngineeringAcceptanceFixture('simple-business-website')!.taskGraph.tasks[0],
+      title: 'Type-check generated files',
+      description: 'Validate generated files with TypeScript.',
+      category: 'frontend',
+      assignedDiscipline: 'frontend',
+      expectedFiles: ['package.json', 'tsconfig.json', 'src/app/page.tsx'],
+      expectedOutputs: ['TypeScript passes.'],
+      validationCommands: ['npm run type-check'],
+      acceptanceChecks: ['Route renders in runtime smoke.'],
+    } as TaskGraphTask;
+    const files = task.expectedFiles.map((filePath) => ({
+      id: filePath,
+      name: filePath.split('/').pop() ?? filePath,
+      path: filePath,
+      type: 'file' as const,
+      content: contentFor(filePath),
+    }));
+    const runner = createNodeCliTaskValidationRunner({
+      workspacePath,
+      commandRunner: successfulCommandRunner(),
+    });
+
+    const result = await runner.validate(files, task, createRepositoryModel({ files }), {
+      runId: 'run',
+      operationId: 'op',
+    });
+
+    expect(result.outcome).toBe('blocked by environment');
+    expect(result.summary).toMatch(/Runtime smoke requires a browser\/WebContainer/i);
+  });
+
+  it('classifies timed-out Node commands as validation failures with evidence', async () => {
+    const tempRoot = await createTempBenchmarkRoot();
+    const workspacePath = path.join(tempRoot, 'timeout');
+    const task = {
+      ...getEngineeringAcceptanceFixture('simple-business-website')!.taskGraph.tasks[0],
+      title: 'Type-check generated files',
+      description: 'Validate generated files with TypeScript.',
+      category: 'frontend',
+      assignedDiscipline: 'frontend',
+      expectedFiles: ['package.json', 'tsconfig.json', 'src/app/page.tsx'],
+      expectedOutputs: ['TypeScript passes.'],
+      validationCommands: ['npm run type-check'],
+      acceptanceChecks: ['TypeScript validation times out.'],
+    } as TaskGraphTask;
+    const files = task.expectedFiles.map((filePath) => ({
+      id: filePath,
+      name: filePath.split('/').pop() ?? filePath,
+      path: filePath,
+      type: 'file' as const,
+      content: contentFor(filePath),
+    }));
+    const runner = createNodeCliTaskValidationRunner({
+      workspacePath,
+      commandTimeoutMs: 1,
+      installTimeoutMs: 1,
+      commandRunner: async () =>
+        new Promise((resolve) =>
+          setTimeout(
+            () =>
+              resolve({
+                status: 'ok' as const,
+                exitCode: 0,
+                stdout: 'late',
+                stderr: '',
+                durationMs: 50,
+              }),
+            50
+          )
+        ),
+    });
+
+    const result = await runner.validate(files, task, createRepositoryModel({ files }), {
+      runId: 'run',
+      operationId: 'op',
+    });
+
+    expect(result.ok).toBe(false);
+    expect(result.commands.some((command) => /timed out/i.test(command.output ?? ''))).toBe(true);
   });
 
   it('builds provider requests through a validated absolute app URL', async () => {

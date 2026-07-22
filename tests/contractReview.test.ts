@@ -309,6 +309,55 @@ describe('contract-based final review', () => {
     );
   });
 
+  it('does not report planned routes or models as built without repository evidence', () => {
+    const buildContract = contract({
+      routes: [
+        { path: '/', label: 'Home', required: true, source: 'blueprint' },
+        { path: '/services', label: 'Services', required: true, source: 'blueprint' },
+      ],
+      dataModels: [
+        { name: 'ContactInquiry', fields: ['name', 'email'], source: 'blueprint' },
+      ],
+      requirements: [
+        requirement('route', '/', 'Home route must exist.'),
+        requirement('route', '/services', 'Services route must exist.'),
+        requirement('data-model', 'ContactInquiry', 'Contact inquiry model exists.'),
+      ],
+    });
+    const report = createContractReviewReport({
+      contract: buildContract,
+      repositoryModel: createRepositoryModel({ files: [] }),
+      files: [],
+      validationResult: null,
+    });
+
+    expect(report.summary.whatWasBuilt).toEqual([]);
+  });
+
+  it('reports only satisfied repository artifacts as built', () => {
+    const files = [
+      file('src/app/page.tsx', 'export default function Page() { return <main>Home</main>; }'),
+    ];
+    const buildContract = contract({
+      routes: [
+        { path: '/', label: 'Home', required: true, source: 'blueprint' },
+        { path: '/services', label: 'Services', required: true, source: 'blueprint' },
+      ],
+      requirements: [
+        requirement('route', '/', 'Home route must exist.'),
+        requirement('route', '/services', 'Services route must exist.'),
+      ],
+    });
+    const report = createContractReviewReport({
+      contract: buildContract,
+      repositoryModel: createRepositoryModel({ files }),
+      files,
+      validationResult: null,
+    });
+
+    expect(report.summary.whatWasBuilt).toEqual(['Route /']);
+  });
+
   it('allows final completion only when build and every required contract item pass', () => {
     const files = [
       file('src/app/page.tsx', 'export default function Page() { return <main>Home</main>; }'),
