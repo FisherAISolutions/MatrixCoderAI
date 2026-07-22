@@ -456,20 +456,41 @@ export function markGuidedBuildTaskForRetry(
 ): TaskGraph {
   const task = graph.tasks.find((item) => item.id === taskId);
   if (!task || !canRetry(task)) return graph;
-  return updateTask(
-    graph,
-    taskId,
-    (current, nowIso) => ({
-      ...current,
-      status: 'ready',
-      blockedReason: undefined,
-      failureClassification: 'none',
-      updatedAt: nowIso,
-      completedAt: undefined,
-      resumable: true,
+  const nowIso = now.toISOString();
+  return {
+    ...graph,
+    updatedAt: nowIso,
+    tasks: graph.tasks.map((current) => {
+      if (current.id === taskId) {
+        return {
+          ...current,
+          status: 'ready',
+          blockedReason: undefined,
+          failureClassification: 'none',
+          updatedAt: nowIso,
+          completedAt: undefined,
+          resumable: true,
+        };
+      }
+
+      if (
+        current.status === 'blocked' &&
+        current.dependencies.includes(taskId)
+      ) {
+        return {
+          ...current,
+          status: 'pending',
+          blockedReason: undefined,
+          failureClassification: 'none',
+          updatedAt: nowIso,
+          completedAt: undefined,
+          resumable: true,
+        };
+      }
+
+      return current;
     }),
-    now
-  );
+  };
 }
 
 export function markGuidedBuildTaskForResume(

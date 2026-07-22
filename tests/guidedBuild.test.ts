@@ -228,6 +228,34 @@ describe('guided build state', () => {
     expect(next.tasks.find((item) => item.id === 'task-data')?.status).toBe('passed');
   });
 
+  it('reopens blocked direct dependents when their failed dependency is retried', () => {
+    const original = graph([
+      task({
+        status: 'failed',
+        retryCount: 1,
+        maximumRetryCount: 2,
+        blockedReason: 'Route failed.',
+      }),
+      task({
+        id: 'task-dependent',
+        title: 'Validate dashboard workflow',
+        status: 'blocked',
+        dependencies: ['task-frontend-dashboard'],
+        blockedReason: 'Blocked by failed dependency task-frontend-dashboard.',
+      }),
+    ]);
+
+    const next = markGuidedBuildTaskForRetry(
+      original,
+      'task-frontend-dashboard',
+      new Date(now)
+    );
+
+    expect(next.tasks[0].status).toBe('ready');
+    expect(next.tasks[1].status).toBe('pending');
+    expect(next.tasks[1].blockedReason).toBeUndefined();
+  });
+
   it('resumes a recoverable interrupted task', () => {
     const original = graph([
       task({

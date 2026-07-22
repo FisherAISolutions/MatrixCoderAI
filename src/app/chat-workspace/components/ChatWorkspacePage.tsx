@@ -34,6 +34,8 @@ import {
   loadMatrixProjectWorkspaceSnapshot,
   readMatrixProjectOpenHandoff,
 } from '@/lib/projects/projectStore';
+import { flattenTree } from '@/lib/repo/heuristics';
+import { useTaskDrivenBuild } from '../hooks/useTaskDrivenBuild';
 
 // Helper function to build file tree from flat file list
 function buildFileTree(files: any[]): FileNode[] {
@@ -774,6 +776,60 @@ export default function ChatWorkspacePage() {
     [activeFile, effectiveSessionId, fileTree]
   );
 
+  const applyTaskDrivenFiles = useCallback(
+    async (nextFiles: FileNode[]) => {
+      setFileTree(nextFiles);
+      setActiveFile((current) =>
+        current ? findFileByPath(nextFiles, current.path) : current
+      );
+
+      const persistentFiles = flattenTree(nextFiles)
+        .filter(
+          (file): file is FileNode & { content: string } =>
+            file.type === 'file' && typeof file.content === 'string'
+        )
+        .map((file) => ({
+          path: file.path,
+          name: file.name,
+          content: file.content,
+          language: file.language ?? 'unknown',
+        }));
+
+      if (persistentFiles.length && effectiveSessionId) {
+        const result = await bulkSaveFiles(effectiveSessionId, persistentFiles);
+        if (result.failed > 0 && !effectiveSessionId.startsWith('demo-')) {
+          pushTerminalLog({
+            level: 'error',
+            text: `[task-build] ${result.failed} generated files could not be persisted to the active workspace session. The project checkpoint still preserves the in-memory files.\n`,
+            timestamp: Date.now(),
+          });
+        }
+      }
+    },
+    [effectiveSessionId]
+  );
+
+  const taskDrivenBuild = useTaskDrivenBuild({
+    sessionId: effectiveSessionId,
+    projectName: session?.title,
+    files: fileTree,
+    messages,
+    activeFilePath: activeFile?.path,
+    onApplyFiles: applyTaskDrivenFiles,
+    onStatusChange: setActivityStatus,
+    onActiveChange: (active) => {
+      setIsStreaming(active);
+      setActiveAgent(active ? 'coding' : null);
+    },
+    onSystemMessage: (content) =>
+      addMessage({
+        id: `task-build-${safeUUID()}`,
+        role: 'system',
+        content,
+        timestamp: new Date().toISOString(),
+      }),
+  });
+
   // Get memory stage recommendation
   const getMemoryStageRecommendation = (messageCount: number): MemoryStage => {
     if (messageCount > 100) return 'storage';
@@ -1245,6 +1301,7 @@ export default function ChatWorkspacePage() {
   onSelectFile={setActiveFile}
   onSaveFinalAssistantMessage={persistAssistantMessage}
   initialPrompt={initialStylePrompt}
+  taskDrivenBuild={taskDrivenBuild}
 />
           {/* 2026-01 regression fix â€” workspace-level <FileViewer/>
            *  removed. It was wrapped in `<div className="relative">` with

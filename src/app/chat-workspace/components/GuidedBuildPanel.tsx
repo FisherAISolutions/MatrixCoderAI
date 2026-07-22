@@ -3,37 +3,30 @@
 import { useEffect, useMemo, useState } from 'react';
 import {
   AlertTriangle,
+  CheckCircle2,
   ChevronDown,
   ChevronUp,
   Pause,
+  Play,
   RotateCcw,
   SkipForward,
 } from 'lucide-react';
-import toast from 'react-hot-toast';
-
 import {
-  cancelGuidedBuild,
   createGuidedBuildState,
-  markGuidedBuildTaskForResume,
-  markGuidedBuildTaskForRetry,
-  markGuidedBuildTaskSkipped,
   type GuidedBuildState,
 } from '@/lib/guided-build';
 import {
   loadMatrixProjectWorkspaceContext,
-  loadMatrixProjectWorkspaceSnapshot,
-  saveMatrixProjectWorkspaceContext,
-  saveMatrixProjectWorkspaceSnapshot,
   type MatrixProjectWorkspaceContext,
 } from '@/lib/projects/projectStore';
-import type { EngineeringMemory } from '@/lib/engineering-memory';
-import type { TaskGraph } from '@/lib/task-graph';
+import type { WorkspaceTaskDrivenBuildController } from '../hooks/useTaskDrivenBuild';
 
 type ViewMode = 'simple' | 'technical';
 
 interface Props {
   sessionId: string;
   isStreaming: boolean;
+  controller: WorkspaceTaskDrivenBuildController;
 }
 
 function statusClass(status: string): string {
@@ -52,24 +45,11 @@ function statusClass(status: string): string {
   return 'border-matrix-border text-matrix-green-muted bg-matrix-panel/60';
 }
 
-function updateMemoryWithGraph(
-  memory: EngineeringMemory | undefined,
-  graph: TaskGraph,
-  status?: EngineeringMemory['overallBuildStatus']
-): EngineeringMemory | undefined {
-  if (!memory) return undefined;
-  return {
-    ...memory,
-    taskGraph: graph,
-    overallBuildStatus: status ?? memory.overallBuildStatus,
-    resumableTaskId:
-      graph.tasks.find((task) => task.status === 'recoverable-failure')?.id ??
-      memory.resumableTaskId,
-    updatedAt: graph.updatedAt,
-  };
-}
-
-export default function GuidedBuildPanel({ sessionId, isStreaming }: Props) {
+export default function GuidedBuildPanel({
+  sessionId,
+  isStreaming,
+  controller,
+}: Props) {
   const [context, setContext] = useState<MatrixProjectWorkspaceContext | null>(null);
   const [expanded, setExpanded] = useState(false);
   const [viewMode, setViewMode] = useState<ViewMode>('simple');
@@ -77,7 +57,7 @@ export default function GuidedBuildPanel({ sessionId, isStreaming }: Props) {
   useEffect(() => {
     if (typeof window === 'undefined') return;
     setContext(loadMatrixProjectWorkspaceContext(window.localStorage));
-  }, [sessionId]);
+  }, [controller.revision, sessionId]);
 
   const guidedState: GuidedBuildState | null = useMemo(() => {
     if (!context?.taskGraph && !context?.engineeringMemory?.taskGraph) return null;
@@ -89,35 +69,6 @@ export default function GuidedBuildPanel({ sessionId, isStreaming }: Props) {
     });
   }, [context]);
 
-  function persistGraph(
-    nextGraph: TaskGraph,
-    message: string,
-    status?: EngineeringMemory['overallBuildStatus']
-  ) {
-    if (!context || typeof window === 'undefined') return;
-    const nextContext: MatrixProjectWorkspaceContext = {
-      ...context,
-      taskGraph: nextGraph,
-      engineeringMemory: updateMemoryWithGraph(
-        context.engineeringMemory,
-        nextGraph,
-        status
-      ),
-    };
-    saveMatrixProjectWorkspaceContext(window.localStorage, nextContext);
-    const snapshot = loadMatrixProjectWorkspaceSnapshot(window.localStorage);
-    if (snapshot) {
-      saveMatrixProjectWorkspaceSnapshot(window.localStorage, {
-        ...snapshot,
-        taskGraph: nextGraph,
-        engineeringMemory: nextContext.engineeringMemory,
-        updatedAt: nextGraph.updatedAt,
-      });
-    }
-    setContext(nextContext);
-    toast.success(message);
-  }
-
   const graph = context?.taskGraph ?? context?.engineeringMemory?.taskGraph;
   const currentMilestone = guidedState?.milestones.find(
     (milestone) => milestone.id === guidedState.currentMilestoneId
@@ -127,6 +78,18 @@ export default function GuidedBuildPanel({ sessionId, isStreaming }: Props) {
         (detail) => detail.taskId === currentMilestone.primaryTaskId
       )
     : undefined;
+  const contractReview = context?.contractReviewReport;
+  const reviewCounts = contractReview
+    ? contractReview.requirementReports.reduce(
+        (counts, requirement) => {
+          if (requirement.status === 'satisfied') counts.satisfied += 1;
+          else if (requirement.status === 'blocked') counts.blocked += 1;
+          else if (requirement.required) counts.remaining += 1;
+          return counts;
+        },
+        { satisfied: 0, remaining: 0, blocked: 0 }
+      )
+    : null;
 
   if (!guidedState || !graph) return null;
 
@@ -195,17 +158,21 @@ export default function GuidedBuildPanel({ sessionId, isStreaming }: Props) {
             </button>
 
             <div className="ml-auto flex flex-wrap gap-2">
+              {!controller.active && controller.available ? (
+                <button
+                  type="button"
+                  className="flex items-center gap-1 rounded-sm border border-matrix-green/70 px-3 py-1 font-mono text-xs uppercase text-matrix-green"
+                  onClick={() => void controller.start()}
+                >
+                  <Play size={12} />
+                  Start build
+                </button>
+              ) : null}
               {actionTaskId && currentMilestone?.canRetry ? (
                 <button
                   type="button"
                   className="flex items-center gap-1 rounded-sm border border-amber-300/60 px-3 py-1 font-mono text-xs uppercase text-amber-100"
-                  onClick={() =>
-                    persistGraph(
-                      markGuidedBuildTaskForRetry(graph, actionTaskId),
-                      'Milestone marked ready for retry.',
-                      'recoverable'
-                    )
-                  }
+                  onClick={() => void controller.retryTask(actionTaskId)}
                 >
                   <RotateCcw size={12} />
                   Retry
@@ -215,13 +182,7 @@ export default function GuidedBuildPanel({ sessionId, isStreaming }: Props) {
                 <button
                   type="button"
                   className="flex items-center gap-1 rounded-sm border border-cyan-300/60 px-3 py-1 font-mono text-xs uppercase text-cyan-100"
-                  onClick={() =>
-                    persistGraph(
-                      markGuidedBuildTaskForResume(graph, actionTaskId),
-                      'Milestone marked ready to resume.',
-                      'in-progress'
-                    )
-                  }
+                  onClick={() => void controller.resume(actionTaskId)}
                 >
                   <RotateCcw size={12} />
                   Resume
@@ -231,12 +192,7 @@ export default function GuidedBuildPanel({ sessionId, isStreaming }: Props) {
                 <button
                   type="button"
                   className="flex items-center gap-1 rounded-sm border border-matrix-border px-3 py-1 font-mono text-xs uppercase text-matrix-green-muted"
-                  onClick={() =>
-                    persistGraph(
-                      markGuidedBuildTaskSkipped(graph, actionTaskId),
-                      'Optional milestone skipped.'
-                    )
-                  }
+                  onClick={() => void controller.skipOptionalTask(actionTaskId)}
                 >
                   <SkipForward size={12} />
                   Skip optional
@@ -246,19 +202,9 @@ export default function GuidedBuildPanel({ sessionId, isStreaming }: Props) {
                 <button
                   type="button"
                   className="flex items-center gap-1 rounded-sm border border-rose-300/60 px-3 py-1 font-mono text-xs uppercase text-rose-100 disabled:opacity-50"
-                  disabled={isStreaming}
-                  title={
-                    isStreaming
-                      ? 'Use the main Stop button while generation is actively streaming.'
-                      : 'Pause pending guided milestones.'
-                  }
-                  onClick={() =>
-                    persistGraph(
-                      cancelGuidedBuild(graph),
-                      'Guided build paused.',
-                      'cancelled'
-                    )
-                  }
+                  disabled={!controller.active && isStreaming}
+                  title="Pause the active guided build after preserving completed work."
+                  onClick={() => controller.cancel()}
                 >
                   <Pause size={12} />
                   Pause
@@ -266,6 +212,44 @@ export default function GuidedBuildPanel({ sessionId, isStreaming }: Props) {
               ) : null}
             </div>
           </div>
+
+          <p className="font-mono text-xs text-matrix-green-muted">
+            {controller.statusMessage}
+          </p>
+
+          {contractReview && reviewCounts ? (
+            <div
+              className={`rounded-sm border p-3 font-mono text-xs ${
+                contractReview.completionAllowed
+                  ? 'border-emerald-400/50 bg-emerald-500/10 text-emerald-100'
+                  : 'border-amber-300/50 bg-amber-500/10 text-amber-100'
+              }`}
+              data-testid="guided-build-contract-review"
+            >
+              <div className="flex items-center gap-2">
+                {contractReview.completionAllowed ? (
+                  <CheckCircle2 size={14} />
+                ) : (
+                  <AlertTriangle size={14} />
+                )}
+                <strong>
+                  {contractReview.completionAllowed
+                    ? 'Build Contract satisfied'
+                    : 'Final review found remaining work'}
+                </strong>
+              </div>
+              <p className="mt-2">
+                {reviewCounts.satisfied} satisfied, {reviewCounts.remaining}{' '}
+                required item(s) remaining, {reviewCounts.blocked} blocked.
+              </p>
+              {!contractReview.completionAllowed &&
+              contractReview.summary.whatRemains[0] ? (
+                <p className="mt-1 text-current/80">
+                  Next: {contractReview.summary.whatRemains[0]}
+                </p>
+              ) : null}
+            </div>
+          ) : null}
 
           {viewMode === 'simple' ? (
             <div className="grid gap-2 lg:grid-cols-2">

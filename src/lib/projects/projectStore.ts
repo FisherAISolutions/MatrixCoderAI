@@ -39,6 +39,21 @@ import {
   type EngineeringMemory,
 } from '@/lib/engineering-memory';
 import {
+  deserializeTaskExecutionState,
+  serializeTaskExecutionState,
+  type TaskExecutionState,
+} from '@/lib/task-execution';
+import {
+  deserializeBuildOrchestrationState,
+  serializeBuildOrchestrationState,
+  type BuildOrchestrationState,
+} from '@/lib/build-orchestration';
+import {
+  deserializeContractReviewReport,
+  serializeContractReviewReport,
+  type ContractReviewReport,
+} from '@/lib/contract-review';
+import {
   cloneIntelligenceCoreForProject,
   deserializeIntelligenceCore,
   serializeIntelligenceCore,
@@ -114,6 +129,9 @@ export interface MatrixProject {
   taskGraph?: TaskGraph;
   repositoryModel?: RepositoryModel;
   engineeringMemory?: EngineeringMemory;
+  taskExecutionState?: TaskExecutionState;
+  buildOrchestrationState?: BuildOrchestrationState;
+  contractReviewReport?: ContractReviewReport;
   intelligenceCore?: MatrixIntelligenceCore;
   changePlan?: BuildChangePlan;
   validationStatus: MatrixProjectValidationStatus;
@@ -137,6 +155,9 @@ export interface MatrixProjectDraft {
   taskGraph?: TaskGraph;
   repositoryModel?: RepositoryModel;
   engineeringMemory?: EngineeringMemory;
+  taskExecutionState?: TaskExecutionState;
+  buildOrchestrationState?: BuildOrchestrationState;
+  contractReviewReport?: ContractReviewReport;
   intelligenceCore?: MatrixIntelligenceCore;
   changePlan?: BuildChangePlan;
   validationStatus?: MatrixProjectValidationStatus;
@@ -155,6 +176,9 @@ export interface MatrixProjectWorkspaceContext {
   taskGraph?: TaskGraph;
   repositoryModel?: RepositoryModel;
   engineeringMemory?: EngineeringMemory;
+  taskExecutionState?: TaskExecutionState;
+  buildOrchestrationState?: BuildOrchestrationState;
+  contractReviewReport?: ContractReviewReport;
   intelligenceCore?: MatrixIntelligenceCore;
   changePlan?: BuildChangePlan;
 }
@@ -173,6 +197,9 @@ export interface MatrixProjectWorkspaceSnapshot {
   taskGraph?: TaskGraph;
   repositoryModel?: RepositoryModel;
   engineeringMemory?: EngineeringMemory;
+  taskExecutionState?: TaskExecutionState;
+  buildOrchestrationState?: BuildOrchestrationState;
+  contractReviewReport?: ContractReviewReport;
   intelligenceCore?: MatrixIntelligenceCore;
   changePlan?: BuildChangePlan;
   validationStatus: MatrixProjectValidationStatus;
@@ -381,6 +408,20 @@ function normalizeProjectPayload(
     ? (deserializeEngineeringMemory(JSON.stringify(parsed.engineeringMemory)) ??
       undefined)
     : undefined;
+  const taskExecutionState = parsed.taskExecutionState
+    ? (deserializeTaskExecutionState(JSON.stringify(parsed.taskExecutionState)) ??
+      undefined)
+    : undefined;
+  const buildOrchestrationState = parsed.buildOrchestrationState
+    ? (deserializeBuildOrchestrationState(
+        JSON.stringify(parsed.buildOrchestrationState)
+      ) ?? undefined)
+    : undefined;
+  const contractReviewReport = parsed.contractReviewReport
+    ? (deserializeContractReviewReport(
+        JSON.stringify(parsed.contractReviewReport)
+      ) ?? undefined)
+    : undefined;
   const intelligenceCore = parsed.intelligenceCore
     ? (deserializeIntelligenceCore(
         JSON.stringify(parsed.intelligenceCore),
@@ -403,6 +444,9 @@ function normalizeProjectPayload(
     taskGraph,
     repositoryModel,
     engineeringMemory,
+    taskExecutionState,
+    buildOrchestrationState,
+    contractReviewReport,
     intelligenceCore,
     changePlan,
     validationStatus:
@@ -533,6 +577,27 @@ function serializeProject(project: MatrixProject): MatrixProject {
           engineeringMemory: JSON.parse(
             serializeEngineeringMemory(project.engineeringMemory)
           ) as EngineeringMemory,
+        }
+      : {}),
+    ...(project.taskExecutionState
+      ? {
+          taskExecutionState: JSON.parse(
+            serializeTaskExecutionState(project.taskExecutionState)
+          ) as TaskExecutionState,
+        }
+      : {}),
+    ...(project.buildOrchestrationState
+      ? {
+          buildOrchestrationState: JSON.parse(
+            serializeBuildOrchestrationState(project.buildOrchestrationState)
+          ) as BuildOrchestrationState,
+        }
+      : {}),
+    ...(project.contractReviewReport
+      ? {
+          contractReviewReport: JSON.parse(
+            serializeContractReviewReport(project.contractReviewReport)
+          ) as ContractReviewReport,
         }
       : {}),
     ...(project.intelligenceCore
@@ -798,6 +863,9 @@ export function createMatrixProject(
     taskGraph: draft.taskGraph,
     repositoryModel: draft.repositoryModel,
     engineeringMemory: draft.engineeringMemory,
+    taskExecutionState: draft.taskExecutionState,
+    buildOrchestrationState: draft.buildOrchestrationState,
+    contractReviewReport: draft.contractReviewReport,
     intelligenceCore: draft.intelligenceCore,
     changePlan: draft.changePlan,
     validationStatus: draft.validationStatus ?? 'unknown',
@@ -870,6 +938,24 @@ export function duplicateMatrixProject(
     engineeringMemory: project.engineeringMemory
       ? cloneEngineeringMemoryForProject(project.engineeringMemory, id, now)
       : undefined,
+    taskExecutionState: undefined,
+    buildOrchestrationState: project.buildOrchestrationState
+      ? {
+          ...project.buildOrchestrationState,
+          projectId: id,
+          runId: undefined,
+          operationId: undefined,
+          activeTaskId: undefined,
+          status: 'idle',
+          stopReason: undefined,
+          startedAt: undefined,
+          finishedAt: undefined,
+          updatedAt: timestamp,
+          warnings: [],
+          errors: [],
+        }
+      : undefined,
+    contractReviewReport: undefined,
     intelligenceCore: project.intelligenceCore
       ? cloneIntelligenceCoreForProject(project.intelligenceCore, id, now)
       : undefined,
@@ -903,6 +989,9 @@ export function createProjectFromWorkspaceSnapshot(
       taskGraph: snapshot.taskGraph,
       repositoryModel: snapshot.repositoryModel,
       engineeringMemory: snapshot.engineeringMemory,
+      taskExecutionState: snapshot.taskExecutionState,
+      buildOrchestrationState: snapshot.buildOrchestrationState,
+      contractReviewReport: snapshot.contractReviewReport,
       intelligenceCore: snapshot.intelligenceCore,
       changePlan: snapshot.changePlan,
       validationStatus: snapshot.validationStatus,
@@ -912,6 +1001,53 @@ export function createProjectFromWorkspaceSnapshot(
     now,
     id
   );
+}
+
+export async function checkpointActiveMatrixProject(
+  snapshot: MatrixProjectWorkspaceSnapshot,
+  options: PersistenceOptions = {}
+): Promise<MatrixProjectPersistenceResult | null> {
+  const projectId = snapshot.projectId?.trim();
+  if (!projectId) return null;
+
+  const loaded = await loadMatrixProjects(options);
+  const existingProject = loaded.projects.find((project) => project.id === projectId);
+  if (!existingProject) return null;
+
+  const updatedAt = snapshot.updatedAt || new Date().toISOString();
+  const project: MatrixProject = {
+    ...existingProject,
+    name: snapshot.name || existingProject.name,
+    description: snapshot.description,
+    updatedAt,
+    lastOpenedAt: snapshot.lastOpenedAt ?? existingProject.lastOpenedAt,
+    favorite: snapshot.favorite ?? existingProject.favorite,
+    files: cloneJson(snapshot.files),
+    chatMessages: cloneJson(snapshot.chatMessages),
+    buildManifest: snapshot.buildManifest,
+    blueprintDraft: snapshot.blueprintDraft,
+    architectDraft: snapshot.architectDraft,
+    buildContract: snapshot.buildContract,
+    capabilityResolution: snapshot.capabilityResolution,
+    taskGraph: snapshot.taskGraph,
+    repositoryModel: snapshot.repositoryModel,
+    engineeringMemory: snapshot.engineeringMemory,
+    taskExecutionState: snapshot.taskExecutionState,
+    buildOrchestrationState: snapshot.buildOrchestrationState,
+    contractReviewReport: snapshot.contractReviewReport,
+    intelligenceCore: snapshot.intelligenceCore,
+    changePlan: snapshot.changePlan,
+    validationStatus: snapshot.validationStatus,
+    deploymentStatus: snapshot.deploymentStatus,
+    workspaceState: snapshot.workspaceState
+      ? { ...snapshot.workspaceState }
+      : undefined,
+  };
+
+  return saveMatrixProject(project, loaded.projects, {
+    ...options,
+    expectedUpdatedAt: existingProject.updatedAt,
+  });
 }
 
 export async function loadMatrixProjects(
@@ -1252,6 +1388,27 @@ export function saveMatrixProjectWorkspaceSnapshot(
             ),
           }
         : {}),
+      ...(snapshot.taskExecutionState
+        ? {
+            taskExecutionState: JSON.parse(
+              serializeTaskExecutionState(snapshot.taskExecutionState)
+            ),
+          }
+        : {}),
+      ...(snapshot.buildOrchestrationState
+        ? {
+            buildOrchestrationState: JSON.parse(
+              serializeBuildOrchestrationState(snapshot.buildOrchestrationState)
+            ),
+          }
+        : {}),
+      ...(snapshot.contractReviewReport
+        ? {
+            contractReviewReport: JSON.parse(
+              serializeContractReviewReport(snapshot.contractReviewReport)
+            ),
+          }
+        : {}),
       ...(snapshot.intelligenceCore
         ? {
             intelligenceCore: JSON.parse(
@@ -1332,6 +1489,21 @@ export function loadMatrixProjectWorkspaceSnapshot(
       engineeringMemory: parsed.engineeringMemory
         ? (deserializeEngineeringMemory(JSON.stringify(parsed.engineeringMemory)) ??
           undefined)
+        : undefined,
+      taskExecutionState: parsed.taskExecutionState
+        ? (deserializeTaskExecutionState(
+            JSON.stringify(parsed.taskExecutionState)
+          ) ?? undefined)
+        : undefined,
+      buildOrchestrationState: parsed.buildOrchestrationState
+        ? (deserializeBuildOrchestrationState(
+            JSON.stringify(parsed.buildOrchestrationState)
+          ) ?? undefined)
+        : undefined,
+      contractReviewReport: parsed.contractReviewReport
+        ? (deserializeContractReviewReport(
+            JSON.stringify(parsed.contractReviewReport)
+          ) ?? undefined)
         : undefined,
       intelligenceCore: parsed.intelligenceCore
         ? (deserializeIntelligenceCore(
@@ -1436,6 +1608,27 @@ export function saveMatrixProjectWorkspaceContext(
             ),
           }
         : {}),
+      ...(context.taskExecutionState
+        ? {
+            taskExecutionState: JSON.parse(
+              serializeTaskExecutionState(context.taskExecutionState)
+            ),
+          }
+        : {}),
+      ...(context.buildOrchestrationState
+        ? {
+            buildOrchestrationState: JSON.parse(
+              serializeBuildOrchestrationState(context.buildOrchestrationState)
+            ),
+          }
+        : {}),
+      ...(context.contractReviewReport
+        ? {
+            contractReviewReport: JSON.parse(
+              serializeContractReviewReport(context.contractReviewReport)
+            ),
+          }
+        : {}),
       ...(context.intelligenceCore
         ? {
             intelligenceCore: JSON.parse(
@@ -1500,6 +1693,21 @@ export function loadMatrixProjectWorkspaceContext(
       engineeringMemory: parsed.engineeringMemory
         ? (deserializeEngineeringMemory(JSON.stringify(parsed.engineeringMemory)) ??
           undefined)
+        : undefined,
+      taskExecutionState: parsed.taskExecutionState
+        ? (deserializeTaskExecutionState(
+            JSON.stringify(parsed.taskExecutionState)
+          ) ?? undefined)
+        : undefined,
+      buildOrchestrationState: parsed.buildOrchestrationState
+        ? (deserializeBuildOrchestrationState(
+            JSON.stringify(parsed.buildOrchestrationState)
+          ) ?? undefined)
+        : undefined,
+      contractReviewReport: parsed.contractReviewReport
+        ? (deserializeContractReviewReport(
+            JSON.stringify(parsed.contractReviewReport)
+          ) ?? undefined)
         : undefined,
       intelligenceCore: parsed.intelligenceCore
         ? (deserializeIntelligenceCore(

@@ -6,6 +6,7 @@ import MessageList from './MessageList';
 import ChatComposer from './ChatComposer';
 import AgentStatusBar from './AgentStatusBar';
 import GuidedBuildPanel from './GuidedBuildPanel';
+import type { WorkspaceTaskDrivenBuildController } from '../hooks/useTaskDrivenBuild';
 
 interface Props {
   messages: ChatMessage[];
@@ -29,6 +30,7 @@ interface Props {
   onSelectFile: (file: FileNode) => void;
   onSaveFinalAssistantMessage: (msg: ChatMessage) => void;
   initialPrompt?: string | null;
+  taskDrivenBuild: WorkspaceTaskDrivenBuildController;
 }
 
 export default function ChatPanel({
@@ -53,6 +55,7 @@ export default function ChatPanel({
   onSelectFile,
   onSaveFinalAssistantMessage,
   initialPrompt,
+  taskDrivenBuild,
 }: Props) {
   const bottomRef = useRef<HTMLDivElement>(null);
 
@@ -69,7 +72,11 @@ export default function ChatPanel({
         messageCount={messages.length}
         activityStatus={activityStatus}
       />
-      <GuidedBuildPanel sessionId={sessionId} isStreaming={isStreaming} />
+      <GuidedBuildPanel
+        sessionId={sessionId}
+        isStreaming={isStreaming}
+        controller={taskDrivenBuild}
+      />
 
       {/* Messages */}
       <div className="flex-1 overflow-y-auto px-4 py-4 space-y-4">
@@ -101,6 +108,7 @@ export default function ChatPanel({
         onDeleteFile={onDeleteFile}
         onSaveFinalAssistantMessage={onSaveFinalAssistantMessage}
         initialPrompt={initialPrompt}
+        taskDrivenBuild={taskDrivenBuild}
       />
     </div>
   );

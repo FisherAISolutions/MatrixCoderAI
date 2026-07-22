@@ -17,23 +17,12 @@ import {
   extractFromAssistantResponse,
   extractMentionedPaths,
   normalizeEditPath,
-  sanitizeProjectPath,
 } from '@/lib/repo/extractors';
-import {
-  assessContinuationCompleteness,
-  buildContinuationRetryKey,
-  normalizeContinuationPaths,
-} from '@/lib/generation/continuationGuards';
 import { applyEditSequence } from '@/lib/repo/patcher';
 import { flattenTree } from '@/lib/repo/heuristics';
-import {
-  createNextScaffoldFiles,
-  NEXT_SCAFFOLD_PATHS,
-} from '@/lib/repo/nextScaffoldTemplates';
 import { runAutoFixLoop, isAutoFixRunning } from '@/lib/validation';
 import { analyzeAndAddMissingDependencies } from '@/lib/dependencies';
 import { pushTerminalLog } from '@/lib/terminal/store';
-import { inferRequiredPathsForBatch } from '@/lib/generation/routePlanning';
 import {
   beginPreviewStage,
   completePreviewStage,
@@ -69,10 +58,12 @@ import type { BuildContract } from '@/lib/build-contract';
 import type { CapabilityResolutionResult } from '@/lib/capabilities';
 import type { ArchitectDraft } from '@/lib/matrix-ai-architect/types';
 import type { MatrixIntelligenceCore } from '@/lib/intelligence-core';
+import { selectWorkspaceGenerationMode } from '@/lib/build-orchestration';
 import {
   loadMatrixProjectWorkspaceContext,
   saveMatrixProjectWorkspaceContext,
 } from '@/lib/projects/projectStore';
+import type { WorkspaceTaskDrivenBuildController } from '../hooks/useTaskDrivenBuild';
 
 function logGenerationConsistency(
   label: string,
@@ -252,6 +243,7 @@ interface Props {
   onDeleteFile: (fileId: string) => void;
   onSaveFinalAssistantMessage: (msg: ChatMessage) => void;
   initialPrompt?: string | null;
+  taskDrivenBuild: WorkspaceTaskDrivenBuildController;
 }
 
 const AGENT_OPTIONS: { type: AgentType | 'auto'; label: string; icon: React.ReactNode; description: string }[] = [
@@ -979,164 +971,6 @@ function extractFilePaths(content: string): string[] {
   return extractMentionedPaths(content);
 }
 
-interface GenerationBatch {
-  id: number;
-  title: string;
-  scope: string;
-}
-
-interface ActiveBatchGeneration {
-  active: boolean;
-  baseRequest: string;
-  repoContextString: string;
-  conversationHistory: Array<{ role: 'user' | 'assistant'; content: string }>;
-  memStage: MemoryStage;
-  batches: GenerationBatch[];
-  index: number;
-  continuationRetryCounts: Record<string, number>;
-}
-
-const BATCH_MAX_FILES = 2;
-const BATCH_TARGET_FILE_LINES = 220;
-const BATCH_HARD_FILE_LINES = 320;
-
-const LARGE_APP_BATCHES: GenerationBatch[] = [
-  {
-    id: 1,
-    title: 'root page shell',
-    scope:
-      'Core Next.js scaffold files are already created by Matrix Coder from deterministic templates. Do NOT emit package.json, tsconfig.json, next.config.mjs, postcss.config.js, tailwind.config.ts, src/app/globals.css, or src/app/layout.tsx. Create only src/app/page.tsx if the app needs a root homepage shell. Never create root app/ files.',
-  },
-  {
-    id: 2,
-    title: 'domain types/storage/helpers',
-    scope:
-      'Create only domain-specific shared types, localStorage/storage helpers, seed helpers, and small reusable utilities. Do not create route pages in this batch.',
-  },
-  {
-    id: 3,
-    title: 'primary feature routes and shared components',
-    scope:
-      'Create only the root experience, primary requested feature routes, and shared UI components needed by the product domain. Use route names from the user request; do not invent notes-style add/edit/history routes unless they are explicitly requested. Every interactive route must be a Server Component page that renders a route-specific Client Component under src/components/<domain>/. For CRUD-heavy apps, implement one route workflow at a time and keep client components route-specific.',
-  },
-  {
-    id: 4,
-    title: 'secondary feature routes and workflows',
-    scope:
-      'Create only secondary requested feature routes and their immediate workflow components. Preserve exact route names from the request, such as /add-note, /history, /workouts, /progress, /timer, /settings, or CRM/SaaS domain routes. Include search, filter, edit, delete, and localStorage wiring where the requested workflow naturally needs them, without forcing a history route. Every interactive route must be a Server Component page that renders a route-specific Client Component under src/components/<domain>/. For CRUD-heavy apps, implement one route workflow at a time and keep client components route-specific.',
-  },
-  {
-    id: 5,
-    title: 'validation',
-    scope:
-      'Create only small missing glue files or corrections discovered from prior batches. Do not duplicate files already emitted. End with a concise final file list.',
-  },
-];
-
-const NEXT_SCAFFOLD_PATH_SET = new Set<string>(NEXT_SCAFFOLD_PATHS);
-
-function dedupeGeneratedPaths(paths: Array<string | null | undefined>): string[] {
-  const out: string[] = [];
-  for (const raw of paths) {
-    if (!raw) continue;
-    const clean = sanitizeProjectPath(raw);
-    if (!clean || out.includes(clean)) continue;
-    out.push(clean);
-  }
-  return out;
-}
-
-function collectKnownGeneratedPaths(
-  fileTree: FileNode[],
-  extraPaths: string[] = []
-): string[] {
-  return [
-    ...flattenTree(fileTree)
-      .filter((file) => file.type === 'file')
-      .map((file) => file.path),
-    ...extraPaths,
-  ];
-}
-
-function missingRequiredPathsForBatch(
-  state: ActiveBatchGeneration,
-  fileTree: FileNode[],
-  mutatedFilesByPath: Map<string, FileNode>
-): string[] {
-  const batch = state.batches[state.index];
-  if (!batch || batch.title === 'validation') return [];
-  const required = inferRequiredPathsForBatch(state.baseRequest, batch);
-  if (required.length === 0) return [];
-
-  const currentPaths = new Set(
-    flattenTree(fileTree)
-      .filter((file) => file.type === 'file')
-      .map((file) => file.path)
-  );
-  for (const path of mutatedFilesByPath.keys()) {
-    currentPaths.add(path);
-  }
-
-  return required.filter((path) => !currentPaths.has(path));
-}
-
-function shouldBatchGenerationRequest(text: string, agent: AgentType, files: FileNode[]): boolean {
-  if (agent !== 'coding') return false;
-  const lower = text.toLowerCase();
-  const wantsApp =
-    /\b(build|create|make|scaffold|generate|set up)\b/.test(lower) &&
-    /\b(app|application|site|dashboard|tracker|manager|crm|portal|pages?)\b/.test(lower);
-  const impliesManyFiles =
-    /\b(3\s+pages|three\s+pages|dashboard|history|edit|delete|filter|localstorage|components?|full app|complete app)\b/.test(lower);
-  const existingFiles = flattenTree(files).filter((file) => file.type === 'file').length;
-  return wantsApp && (impliesManyFiles || existingFiles < 8);
-}
-
-function buildBatchPrompt(
-  baseRequest: string,
-  batch: GenerationBatch,
-  index: number,
-  total: number,
-  continuation?: { lastCompletePath?: string | null; reason: string; missingPaths?: string[] }
-): string {
-  const requiredPaths = inferRequiredPathsForBatch(baseRequest, batch);
-  const missingPaths = dedupeGeneratedPaths(continuation?.missingPaths ?? []);
-  return [
-    `Original user request:\n${baseRequest}`,
-    '',
-    `AUTOMATIC BATCHED GENERATION - Batch ${index + 1} of ${total}: ${batch.title}`,
-    '',
-    `Scope for this response:\n${batch.scope}`,
-    requiredPaths.length
-      ? `Required file(s) before this batch can be marked complete:\n${requiredPaths.map((path) => `- ${path}`).join('\n')}`
-      : '',
-    '',
-    'Hard limits for this response:',
-    `- Emit at most ${BATCH_MAX_FILES} files.`,
-    `- Target ${BATCH_TARGET_FILE_LINES} lines or fewer per file; never exceed about ${BATCH_HARD_FILE_LINES} lines in a single file.`,
-    "- Never emit 'use client' in src/app/**/page.tsx or app/**/page.tsx. Route pages are Server Components that import and render route-specific Client Components.",
-    '- Never put multiple requested route workflows into one giant client component. Use route-specific client files, for example src/components/<domain>/ContactsClient.tsx, CompaniesClient.tsx, TasksClient.tsx, or PipelineClient.tsx.',
-    '- For CRUD-heavy pages, finish one complete route workflow first. If another route would make a file or response too large, leave it for the next automatic continuation instead of starting it.',
-    '- Emit only complete, closed code fences.',
-    '- Stop before the response becomes long enough to risk truncation.',
-    '- Do not start a file unless you can finish it in this same response.',
-    '- Do not run validation or claim validation passed.',
-    '- Do not ask the user to say continue.',
-    '- Do not emit files outside this batch scope.',
-    `- Do not emit deterministic scaffold files: ${NEXT_SCAFFOLD_PATHS.join(', ')}. Matrix Coder creates these from templates before generation.`,
-    '- If a needed file belongs to a later batch, list it under NEXT BATCH NOTES instead of creating it now.',
-    continuation
-      ? `Continuation repair: the previous response was incomplete (${continuation.reason}). Files successfully parsed before the truncation have already been saved. Continue the same batch plan and emit only the missing, truncated, or still-required file(s)${missingPaths.length ? `: ${missingPaths.join(', ')}` : continuation.lastCompletePath ? ` after ${continuation.lastCompletePath}` : ''}. Do not re-emit files that were already completed.`
-      : '',
-    '',
-    index < total - 1
-      ? `End with exactly: NEXT BATCH ${index + 2} READY`
-      : 'End with exactly: BATCHED GENERATION COMPLETE',
-  ]
-    .filter(Boolean)
-    .join('\n');
-}
-
 export default function ChatComposer({
   isStreaming,
   messages,
@@ -1156,6 +990,7 @@ export default function ChatComposer({
   onDeleteFile,
   onSaveFinalAssistantMessage,
   initialPrompt,
+  taskDrivenBuild,
 }: Props) {
   const [input, setInput] = useState('');
   const [selectedAgent, setSelectedAgent] = useState<AgentType | 'auto'>('auto');
@@ -1172,7 +1007,6 @@ export default function ChatComposer({
   // Track whether streaming has begun producing content so we can flip the
   // activity message from "Sending request to AI…" → "Streaming response…".
   const streamingMessageShownRef = useRef<boolean>(false);
-  const batchGenerationRef = useRef<ActiveBatchGeneration | null>(null);
   const cancellationScopeRef = useRef<GenerationCancellationScope | null>(null);
   const consumedInitialPromptRef = useRef(false);
   const pendingBuildManifestRef = useRef<BuildManifest | null>(null);
@@ -1397,33 +1231,6 @@ export default function ChatComposer({
     ]
   );
 
-  const continueBatchGeneration = useCallback(
-    (continuation?: { lastCompletePath?: string | null; reason: string; missingPaths?: string[] }) => {
-      if (cancellationScopeRef.current?.signal.aborted) return;
-      const state = batchGenerationRef.current;
-      if (!state?.active) return;
-      const batch = state.batches[state.index];
-      if (!batch) return;
-      const prompt = buildBatchPrompt(
-        state.baseRequest,
-        batch,
-        state.index,
-        state.batches.length,
-        continuation
-      );
-      launchAgentRequest('coding', prompt, {
-        repoContextString: state.repoContextString,
-        conversationHistory: state.conversationHistory,
-        memStage: state.memStage,
-        status: continuation
-          ? `Repairing batch ${state.index + 1}...`
-          : `Generating batch ${state.index + 1}/${state.batches.length}...`,
-        batchLabel: `${state.index + 1}/${state.batches.length} ${batch.title}`,
-      });
-    },
-    [launchAgentRequest]
-  );
-
   useEffect(() => {
     if (error) {
       const errMsg = error.message ?? 'AI response failed';
@@ -1451,21 +1258,6 @@ export default function ChatComposer({
       // Append a visible system message offering retry guidance.
       // BUG #2 FIX (2026-01) — persist this so a refresh doesn't hide
       // the failure context from the user.
-      if (batchGenerationRef.current?.active) {
-        onAddMessage({
-          id: prefixedId('msg'),
-          role: 'system',
-          content:
-            `Automatic batch generation stopped because the AI request failed - **${errMsg}**.\n\n` +
-            `Auto-continuation could not complete. Retry the original request or ask the Coding Agent to continue the current batch.`,
-          timestamp: new Date().toISOString(),
-        });
-        batchGenerationRef.current.active = false;
-        streamMsgIdRef.current = '';
-        accumulatedRef.current = '';
-        return;
-      }
-
       onAddMessage({
         id: prefixedId('msg'),
         role: 'system',
@@ -1571,19 +1363,6 @@ export default function ChatComposer({
       onSetActiveAgent(null);
 
       const shouldExtractFiles = agentRef.current === 'coding';
-      const activeBatchGeneration = batchGenerationRef.current?.active
-        ? batchGenerationRef.current
-        : null;
-      if (activeBatchGeneration) {
-        activeBatchGeneration.conversationHistory = [
-          ...activeBatchGeneration.conversationHistory,
-          {
-            role: 'assistant' as const,
-            content: finalContent.slice(0, 12000),
-          },
-        ].slice(-8);
-      }
-
       // Track post-mutation file state so we can hand a consistent
       // snapshot to the auto-fix loop without depending on React-state
       // timing. The loop runs after all edits + creates have been
@@ -1594,139 +1373,22 @@ export default function ChatComposer({
       let createsCount = 0;
       let extractedPathsForDiagnostics: string[] = [];
       let persistedScheduledPathsForDiagnostics: string[] = [];
-      let ignoredProtectedScaffoldCount = 0;
-      let incompleteBatchContinuation:
-        | { lastCompletePath?: string | null; reason: string; missingPaths?: string[] }
-        | null = null;
-
       if (shouldExtractFiles) {
-        const activeBatch = activeBatchGeneration;
-        if (!activeBatch || activeBatch.index === 0) {
-          resetPreviewDiagnostics();
-        }
-        beginPreviewStage(
-          'generation',
-          activeBatch
-            ? `Coding Agent batch ${activeBatch.index + 1}/${activeBatch.batches.length} received; extracting generated files.`
-            : 'Coding Agent response received; extracting generated files.'
-        );
+        resetPreviewDiagnostics();
+        beginPreviewStage('generation', 'Coding Agent response received; extracting generated files.');
         const extracted = extractFromAssistantResponse(finalContent);
-        const protectedCreates = activeBatch
-          ? extracted.creates.filter((file) => NEXT_SCAFFOLD_PATH_SET.has(file.path))
-          : [];
-        const protectedEdits = activeBatch
-          ? extracted.edits.filter((edit) => NEXT_SCAFFOLD_PATH_SET.has(normalizeEditPath(edit.path)))
-          : [];
-        ignoredProtectedScaffoldCount = protectedCreates.length + protectedEdits.length;
-        const creates = activeBatch
-          ? extracted.creates.filter((file) => !NEXT_SCAFFOLD_PATH_SET.has(file.path))
-          : extracted.creates;
-        const edits = activeBatch
-          ? extracted.edits.filter((edit) => !NEXT_SCAFFOLD_PATH_SET.has(normalizeEditPath(edit.path)))
-          : extracted.edits;
+        const { creates, edits } = extracted;
         const { malformedEdits, malformedEditReasons } = extracted;
-        if (ignoredProtectedScaffoldCount > 0) {
-          pushTerminalLog({
-            level: 'warn',
-            text:
-              `[scaffold-template] ignored ${ignoredProtectedScaffoldCount} LLM-emitted scaffold action(s): ` +
-              `${[...protectedCreates.map((file) => file.path), ...protectedEdits.map((edit) => normalizeEditPath(edit.path))].join(', ')}\n`,
-            timestamp: Date.now(),
-          });
-        }
         extractedPathsForDiagnostics = Array.from(
           new Set([...creates.map((file) => file.path), ...edits.map((edit) => edit.path)])
         );
         const completeness = analyzeResponseCompleteness(finalContent, extracted);
 
         if (completeness.blocking) {
-          const reason = completeness.issues.map((issue) => issue.message).join(' ');
-          const completedPaths = dedupeGeneratedPaths([
-            ...creates.map((file) => file.path),
-            ...edits.map((edit) => edit.path),
-          ]);
-          const continuationAssessment = assessContinuationCompleteness({
-            rawMissingPaths: completeness.issues.map((issue) => issue.path),
-            knownPaths: collectKnownGeneratedPaths(fileTree, completedPaths),
-            completedPaths,
-            hasUnclosedFenceWithoutPath: completeness.issues.some(
-              (issue) => issue.kind === 'unclosed-fence' && !issue.path
-            ),
-          });
-          const missingPaths = continuationAssessment.actionableMissingPaths;
-
-          if (
-            activeBatch &&
-            (creates.length > 0 || edits.length > 0) &&
-            continuationAssessment.acceptCompletedOutput
-          ) {
-            pushTerminalLog({
-              level: 'info',
-              text:
-                `[generation-batch] completeness audit reported only non-actionable fragments; ` +
-                `preserving=${creates.length + edits.length} and advancing batch=${activeBatch.index + 1}/${activeBatch.batches.length} ` +
-                `reason=${continuationAssessment.reason}\n`,
-              timestamp: Date.now(),
-            });
-          } else if (activeBatch && (creates.length > 0 || edits.length > 0)) {
-            incompleteBatchContinuation = {
-              lastCompletePath: completeness.lastCompletePath,
-              reason,
-              missingPaths,
-            };
-            pushTerminalLog({
-              level: 'warn',
-              text:
-                `[generation-batch] partial batch=${activeBatch.index + 1}/${activeBatch.batches.length} ` +
-                `preserving=${creates.length + edits.length} missing=${missingPaths.join(', ') || 'unknown'} ` +
-                `reason="${reason.replace(/\s+/g, ' ').slice(0, 400)}"\n`,
-              timestamp: Date.now(),
-            });
-            onAddMessage({
-              id: prefixedId('msg'),
-              role: 'system',
-              content:
-                `**Generation batch incomplete - preserving completed files**\n\n` +
-                `Batch ${activeBatch.index + 1}/${activeBatch.batches.length} was truncated or internally inconsistent. ` +
-                `Matrix Coder will save the ${creates.length + edits.length} complete file action(s) already parsed, keep validation paused, and request only the missing/truncated file(s)${missingPaths.length ? `: ${missingPaths.map((path) => `\`${path}\``).join(', ')}` : ''}.`,
-              timestamp: new Date().toISOString(),
-            });
-            toast.error('Batch response was incomplete; saving complete files and continuing.');
-          } else {
-            failPreviewStage(
-              'generation',
-              completeness.issues.map((issue) => issue.message).join(' ')
-            );
-            if (activeBatch) {
-            onAddMessage({
-              id: prefixedId('msg'),
-              role: 'system',
-              content:
-                `**Generation batch incomplete - auto-continuing**\n\n` +
-                `Batch ${activeBatch.index + 1}/${activeBatch.batches.length} was truncated or internally inconsistent, so no files from that response were written and validation remains paused.\n\n` +
-                `Matrix Coder is requesting a repaired continuation from the last complete file${completeness.lastCompletePath ? ` (\`${completeness.lastCompletePath}\`)` : ''}.`,
-              timestamp: new Date().toISOString(),
-            });
-            pushTerminalLog({
-              level: 'warn',
-              text:
-                `[generation-batch] incomplete batch=${activeBatch.index + 1}/${activeBatch.batches.length} ` +
-                `lastComplete=${completeness.lastCompletePath ?? 'none'} reason="${reason.replace(/\s+/g, ' ').slice(0, 400)}"\n`,
-              timestamp: Date.now(),
-            });
-            toast.error('Batch response was incomplete; auto-continuing.');
-            onSetActivityStatus('Repairing incomplete generation batch...');
-            scheduleGenerationTimer(() => {
-              continueBatchGeneration({
-                lastCompletePath: completeness.lastCompletePath,
-                reason,
-                missingPaths,
-              });
-            }, 600);
-            accumulatedRef.current = '';
-            streamingMessageShownRef.current = false;
-            return;
-            }
+          failPreviewStage(
+            'generation',
+            completeness.issues.map((issue) => issue.message).join(' ')
+          );
           const issueLines = completeness.issues
             .slice(0, 12)
             .map((issue) => `- ${issue.path ? `\`${issue.path}\` — ` : ''}${issue.message}`)
@@ -1738,8 +1400,7 @@ export default function ChatComposer({
               `**Generation incomplete — validation paused**\n\n` +
               `The Coding Agent response appears truncated or internally inconsistent, so no files were written and validation was not started.\n\n` +
               `${issueLines}\n\n` +
-              `Ask the Coding Agent to continue from the last complete file${completeness.lastCompletePath ? ` (\`${completeness.lastCompletePath}\`)` : ''}. ` +
-              `For large apps, continue in smaller batches: scaffold/config/layout, domain types/helpers, primary feature routes, secondary workflows, then validation.`,
+              `Ask the Coding Agent to retry the bounded change with complete file fences${completeness.lastCompletePath ? ` after \`${completeness.lastCompletePath}\`` : ''}.`,
             timestamp: new Date().toISOString(),
           });
           toast.error('Generation response was incomplete; validation paused.');
@@ -1748,7 +1409,6 @@ export default function ChatComposer({
           accumulatedRef.current = '';
           streamingMessageShownRef.current = false;
           return;
-          }
         }
 
         // ----- Malformed edit fences (missing SEARCH/REPLACE markers) -----
@@ -2035,11 +1695,6 @@ export default function ChatComposer({
             'generation',
             `No files were written because ${malformedEdits.length} edit block(s) were malformed.`
           );
-        } else if (activeBatchGeneration && ignoredProtectedScaffoldCount > 0) {
-          completePreviewStage(
-            'generation',
-            `Ignored ${ignoredProtectedScaffoldCount} protected scaffold file action(s); deterministic templates already own those files.`
-          );
         } else {
           failPreviewStage(
             'generation',
@@ -2063,95 +1718,6 @@ export default function ChatComposer({
           onSetActivityStatus(null);
         }
 
-        if (activeBatchGeneration && !incompleteBatchContinuation) {
-          const missingRequiredPaths = missingRequiredPathsForBatch(
-            activeBatchGeneration,
-            fileTree,
-            mutatedFilesByPath
-          );
-          if (missingRequiredPaths.length > 0) {
-            const writtenPaths = Array.from(mutatedFilesByPath.keys());
-            incompleteBatchContinuation = {
-              lastCompletePath: writtenPaths[writtenPaths.length - 1] ?? null,
-              reason:
-                `Batch ${activeBatchGeneration.index + 1} cannot complete until required file(s) exist: ` +
-                missingRequiredPaths.join(', '),
-              missingPaths: missingRequiredPaths,
-            };
-            pushTerminalLog({
-              level: 'warn',
-              text:
-                `[generation-batch] required file gate batch=${activeBatchGeneration.index + 1}/${activeBatchGeneration.batches.length} ` +
-                `missing=${missingRequiredPaths.join(', ')}; validation remains paused\n`,
-              timestamp: Date.now(),
-            });
-            onAddMessage({
-              id: prefixedId('msg'),
-              role: 'system',
-              content:
-                `**Generation batch still needs required files**\n\n` +
-                `Batch ${activeBatchGeneration.index + 1}/${activeBatchGeneration.batches.length} cannot be marked complete yet. ` +
-                `Matrix Coder will continue the same batch and generate: ${missingRequiredPaths
-                  .map((path) => `\`${path}\``)
-                  .join(', ')}.`,
-              timestamp: new Date().toISOString(),
-            });
-          }
-        }
-
-        if (incompleteBatchContinuation && activeBatchGeneration) {
-          const retryKey = buildContinuationRetryKey(
-            activeBatchGeneration.index,
-            incompleteBatchContinuation
-          );
-          const retryCount =
-            (activeBatchGeneration.continuationRetryCounts[retryKey] ?? 0) + 1;
-          activeBatchGeneration.continuationRetryCounts[retryKey] = retryCount;
-          const writtenPaths = Array.from(mutatedFilesByPath.keys());
-          const retryAssessment = assessContinuationCompleteness({
-            rawMissingPaths: incompleteBatchContinuation.missingPaths ?? [],
-            knownPaths: collectKnownGeneratedPaths(fileTree, writtenPaths),
-            completedPaths: writtenPaths,
-            retryCount,
-          });
-
-          if (
-            retryAssessment.acceptCompletedOutput &&
-            (createdAny || appliedAnyEdit)
-          ) {
-            pushTerminalLog({
-              level: retryAssessment.reason === 'retry-limit' ? 'warn' : 'info',
-              text:
-                `[generation-batch] accepting completed continuation output; ` +
-                `batch=${activeBatchGeneration.index + 1}/${activeBatchGeneration.batches.length} ` +
-                `reason=${retryAssessment.reason} retry=${retryCount} ` +
-                `missing=${normalizeContinuationPaths(incompleteBatchContinuation.missingPaths ?? []).join(', ') || 'none'}\n`,
-              timestamp: Date.now(),
-            });
-            incompleteBatchContinuation = null;
-          }
-        }
-
-        if (incompleteBatchContinuation && activeBatchGeneration) {
-          const launchDelay = createdAny ? createsCount * 200 + 600 : 600;
-          const missingPaths = normalizeContinuationPaths(
-            incompleteBatchContinuation.missingPaths ?? []
-          );
-          pushTerminalLog({
-            level: 'warn',
-            text:
-              `[generation-batch] validation paused for incomplete batch; ` +
-              `continuing missing=${missingPaths.join(', ') || 'unknown'}\n`,
-            timestamp: Date.now(),
-          });
-          scheduleGenerationTimer(() => {
-            continueBatchGeneration(incompleteBatchContinuation ?? undefined);
-          }, launchDelay);
-          streamMsgIdRef.current = '';
-          accumulatedRef.current = '';
-          streamingMessageShownRef.current = false;
-          return;
-        }
       } else {
         onSetActivityStatus(null);
       }
@@ -2170,72 +1736,6 @@ export default function ChatComposer({
       // (isAutoFixRunning()), so multiple assistant turns in flight
       // cannot stack.
       // -------------------------------------------------------------
-      if ((appliedAnyEdit || createdAny || ignoredProtectedScaffoldCount > 0) && activeBatchGeneration) {
-        const isFinalBatch =
-          activeBatchGeneration.index >= activeBatchGeneration.batches.length - 1;
-        const launchDelay = createdAny ? createsCount * 200 + 500 : 500;
-
-        if (!isFinalBatch) {
-          const completedBatch = activeBatchGeneration.index + 1;
-          const nextBatch = activeBatchGeneration.batches[activeBatchGeneration.index + 1];
-          if (nextBatch?.title === 'validation') {
-            activeBatchGeneration.index += 1;
-            activeBatchGeneration.active = false;
-            pushTerminalLog({
-              level: 'info',
-              text:
-                `[generation-batch] completed ${completedBatch}/${activeBatchGeneration.batches.length - 1} file-writing batches; ` +
-                `starting batch ${activeBatchGeneration.batches.length} validation\n`,
-              timestamp: Date.now(),
-            });
-            onAddMessage({
-              id: prefixedId('msg'),
-              role: 'system',
-              content:
-                `File generation batches are complete. Starting Batch ${activeBatchGeneration.batches.length}/${activeBatchGeneration.batches.length}: validation.`,
-              timestamp: new Date().toISOString(),
-            });
-          } else {
-          activeBatchGeneration.index += 1;
-          pushTerminalLog({
-            level: 'info',
-            text:
-              `[generation-batch] completed ${completedBatch}/${activeBatchGeneration.batches.length}; ` +
-              `validation paused until all batches complete\n`,
-            timestamp: Date.now(),
-          });
-          onAddMessage({
-            id: prefixedId('msg'),
-            role: 'system',
-            content:
-              `Batch ${completedBatch}/${activeBatchGeneration.batches.length} written. ` +
-              `Validation is paused while Matrix Coder continues the next generation batch automatically.`,
-            timestamp: new Date().toISOString(),
-          });
-          scheduleGenerationTimer(() => {
-            continueBatchGeneration();
-          }, launchDelay);
-          streamMsgIdRef.current = '';
-          accumulatedRef.current = '';
-          streamingMessageShownRef.current = false;
-          return;
-          }
-        }
-
-        activeBatchGeneration.active = false;
-        pushTerminalLog({
-          level: 'info',
-          text: `[generation-batch] all ${activeBatchGeneration.batches.length} batches complete; starting validation\n`,
-          timestamp: Date.now(),
-        });
-        onAddMessage({
-          id: prefixedId('msg'),
-          role: 'system',
-          content: `All ${activeBatchGeneration.batches.length} generation batches are complete. Starting validation now.`,
-          timestamp: new Date().toISOString(),
-        });
-      }
-
       let autoFixScheduled = false;
       if ((appliedAnyEdit || createdAny) && !isAutoFixRunning()) {
         // Build a predicted post-mutation file list — the source of
@@ -2379,7 +1879,7 @@ export default function ChatComposer({
       accumulatedRef.current = '';
       streamingMessageShownRef.current = false;
       if (!autoFixScheduled) {
-        if (shouldExtractFiles && !appliedAnyEdit && !createdAny && ignoredProtectedScaffoldCount === 0) {
+        if (shouldExtractFiles && !appliedAnyEdit && !createdAny) {
           setActivePipelineStage('failed');
         } else {
           setActivePipelineStage('completed');
@@ -2399,7 +1899,6 @@ export default function ChatComposer({
     onUpdateFile,
     onDeleteFile,
     onAddMessage,
-    continueBatchGeneration,
     scheduleGenerationTimer,
     setActivePipelineStage,
   ]);
@@ -2412,7 +1911,7 @@ export default function ChatComposer({
     ta.style.height = `${Math.min(ta.scrollHeight, 160)}px`;
   }, [input]);
 
-  const upsertDeterministicNextScaffold = useCallback(() => {
+  /* Retired five-batch scaffold path. Task-driven builds own project foundation.
     const existingByPath = new Map(
       flattenTree(fileTree)
         .filter((file) => file.type === 'file')
@@ -2466,7 +1965,7 @@ export default function ChatComposer({
         timestamp: new Date().toISOString(),
       });
     }
-  }, [fileTree, onAddFile, onAddMessage, onUpdateFile]);
+  */
 
   const handleSend = useCallback(async () => {
     const text = input.trim();
@@ -2478,6 +1977,54 @@ export default function ChatComposer({
       generationPipelineActive ||
       streamMsgIdRef.current
     ) {
+      return;
+    }
+
+    const agent: AgentType =
+      selectedAgent === 'auto' ? detectAgent(text) : selectedAgent;
+    const generationMode = selectWorkspaceGenerationMode({
+      request: text,
+      agent,
+      existingFileCount: flattenTree(fileTree).filter(
+        (file) => file.type === 'file'
+      ).length,
+      hasApprovedBuildContract: taskDrivenBuild.available,
+    });
+
+    if (generationMode !== 'single-request') {
+      setInput('');
+      lastUserTextRef.current = text;
+      onAddMessage({
+        id: generateId('msg'),
+        role: 'user',
+        content: text,
+        timestamp: new Date().toISOString(),
+      });
+
+      if (generationMode === 'planning-required') {
+        const message =
+          '**Planning approval required**\n\nMatrix will not attempt a large build from a vague request. Open or create a Project, complete the Matrix AI Architect conversation, and approve the Blueprint before starting engineering.';
+        onAddMessage({
+          id: generateId('msg'),
+          role: 'system',
+          content: message,
+          timestamp: new Date().toISOString(),
+        });
+        onSetActivityStatus('Approve an Architect plan and Blueprint first');
+        toast('Plan this application with Matrix AI Architect first.');
+        return;
+      }
+
+      onAddMessage({
+        id: generateId('msg'),
+        role: 'assistant',
+        agent: 'orchestrator',
+        content:
+          'Starting the approved Build Contract with bounded, repository-aware engineering tasks. Matrix will preserve every completed task and validate each milestone before continuing.',
+        timestamp: new Date().toISOString(),
+        memoryStage: 'context',
+      });
+      await taskDrivenBuild.start();
       return;
     }
 
@@ -2498,10 +2045,6 @@ export default function ChatComposer({
     // (hardening pass #6).
     lastUserTextRef.current = text;
 
-    const agent: AgentType =
-      selectedAgent === 'auto'
-        ? detectAgent(text)
-        : selectedAgent;
     const buildManifestForPlanning = pendingBuildManifestRef.current;
     const blueprintDraftForPlanning = pendingBlueprintDraftRef.current;
     const architectDraftForPlanning = pendingArchitectDraftRef.current;
@@ -2637,31 +2180,6 @@ export default function ChatComposer({
     onSetActivityStatus('Sending request to AI…');
 
     if (generationScope.signal.aborted) return;
-    const shouldBatch = shouldBatchGenerationRequest(text, agent, fileTree);
-    if (shouldBatch) {
-      upsertDeterministicNextScaffold();
-      batchGenerationRef.current = {
-        active: true,
-        baseRequest: text,
-        repoContextString,
-        conversationHistory,
-        memStage,
-        batches: LARGE_APP_BATCHES,
-        index: 0,
-        continuationRetryCounts: {},
-      };
-      onAddMessage({
-        id: prefixedId('msg'),
-        role: 'system',
-        content:
-          `Large app request detected. Matrix Coder will generate this in ${LARGE_APP_BATCHES.length} automatic batches and keep validation paused until all batches are complete. Core Next.js scaffold/config files are handled by deterministic templates, not the Coding Agent.`,
-        timestamp: new Date().toISOString(),
-      });
-      continueBatchGeneration();
-      return;
-    }
-
-    batchGenerationRef.current = null;
     launchAgentRequest(agent, text, {
       repoContextString,
       conversationHistory,
@@ -2691,14 +2209,24 @@ export default function ChatComposer({
     onSetIsStreaming,
     onSetMemoryStage,
     onSetActivityStatus,
-    continueBatchGeneration,
     launchAgentRequest,
-    upsertDeterministicNextScaffold,
+    taskDrivenBuild,
   ]);
 
   const handleStop = useCallback(() => {
+    if (taskDrivenBuild.active) {
+      taskDrivenBuild.cancel();
+    }
     const scope = cancellationScopeRef.current;
-    if (!scope && !isStreaming && !isLoading && !generationPipelineActive) return;
+    if (
+      !scope &&
+      !taskDrivenBuild.active &&
+      !isStreaming &&
+      !isLoading &&
+      !generationPipelineActive
+    ) {
+      return;
+    }
 
     const runId = activePipelineRunIdRef.current;
     if (runId) {
@@ -2707,10 +2235,6 @@ export default function ChatComposer({
     }
 
     scope?.cancel('Cancelled by user');
-    if (batchGenerationRef.current) {
-      batchGenerationRef.current.active = false;
-    }
-
     const hadStreamingMessage = Boolean(streamMsgIdRef.current);
     streamMsgIdRef.current = '';
     accumulatedRef.current = '';
@@ -2755,6 +2279,7 @@ export default function ChatComposer({
     onSetActivityStatus,
     onSetIsStreaming,
     onUpdateLastMessage,
+    taskDrivenBuild,
   ]);
 
   const handleKeyDown = (
@@ -2769,7 +2294,8 @@ export default function ChatComposer({
   const currentAgentOption = AGENT_OPTIONS.find(
     (a) => a.type === selectedAgent
   );
-  const generationActive = generationPipelineActive || isStreaming || isLoading;
+  const generationActive =
+    taskDrivenBuild.active || generationPipelineActive || isStreaming || isLoading;
 
   return (
     <div className="workspace-composer flex-shrink-0 border-t border-matrix-border bg-matrix-bg px-4 py-3">

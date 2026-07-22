@@ -73,6 +73,12 @@ function buildSnapshotFromProject(project: MatrixProject): MatrixProjectWorkspac
     capabilityResolution: project.capabilityResolution,
     taskGraph: project.taskGraph,
     repositoryModel: project.repositoryModel,
+    engineeringMemory: project.engineeringMemory,
+    taskExecutionState: project.taskExecutionState,
+    buildOrchestrationState: project.buildOrchestrationState,
+    contractReviewReport: project.contractReviewReport,
+    intelligenceCore: project.intelligenceCore,
+    changePlan: project.changePlan,
     validationStatus: project.validationStatus,
     deploymentStatus: project.deploymentStatus,
     workspaceState: project.workspaceState,
@@ -237,6 +243,12 @@ export default function ProjectsClient() {
           capabilityResolution: projectToOpen.capabilityResolution,
           taskGraph: projectToOpen.taskGraph,
           repositoryModel: projectToOpen.repositoryModel,
+          engineeringMemory: projectToOpen.engineeringMemory,
+          taskExecutionState: projectToOpen.taskExecutionState,
+          buildOrchestrationState: projectToOpen.buildOrchestrationState,
+          contractReviewReport: projectToOpen.contractReviewReport,
+          intelligenceCore: projectToOpen.intelligenceCore,
+          changePlan: projectToOpen.changePlan,
         });
         writeMatrixProjectOpenHandoff(window.sessionStorage, projectToOpen);
         setWorkspaceSnapshot(snapshot);
@@ -351,6 +363,12 @@ export default function ProjectsClient() {
         capabilityResolution: projectToOpen.capabilityResolution,
         taskGraph: projectToOpen.taskGraph,
         repositoryModel: projectToOpen.repositoryModel,
+        engineeringMemory: projectToOpen.engineeringMemory,
+        taskExecutionState: projectToOpen.taskExecutionState,
+        buildOrchestrationState: projectToOpen.buildOrchestrationState,
+        contractReviewReport: projectToOpen.contractReviewReport,
+        intelligenceCore: projectToOpen.intelligenceCore,
+        changePlan: projectToOpen.changePlan,
       });
       writeMatrixProjectOpenHandoff(window.sessionStorage, projectToOpen);
       setActiveProjectId(projectToOpen.id);
