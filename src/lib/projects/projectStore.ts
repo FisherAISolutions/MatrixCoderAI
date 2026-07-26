@@ -49,6 +49,12 @@ import {
   type BuildOrchestrationState,
 } from '@/lib/build-orchestration';
 import {
+  cloneEngineeringForemanStateForProject,
+  deserializeEngineeringForemanState,
+  serializeEngineeringForemanState,
+  type EngineeringForemanState,
+} from '@/lib/engineering-foreman';
+import {
   deserializeContractReviewReport,
   serializeContractReviewReport,
   type ContractReviewReport,
@@ -129,6 +135,7 @@ export interface MatrixProject {
   taskGraph?: TaskGraph;
   repositoryModel?: RepositoryModel;
   engineeringMemory?: EngineeringMemory;
+  engineeringForemanState?: EngineeringForemanState;
   taskExecutionState?: TaskExecutionState;
   buildOrchestrationState?: BuildOrchestrationState;
   contractReviewReport?: ContractReviewReport;
@@ -155,6 +162,7 @@ export interface MatrixProjectDraft {
   taskGraph?: TaskGraph;
   repositoryModel?: RepositoryModel;
   engineeringMemory?: EngineeringMemory;
+  engineeringForemanState?: EngineeringForemanState;
   taskExecutionState?: TaskExecutionState;
   buildOrchestrationState?: BuildOrchestrationState;
   contractReviewReport?: ContractReviewReport;
@@ -176,6 +184,7 @@ export interface MatrixProjectWorkspaceContext {
   taskGraph?: TaskGraph;
   repositoryModel?: RepositoryModel;
   engineeringMemory?: EngineeringMemory;
+  engineeringForemanState?: EngineeringForemanState;
   taskExecutionState?: TaskExecutionState;
   buildOrchestrationState?: BuildOrchestrationState;
   contractReviewReport?: ContractReviewReport;
@@ -197,6 +206,7 @@ export interface MatrixProjectWorkspaceSnapshot {
   taskGraph?: TaskGraph;
   repositoryModel?: RepositoryModel;
   engineeringMemory?: EngineeringMemory;
+  engineeringForemanState?: EngineeringForemanState;
   taskExecutionState?: TaskExecutionState;
   buildOrchestrationState?: BuildOrchestrationState;
   contractReviewReport?: ContractReviewReport;
@@ -408,6 +418,11 @@ function normalizeProjectPayload(
     ? (deserializeEngineeringMemory(JSON.stringify(parsed.engineeringMemory)) ??
       undefined)
     : undefined;
+  const engineeringForemanState = parsed.engineeringForemanState
+    ? (deserializeEngineeringForemanState(
+        JSON.stringify(parsed.engineeringForemanState)
+      ) ?? undefined)
+    : undefined;
   const taskExecutionState = parsed.taskExecutionState
     ? (deserializeTaskExecutionState(JSON.stringify(parsed.taskExecutionState)) ??
       undefined)
@@ -444,6 +459,7 @@ function normalizeProjectPayload(
     taskGraph,
     repositoryModel,
     engineeringMemory,
+    engineeringForemanState,
     taskExecutionState,
     buildOrchestrationState,
     contractReviewReport,
@@ -577,6 +593,13 @@ function serializeProject(project: MatrixProject): MatrixProject {
           engineeringMemory: JSON.parse(
             serializeEngineeringMemory(project.engineeringMemory)
           ) as EngineeringMemory,
+        }
+      : {}),
+    ...(project.engineeringForemanState
+      ? {
+          engineeringForemanState: JSON.parse(
+            serializeEngineeringForemanState(project.engineeringForemanState)
+          ) as EngineeringForemanState,
         }
       : {}),
     ...(project.taskExecutionState
@@ -863,6 +886,7 @@ export function createMatrixProject(
     taskGraph: draft.taskGraph,
     repositoryModel: draft.repositoryModel,
     engineeringMemory: draft.engineeringMemory,
+    engineeringForemanState: draft.engineeringForemanState,
     taskExecutionState: draft.taskExecutionState,
     buildOrchestrationState: draft.buildOrchestrationState,
     contractReviewReport: draft.contractReviewReport,
@@ -938,6 +962,14 @@ export function duplicateMatrixProject(
     engineeringMemory: project.engineeringMemory
       ? cloneEngineeringMemoryForProject(project.engineeringMemory, id, now)
       : undefined,
+    engineeringForemanState: project.engineeringForemanState
+      ? cloneEngineeringForemanStateForProject(
+          project.engineeringForemanState,
+          id,
+          project.taskGraph,
+          now
+        )
+      : undefined,
     taskExecutionState: undefined,
     buildOrchestrationState: project.buildOrchestrationState
       ? {
@@ -989,6 +1021,7 @@ export function createProjectFromWorkspaceSnapshot(
       taskGraph: snapshot.taskGraph,
       repositoryModel: snapshot.repositoryModel,
       engineeringMemory: snapshot.engineeringMemory,
+      engineeringForemanState: snapshot.engineeringForemanState,
       taskExecutionState: snapshot.taskExecutionState,
       buildOrchestrationState: snapshot.buildOrchestrationState,
       contractReviewReport: snapshot.contractReviewReport,
@@ -1032,6 +1065,7 @@ export async function checkpointActiveMatrixProject(
     taskGraph: snapshot.taskGraph,
     repositoryModel: snapshot.repositoryModel,
     engineeringMemory: snapshot.engineeringMemory,
+    engineeringForemanState: snapshot.engineeringForemanState,
     taskExecutionState: snapshot.taskExecutionState,
     buildOrchestrationState: snapshot.buildOrchestrationState,
     contractReviewReport: snapshot.contractReviewReport,
@@ -1388,6 +1422,15 @@ export function saveMatrixProjectWorkspaceSnapshot(
             ),
           }
         : {}),
+      ...(snapshot.engineeringForemanState
+        ? {
+            engineeringForemanState: JSON.parse(
+              serializeEngineeringForemanState(
+                snapshot.engineeringForemanState
+              )
+            ),
+          }
+        : {}),
       ...(snapshot.taskExecutionState
         ? {
             taskExecutionState: JSON.parse(
@@ -1489,6 +1532,11 @@ export function loadMatrixProjectWorkspaceSnapshot(
       engineeringMemory: parsed.engineeringMemory
         ? (deserializeEngineeringMemory(JSON.stringify(parsed.engineeringMemory)) ??
           undefined)
+        : undefined,
+      engineeringForemanState: parsed.engineeringForemanState
+        ? (deserializeEngineeringForemanState(
+            JSON.stringify(parsed.engineeringForemanState)
+          ) ?? undefined)
         : undefined,
       taskExecutionState: parsed.taskExecutionState
         ? (deserializeTaskExecutionState(
@@ -1608,6 +1656,15 @@ export function saveMatrixProjectWorkspaceContext(
             ),
           }
         : {}),
+      ...(context.engineeringForemanState
+        ? {
+            engineeringForemanState: JSON.parse(
+              serializeEngineeringForemanState(
+                context.engineeringForemanState
+              )
+            ),
+          }
+        : {}),
       ...(context.taskExecutionState
         ? {
             taskExecutionState: JSON.parse(
@@ -1693,6 +1750,11 @@ export function loadMatrixProjectWorkspaceContext(
       engineeringMemory: parsed.engineeringMemory
         ? (deserializeEngineeringMemory(JSON.stringify(parsed.engineeringMemory)) ??
           undefined)
+        : undefined,
+      engineeringForemanState: parsed.engineeringForemanState
+        ? (deserializeEngineeringForemanState(
+            JSON.stringify(parsed.engineeringForemanState)
+          ) ?? undefined)
         : undefined,
       taskExecutionState: parsed.taskExecutionState
         ? (deserializeTaskExecutionState(
