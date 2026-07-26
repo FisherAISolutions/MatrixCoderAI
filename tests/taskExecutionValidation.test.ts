@@ -119,6 +119,53 @@ describe('task-level validation and repair', () => {
     );
   });
 
+  it('does not treat App Router foundation wording as a runtime or quality audit request', async () => {
+    const foundationTask = task({
+      category: 'foundation',
+      assignedDiscipline: 'foundation',
+      title: 'Create project foundation',
+      description: 'Create the Next.js App Router foundation and source root.',
+      expectedFiles: ['package.json', 'tsconfig.json', 'src/app/page.tsx'],
+      allowedFileScope: ['package.json', 'tsconfig.json', 'src/app/**'],
+      validationCommands: ['npm install'],
+    });
+    const plan = selectTaskValidationPlan(foundationTask);
+    const runValidationImpl = vi.fn(async () => validationResult());
+    const files = [
+      file('package.json', '{"scripts":{"dev":"next dev"}}'),
+      file('tsconfig.json', '{"compilerOptions":{"strict":true}}'),
+      file('src/app/page.tsx', 'export default function Home() { return <main>Home</main>; }'),
+    ];
+
+    expect(plan.kinds).not.toContain('runtime-smoke');
+    expect(plan.kinds).not.toContain('generated-quality');
+
+    const result = await createTaskValidationRunner({ runValidationImpl }).validate(
+      files,
+      foundationTask,
+      repository(files),
+      { runId: 'run-foundation', operationId: 'op-foundation' }
+    );
+
+    expect(result.ok).toBe(true);
+    expect(runValidationImpl).not.toHaveBeenCalled();
+  });
+
+  it('still runs runtime smoke for a concrete frontend route page task', () => {
+    const plan = selectTaskValidationPlan(
+      task({
+        category: 'frontend',
+        assignedDiscipline: 'frontend',
+        title: 'Build progress screen',
+        expectedFiles: ['src/app/progress/page.tsx'],
+        allowedFileScope: ['src/app/progress/**'],
+      })
+    );
+
+    expect(plan.kinds).toContain('runtime-smoke');
+    expect(plan.kinds).toContain('generated-quality');
+  });
+
   it('treats blocked environment validation as blocked rather than passed', async () => {
     const runner = createTaskValidationRunner({
       runValidationImpl: vi.fn(async () =>
@@ -148,6 +195,38 @@ describe('task-level validation and repair', () => {
 
     expect(result.ok).toBe(false);
     expect(result.outcome).toBe('blocked by environment');
+  });
+
+  it('does not let an environment blocker hide missing task output', async () => {
+    const runner = createTaskValidationRunner({
+      runValidationImpl: vi.fn(async () =>
+        validationResult({
+          success: false,
+          skipped: true,
+          skipReason: 'SharedArrayBuffer unavailable in this browser.',
+          steps: [
+            {
+              step: 'type-check',
+              status: 'skipped',
+              durationMs: 1,
+              errors: [],
+              log: '',
+              infrastructureError: 'SharedArrayBuffer unavailable in this browser.',
+            },
+          ],
+        })
+      ),
+    });
+
+    const result = await runner.validate([], task(), repository([]), {
+      runId: 'run-missing',
+      operationId: 'op-missing',
+    });
+
+    expect(result.outcome).toBe('recoverable');
+    expect(result.errors).toContain('Missing expected file src/lib/story-storage.ts');
+    expect(result.errors.join('\n')).not.toContain('SharedArrayBuffer');
+    expect(result.warnings.join('\n')).toContain('SharedArrayBuffer');
   });
 
   it('keeps exact scoped error evidence for task validation', async () => {

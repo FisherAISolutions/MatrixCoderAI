@@ -19,6 +19,7 @@ import {
 } from '@/lib/blueprint-studio/blueprintDraft';
 import type { MatrixIntelligenceCore } from '@/lib/intelligence-core';
 import { initializeArchitectIntelligenceCore } from './intelligence';
+import { ensureArchitectConversation } from './conversation';
 
 type StorageLike = Pick<Storage, 'getItem' | 'setItem' | 'removeItem'>;
 
@@ -40,18 +41,27 @@ export function loadArchitectProjectState(
 ): ArchitectProjectState {
   const context = loadMatrixProjectWorkspaceContext(storage);
   const snapshot = loadMatrixProjectWorkspaceSnapshot(storage);
-  const draft =
-    context.architectDraft ??
-    snapshot?.architectDraft ??
+  const activeProjectId = context.currentProjectId ?? snapshot?.projectId;
+  const contextDraftMatches =
+    context.architectDraft &&
+    (!activeProjectId || context.architectDraft.projectId === activeProjectId);
+  const snapshotDraftMatches =
+    snapshot?.architectDraft &&
+    (!activeProjectId ||
+      !snapshot.architectDraft.projectId ||
+      snapshot.architectDraft.projectId === activeProjectId);
+  const persistedDraft =
+    (contextDraftMatches ? context.architectDraft : undefined) ??
+    (snapshotDraftMatches ? snapshot?.architectDraft : undefined) ??
     createArchitectDraft({
-      projectId: context.currentProjectId ?? snapshot?.projectId,
+      projectId: activeProjectId,
       projectName: context.currentProjectName ?? snapshot?.name,
       sourceBuildManifest: context.buildManifest ?? snapshot?.buildManifest,
       now,
     });
+  const draft = ensureArchitectConversation(persistedDraft, now);
   const projectId =
-    context.currentProjectId ??
-    snapshot?.projectId ??
+    activeProjectId ??
     draft.projectId ??
     'local-architect-project';
   const intelligenceCore = initializeArchitectIntelligenceCore({

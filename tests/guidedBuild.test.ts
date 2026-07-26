@@ -256,6 +256,49 @@ describe('guided build state', () => {
     expect(next.tasks[1].blockedReason).toBeUndefined();
   });
 
+  it('allows an environment-blocked task to be retried and reopens blocked descendants', () => {
+    const original = graph([
+      task({
+        id: 'task-foundation',
+        status: 'blocked',
+        retryCount: 0,
+        blockedReason: 'SharedArrayBuffer unavailable.',
+      }),
+      task({
+        id: 'task-data',
+        title: 'Define schema',
+        category: 'data',
+        assignedDiscipline: 'database',
+        status: 'blocked',
+        dependencies: ['task-foundation'],
+        blockedReason: 'Blocked by task-foundation.',
+      }),
+      task({
+        id: 'task-dashboard',
+        title: 'Build dashboard',
+        status: 'blocked',
+        dependencies: ['task-data'],
+        blockedReason: 'Blocked by task-data.',
+      }),
+    ]);
+
+    const state = createGuidedBuildState({ taskGraph: original });
+    expect(state.actions.retryableTaskIds).toContain('task-foundation');
+
+    const next = markGuidedBuildTaskForRetry(
+      original,
+      'task-foundation',
+      new Date(now)
+    );
+
+    expect(next.tasks.map((item) => item.status)).toEqual([
+      'ready',
+      'pending',
+      'pending',
+    ]);
+    expect(next.tasks.every((item) => item.blockedReason === undefined)).toBe(true);
+  });
+
   it('resumes a recoverable interrupted task', () => {
     const original = graph([
       task({

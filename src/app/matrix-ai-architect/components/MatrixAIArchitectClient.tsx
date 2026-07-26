@@ -21,6 +21,7 @@ import {
   createArchitectDraft,
   ensureArchitectConversation,
   getArchitectServiceRecommendations,
+  getArchitectConversationReadiness,
   handoffArchitectDraftToBlueprint,
   initializeArchitectIntelligenceCore,
   loadArchitectProjectState,
@@ -93,6 +94,10 @@ export default function MatrixAIArchitectClient() {
     () => (draft ? getArchitectServiceRecommendations(draft.answers) : []),
     [draft]
   );
+  const readiness = useMemo(
+    () => (draft ? getArchitectConversationReadiness(draft) : null),
+    [draft]
+  );
 
   const handleChange = <K extends keyof ArchitectAnswers>(
     key: K,
@@ -152,6 +157,14 @@ export default function MatrixAIArchitectClient() {
   const handleHandoff = () => {
     if (!draft) return;
     if (!draft.conversation?.approvedForBlueprint) {
+      if (!readiness?.readyForBlueprint) {
+        setSaveStatus('saved');
+        setMessage(
+          readiness?.reason ??
+            'Keep talking with Matrix AI Architect before approving this plan.'
+        );
+        return;
+      }
       const approved = approveArchitectConversationForBlueprint(draft);
       setDraft(approved);
       applyIntelligenceUpdate({
@@ -342,11 +355,14 @@ export default function MatrixAIArchitectClient() {
                   Explicit handoff
                 </p>
                 <h2 className="mt-2 text-xl font-bold text-slate-950">
-                  Ready for Blueprint Studio
+                  {readiness?.readyForBlueprint
+                    ? 'Ready for Blueprint Studio'
+                    : 'Blueprint handoff is still locked'}
                 </h2>
                 <p className="mt-2 text-sm leading-6 text-slate-600">
-                  Architect will not overwrite Blueprint Studio until you send
-                  this draft forward.
+                  {readiness?.readyForBlueprint
+                    ? 'Architect will not overwrite Blueprint Studio until you explicitly send this draft forward.'
+                    : readiness?.reason}
                 </p>
               </div>
               <CheckCircle2 className="text-emerald-500" size={22} aria-hidden="true" />
@@ -360,7 +376,11 @@ export default function MatrixAIArchitectClient() {
               <button
                 type="button"
                 onClick={handleHandoff}
-                className="inline-flex items-center gap-2 rounded-xl bg-slate-950 px-4 py-3 text-sm font-bold text-white transition hover:bg-slate-800"
+                disabled={
+                  !draft.conversation?.approvedForBlueprint &&
+                  !readiness?.readyForBlueprint
+                }
+                className="inline-flex items-center gap-2 rounded-xl bg-slate-950 px-4 py-3 text-sm font-bold text-white transition hover:bg-slate-800 disabled:cursor-not-allowed disabled:bg-slate-300"
               >
                 {draft.conversation?.approvedForBlueprint
                   ? 'Send to Blueprint Studio'

@@ -192,7 +192,9 @@ function isOptionalTask(task: TaskGraphTask): boolean {
 
 function canRetry(task: TaskGraphTask): boolean {
   return (
-    (task.status === 'failed' || task.status === 'recoverable-failure') &&
+    (task.status === 'failed' ||
+      task.status === 'recoverable-failure' ||
+      task.status === 'blocked') &&
     task.retryCount < task.maximumRetryCount
   );
 }
@@ -457,6 +459,23 @@ export function markGuidedBuildTaskForRetry(
   const task = graph.tasks.find((item) => item.id === taskId);
   if (!task || !canRetry(task)) return graph;
   const nowIso = now.toISOString();
+  const dependentIds = new Set<string>();
+  const queue = [taskId];
+  while (queue.length > 0) {
+    const dependencyId = queue.shift();
+    if (!dependencyId) continue;
+    for (const current of graph.tasks) {
+      if (
+        current.status === 'blocked' &&
+        current.dependencies.includes(dependencyId) &&
+        !dependentIds.has(current.id)
+      ) {
+        dependentIds.add(current.id);
+        queue.push(current.id);
+      }
+    }
+  }
+
   return {
     ...graph,
     updatedAt: nowIso,
@@ -473,10 +492,7 @@ export function markGuidedBuildTaskForRetry(
         };
       }
 
-      if (
-        current.status === 'blocked' &&
-        current.dependencies.includes(taskId)
-      ) {
+      if (dependentIds.has(current.id)) {
         return {
           ...current,
           status: 'pending',

@@ -357,4 +357,37 @@ describe('Matrix AI Architect Intelligence Core integration', () => {
     expect(state.intelligenceCore.projectId).toBe('older-project');
     expect(state.draft.conversation?.messages).toHaveLength(1);
   });
+
+  it('starts a fresh Architect conversation when the active project changes', () => {
+    const storage = createMemoryStorage();
+    let oldDraft = ensureArchitectConversation(
+      createArchitectDraft({
+        projectId: 'project-one',
+        projectName: 'First Project',
+        now: NOW,
+      }),
+      NOW
+    );
+    oldDraft = updateArchitectAnswer(
+      oldDraft,
+      'appIdea',
+      'A fitness tracker for coaches and athletes.',
+      NOW
+    );
+    saveMatrixProjectWorkspaceContext(storage, {
+      currentProjectId: 'project-two',
+      currentProjectName: 'Second Project',
+      architectDraft: oldDraft,
+    });
+
+    const state = loadArchitectProjectState(storage, NOW);
+
+    expect(state.draft.projectId).toBe('project-two');
+    expect(state.draft.projectName).toBe('Second Project');
+    expect(state.draft.answers.appIdea).toBe('');
+    expect(state.draft.conversation?.messages).toHaveLength(1);
+    expect(state.draft.conversation?.messages[0].content).toContain(
+      'Welcome to Matrix AI Architect'
+    );
+  });
 });

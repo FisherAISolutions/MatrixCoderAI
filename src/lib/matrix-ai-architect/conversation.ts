@@ -16,23 +16,19 @@ import type {
   ArchitectQuestion,
 } from './types';
 
-const ESSENTIAL_TOPICS: (keyof ArchitectAnswers)[] = [
+const DISCOVERY_TOPICS: (keyof ArchitectAnswers)[] = [
   'appIdea',
-  'investmentLevel',
   'primaryUsers',
+  'investmentLevel',
   'accountsRequired',
+  'publicWebsite',
+  'dashboard',
+  'payments',
+  'aiFeatures',
+  'mobileSupport',
   'database',
   'deploymentTarget',
   'customRequirements',
-];
-
-const BLUEPRINT_READY_TOPICS: (keyof ArchitectAnswers)[] = [
-  'appIdea',
-  'investmentLevel',
-  'primaryUsers',
-  'accountsRequired',
-  'database',
-  'deploymentTarget',
 ];
 
 const MAX_TURNS = 18;
@@ -82,6 +78,20 @@ function isBlankAnswer(key: keyof ArchitectAnswers, answers: ArchitectAnswers): 
   if (typeof value === 'string') return value.trim().length === 0;
   if (Array.isArray(value)) return value.length === 0;
   return false;
+}
+
+function requiredTopicsForDraft(draft: ArchitectDraft): (keyof ArchitectAnswers)[] {
+  const topics = [...DISCOVERY_TOPICS];
+  if (draft.answers.accountsRequired) topics.push('auth');
+  if (
+    draft.answers.payments ||
+    draft.answers.aiFeatures.length > 0 ||
+    draft.answers.notifications.length > 0
+  ) {
+    topics.push('integrations');
+  }
+  if (draft.answers.scheduling) topics.push('notifications');
+  return unique(topics);
 }
 
 function normalize(value: string): string {
@@ -263,6 +273,9 @@ function extractActiveTopicAnswer(
   }
 
   if (question.type === 'multiselect') {
+    if (/\b(no|none|nothing|not needed|skip)\b/.test(text)) {
+      return { [topicId]: [] } as Partial<ArchitectAnswers>;
+    }
     const optionIds = extractMultiOptionIds(question, text);
     if (optionIds.length === 0) return {};
     const currentValue = Array.isArray(current[topicId]) ? (current[topicId] as string[]) : [];
@@ -272,13 +285,48 @@ function extractActiveTopicAnswer(
   return {};
 }
 
+function activeTopicAnswerRecognized(
+  topicId: keyof ArchitectAnswers | 'review',
+  input: string
+): boolean {
+  if (topicId === 'review') return true;
+  const question = questionById(topicId);
+  const text = normalize(input);
+  const trimmed = input.trim();
+  if (!question || !trimmed) return false;
+  if (question.type === 'text' || question.type === 'textarea') {
+    return trimmed.length > 3 && !/^(yes|no|maybe|sure)$/i.test(trimmed);
+  }
+  if (question.type === 'boolean') return yesNoFromText(text) !== null;
+  if (question.type === 'select') {
+    return (
+      (topicId === 'investmentLevel' && budgetFromText(text) !== null) ||
+      extractOptionId(question, text) !== null
+    );
+  }
+  if (question.type === 'multiselect') {
+    return (
+      /\b(no|none|nothing|not needed|skip)\b/.test(text) ||
+      extractMultiOptionIds(question, text).length > 0
+    );
+  }
+  return false;
+}
+
 function nextTopic(
   draft: ArchitectDraft,
   conversation: Pick<ArchitectConversationState, 'answeredTopicIds'>
 ): keyof ArchitectAnswers | 'review' {
   const answered = new Set(conversation.answeredTopicIds);
-  for (const topic of ESSENTIAL_TOPICS) {
+  for (const topic of requiredTopicsForDraft(draft)) {
     if (!answered.has(topic) || isBlankAnswer(topic, draft.answers)) {
+      if (
+        answered.has(topic) &&
+        Array.isArray(draft.answers[topic]) &&
+        (draft.answers[topic] as string[]).length === 0
+      ) {
+        continue;
+      }
       return topic;
     }
   }
@@ -361,29 +409,54 @@ export function getArchitectConversationReadiness(
   conversation = draft.conversation
 ): ArchitectConversationReadiness {
   const answered = new Set(conversation?.answeredTopicIds ?? []);
-  const missingTopics = BLUEPRINT_READY_TOPICS.filter((topic) => {
-    return !answered.has(topic) || isBlankAnswer(topic, draft.answers);
+  const requiredTopics = requiredTopicsForDraft(draft);
+  const missingTopics = requiredTopics.filter((topic) => {
+    if (!answered.has(topic)) return true;
+    const value = draft.answers[topic];
+    return typeof value === 'string' && value.trim().length === 0;
   });
-  const answeredCount = BLUEPRINT_READY_TOPICS.filter(
-    (topic) => answered.has(topic) && !isBlankAnswer(topic, draft.answers)
-  ).length;
+  const answeredCount = requiredTopics.length - missingTopics.length;
   const turnCount = conversation?.turnCount ?? 0;
+  const coverage = requiredTopics.length
+    ? answeredCount / requiredTopics.length
+    : 0;
+  const appIdeaHasDetail = draft.answers.appIdea.trim().split(/\s+/).length >= 6;
+  const usersHaveDetail = draft.answers.primaryUsers.trim().split(/\s+/).length >= 2;
   const confidence = Math.min(
     95,
-    Math.max(35, draft.specification.confidenceScore + answeredCount * 2 - missingTopics.length * 8)
+    Math.max(
+      25,
+      Math.round(
+        25 +
+          coverage * 60 +
+          (appIdeaHasDetail ? 5 : 0) +
+          (usersHaveDetail ? 5 : 0)
+      )
+    )
   );
   const hasEnoughConversation =
-    answeredCount >= BLUEPRINT_READY_TOPICS.length || turnCount >= 4;
+    turnCount >= 6 || answeredCount === requiredTopics.length;
   const readyForBlueprint =
-    missingTopics.length === 0 && hasEnoughConversation && confidence >= 68;
+    missingTopics.length === 0 &&
+    hasEnoughConversation &&
+    appIdeaHasDetail &&
+    usersHaveDetail &&
+    confidence >= 82;
   return {
     readyForBlueprint,
     canCreateInitialBuildContract: readyForBlueprint && confidence >= 72,
     confidence,
     missingTopics,
     reason: readyForBlueprint
-      ? 'Core product, users, budget, data, and deployment choices are available.'
-      : `Still gathering ${missingTopics.length} core planning topic(s).`,
+      ? 'The product, users, core experience, cost posture, data, and delivery decisions are covered.'
+      : missingTopics.length > 0
+      ? `Still gathering ${missingTopics.length} planning decision(s): ${missingTopics
+          .slice(0, 3)
+          .map((topic) => questionById(topic)?.label ?? topic)
+          .join(', ')}${missingTopics.length > 3 ? ', and more' : ''}.`
+      : !appIdeaHasDetail || !usersHaveDetail
+      ? 'The product idea and intended users need a little more detail before Blueprint review.'
+      : 'A few more conversational decisions are needed before Blueprint review.',
   };
 }
 
@@ -485,16 +558,24 @@ export function applyArchitectConversationTurn({
   const general = inferGeneralAnswers(userInput, draft.answers);
   const updates = { ...general, ...specific };
   const keys = changedKeys(draft.answers, updates);
-  const extractionConfidence = keys.length > 0 ? Math.min(94, 62 + keys.length * 8) : 35;
+  const recognizedActiveAnswer = activeTopicAnswerRecognized(activeTopicId, userInput);
+  const extractionConfidence =
+    keys.length > 0 || recognizedActiveAnswer
+      ? Math.min(94, 62 + Math.max(1, keys.length) * 8)
+      : 35;
   let nextDraft = applyAnswerUpdates(draft, updates, now);
   const answeredTopicIds = unique([
     ...conversation.answeredTopicIds,
-    ...(activeTopicId && activeTopicId !== 'review' && extractionConfidence >= 55 ? [activeTopicId] : []),
+    ...(activeTopicId &&
+    activeTopicId !== 'review' &&
+    recognizedActiveAnswer
+      ? [activeTopicId]
+      : []),
     ...keys,
   ]);
 
   const unresolved =
-    keys.length === 0
+    keys.length === 0 && !recognizedActiveAnswer
       ? [
           {
             topicId: activeTopicId,
@@ -594,10 +675,13 @@ export function recordArchitectStructuredEdit<K extends keyof ArchitectAnswers>(
   const conversation = draft.conversation ?? createArchitectConversation(draft, now);
   const nextDraft = updateArchitectAnswer(draft, key, value, now);
   const answeredTopicIds = unique([...conversation.answeredTopicIds, key]);
+  const activeTopicId = nextTopic(nextDraft, { answeredTopicIds });
   const nextConversation: ArchitectConversationState = {
     ...conversation,
     answeredTopicIds,
+    activeTopicId,
     approvedForBlueprint: false,
+    completed: activeTopicId === 'review',
     streamVersion: conversation.streamVersion + 1,
     messages: [
       ...conversation.messages,
@@ -685,6 +769,9 @@ export function approveArchitectConversationForBlueprint(
   now = new Date()
 ): ArchitectDraft {
   const conversation = draft.conversation ?? createArchitectConversation(draft, now);
+  if (!getArchitectConversationReadiness(draft, conversation).readyForBlueprint) {
+    return draft;
+  }
   return {
     ...draft,
     conversation: {

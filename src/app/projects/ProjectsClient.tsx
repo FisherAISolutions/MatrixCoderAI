@@ -256,6 +256,13 @@ export default function ProjectsClient() {
       }
       setProjectName('');
       setProjectDescription('');
+      if (
+        mode === 'blank' &&
+        result.saveState !== 'conflict' &&
+        result.saveState !== 'save-failed'
+      ) {
+        router.push('/matrix-ai-architect');
+      }
     },
     [
       persistProjectList,
@@ -263,6 +270,7 @@ export default function ProjectsClient() {
       projectName,
       projects,
       workspaceSnapshot,
+      router,
     ]
   );
 

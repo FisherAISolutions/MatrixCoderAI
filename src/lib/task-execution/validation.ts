@@ -57,8 +57,42 @@ function taskNeeds(kind: TaskValidationKind, task: TaskGraphTask): boolean {
 
   if (kind === 'schema') return /schema|migration|database|supabase|prisma|drizzle/.test(text);
   if (kind === 'server-only-env') return /openai|anthropic|gemini|ai provider|api key|server-only/.test(text);
-  if (kind === 'generated-quality') return /quality|route|page|screen|acceptance|contract/.test(text);
-  if (kind === 'runtime-smoke') return /runtime|smoke|render|route/.test(text);
+  if (kind === 'generated-quality') {
+    if (task.category === 'foundation' || task.assignedDiscipline === 'foundation') {
+      return false;
+    }
+    const implementsRoutePage =
+      task.category === 'frontend' &&
+      task.expectedFiles.some((path) =>
+        /^(?:src\/)?app\/(?:.+\/)?page\.(?:tsx?|jsx?)$/i.test(
+          normalizeRepositoryPath(path)
+        )
+      );
+    return (
+      implementsRoutePage ||
+      task.category === 'review' ||
+      task.assignedDiscipline === 'review' ||
+      /\bgenerated[- ]quality\b|\bcontract acceptance\b|\bquality audit\b/.test(text)
+    );
+  }
+  if (kind === 'runtime-smoke') {
+    if (task.category === 'foundation' || task.assignedDiscipline === 'foundation') {
+      return false;
+    }
+    const explicitlyRequested = task.validationCommands.some((command) =>
+      /\bruntime[- ]smoke\b|\bsmoke test\b|\bnpm run dev\b|\brender check\b/i.test(
+        command
+      )
+    );
+    const implementsRoutePage =
+      task.category === 'frontend' &&
+      task.expectedFiles.some((path) =>
+        /^(?:src\/)?app\/(?:.+\/)?page\.(?:tsx?|jsx?)$/i.test(
+          normalizeRepositoryPath(path)
+        )
+      );
+    return explicitlyRequested || implementsRoutePage;
+  }
   return false;
 }
 
@@ -187,12 +221,21 @@ function validationResultToTaskResult(
 ): TaskValidationResult {
   if (isEnvironmentFailure(result)) {
     const reason = result.skipReason ?? 'Validation was blocked by the environment.';
+    const hasExistingTaskErrors = existing.errors.length > 0;
     return {
       ...existing,
       ok: false,
-      outcome: 'blocked by environment',
-      summary: reason,
-      errors: [reason],
+      outcome: hasExistingTaskErrors ? 'recoverable' : 'blocked by environment',
+      summary: hasExistingTaskErrors
+        ? `Task validation found ${existing.errors.length} issue(s); broader validation was also blocked by the environment.`
+        : reason,
+      errors: hasExistingTaskErrors ? existing.errors : [reason],
+      warnings: hasExistingTaskErrors
+        ? [
+            ...existing.warnings,
+            `Broader validation is currently blocked by the environment: ${reason}`,
+          ]
+        : existing.warnings,
       evidence: [
         ...(existing.evidence ?? []),
         evidence('command', 'blocked', reason, undefined, result.combinedLog),

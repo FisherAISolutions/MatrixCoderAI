@@ -12,9 +12,42 @@ import {
   serializeArchitectDraft,
   setArchitectConversationExperienceLevel,
   updateArchitectAnswer,
+  type ArchitectAnswers,
 } from '@/lib/matrix-ai-architect';
 
 const NOW = new Date('2026-07-20T12:00:00.000Z');
+
+function createCompleteDiscoveryDraft() {
+  let draft = ensureArchitectConversation(createArchitectDraft({ now: NOW }), NOW);
+  const answers: [
+    keyof ArchitectAnswers,
+    ArchitectAnswers[keyof ArchitectAnswers],
+  ][] = [
+    [
+      'appIdea',
+      'A personal CRM that helps independent consultants manage clients and follow-ups.',
+    ],
+    ['primaryUsers', 'independent consultants and small agencies'],
+    ['investmentLevel', 'professional'],
+    ['accountsRequired', false],
+    ['publicWebsite', true],
+    ['dashboard', true],
+    ['payments', false],
+    ['aiFeatures', []],
+    ['mobileSupport', ['responsive-web']],
+    ['database', 'local-first'],
+    ['deploymentTarget', 'vercel'],
+    [
+      'customRequirements',
+      'Include accessible forms, clear empty states, and responsive client workflows.',
+    ],
+  ];
+
+  for (const [key, value] of answers) {
+    draft = recordArchitectStructuredEdit(draft, key, value, NOW);
+  }
+  return draft;
+}
 
 describe('Matrix AI Architect conversation', () => {
   it('starts with a first greeting and one clear question', () => {
@@ -43,9 +76,9 @@ describe('Matrix AI Architect conversation', () => {
     expect(result.stale).toBe(false);
     expect(result.draft.answers.appIdea).toContain('fitness tracker');
     expect(result.conversation.answeredTopicIds).toContain('appIdea');
-    expect(result.conversation.activeTopicId).toBe('investmentLevel');
+    expect(result.conversation.activeTopicId).toBe('primaryUsers');
     expect(result.conversation.messages.at(-1)?.content).toContain(
-      'free or low-cost'
+      'Who are the users?'
     );
     expect(result.conversation.messages.at(-1)?.content).not.toContain(
       'Blueprint review'
@@ -157,7 +190,14 @@ describe('Matrix AI Architect conversation', () => {
 
     expect(draft.conversation?.approvedForBlueprint).toBe(false);
 
-    const approved = approveArchitectConversationForBlueprint(draft, NOW);
+    const incompleteApproval = approveArchitectConversationForBlueprint(draft, NOW);
+    expect(incompleteApproval).toBe(draft);
+    expect(incompleteApproval.conversation?.approvedForBlueprint).toBe(false);
+
+    const approved = approveArchitectConversationForBlueprint(
+      createCompleteDiscoveryDraft(),
+      NOW
+    );
 
     expect(approved.conversation?.approvedForBlueprint).toBe(true);
     expect(approved.conversation?.messages.at(-1)?.content).toContain('approved');
@@ -184,30 +224,42 @@ describe('Matrix AI Architect conversation', () => {
   });
 
   it('knows when enough structured data exists for an initial Build Contract', () => {
-    let draft = ensureArchitectConversation(createArchitectDraft({ now: NOW }), NOW);
-    draft = updateArchitectAnswer(draft, 'appIdea', 'A personal CRM', NOW);
-    draft = updateArchitectAnswer(draft, 'primaryUsers', 'solo founders', NOW);
-    draft = updateArchitectAnswer(draft, 'database', 'cloud-database', NOW);
-    draft = updateArchitectAnswer(draft, 'deploymentTarget', 'vercel', NOW);
-    draft = {
-      ...draft,
-      conversation: {
-        ...draft.conversation!,
-        answeredTopicIds: [
-          'appIdea',
-          'investmentLevel',
-          'primaryUsers',
-          'accountsRequired',
-          'database',
-          'deploymentTarget',
-        ],
-      },
-    };
-
+    const draft = createCompleteDiscoveryDraft();
     const readiness = getArchitectConversationReadiness(draft);
 
     expect(readiness.readyForBlueprint).toBe(true);
     expect(readiness.canCreateInitialBuildContract).toBe(true);
+  });
+
+  it('treats an explicit no as a real answer and advances the conversation', () => {
+    let draft = ensureArchitectConversation(createArchitectDraft({ now: NOW }), NOW);
+    draft = recordArchitectStructuredEdit(
+      draft,
+      'appIdea',
+      'A portfolio site for independent product designers and their clients.',
+      NOW
+    );
+    draft = recordArchitectStructuredEdit(
+      draft,
+      'primaryUsers',
+      'independent product designers',
+      NOW
+    );
+    draft = recordArchitectStructuredEdit(draft, 'investmentLevel', 'free-first', NOW);
+    const conversation = draft.conversation!;
+
+    const result = applyArchitectConversationTurn({
+      draft,
+      conversation,
+      userInput: 'No, visitors do not need accounts.',
+      now: new Date('2026-07-20T12:09:00.000Z'),
+      streamVersion: conversation.streamVersion,
+    });
+
+    expect(result.draft.answers.accountsRequired).toBe(false);
+    expect(result.conversation.answeredTopicIds).toContain('accountsRequired');
+    expect(result.conversation.activeTopicId).toBe('publicWebsite');
+    expect(result.extraction.unresolvedQuestions).toHaveLength(0);
   });
 
   it('does not duplicate recommendation decision messages on repeated clicks', () => {

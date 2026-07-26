@@ -1,6 +1,6 @@
 'use client';
 
-import { FormEvent, useEffect, useMemo, useState } from 'react';
+import { FormEvent, useEffect, useMemo, useRef, useState } from 'react';
 import {
   Bot,
   Check,
@@ -14,7 +14,9 @@ import {
   applyArchitectConversationTurn,
   getArchitectConversationReadiness,
   recordArchitectRecommendationDecision,
+  replaceLatestArchitectConversationReply,
   setArchitectConversationExperienceLevel,
+  streamArchitectConversationReply,
   type ArchitectConversationExtraction,
   type ArchitectDraft,
   type ArchitectExperienceLevel,
@@ -54,68 +56,105 @@ export default function ArchitectConversationPanel({
 }: ArchitectConversationPanelProps) {
   const conversation = draft.conversation;
   const [input, setInput] = useState('');
+  const [isStreaming, setIsStreaming] = useState(false);
   const [streamedId, setStreamedId] = useState<string | null>(null);
   const [streamedText, setStreamedText] = useState('');
-  const latestArchitectMessage = useMemo(
-    () =>
-      conversation?.messages
-        .filter((item) => item.role === 'architect')
-        .at(-1) ?? null,
-    [conversation?.messages]
-  );
+  const streamRunRef = useRef(0);
+  const abortRef = useRef<AbortController | null>(null);
   const readiness = useMemo(
     () => getArchitectConversationReadiness(draft, conversation),
     [conversation, draft]
   );
 
   useEffect(() => {
-    if (!latestArchitectMessage) return;
-    let cancelled = false;
-    setStreamedId(latestArchitectMessage.id);
-    setStreamedText('');
-    let index = 0;
-    const timer = window.setInterval(() => {
-      if (cancelled) return;
-      index += 5;
-      setStreamedText(latestArchitectMessage.content.slice(0, index));
-      if (index >= latestArchitectMessage.content.length) {
-        window.clearInterval(timer);
-      }
-    }, 12);
-
     return () => {
-      cancelled = true;
-      window.clearInterval(timer);
+      streamRunRef.current += 1;
+      abortRef.current?.abort();
+      abortRef.current = null;
     };
-  }, [latestArchitectMessage?.id, latestArchitectMessage?.content]);
+  }, [conversation?.id]);
 
-  const handleSubmit = (event: FormEvent) => {
+  const handleSubmit = async (event: FormEvent) => {
     event.preventDefault();
-    if (!conversation || !input.trim()) return;
+    if (!conversation || !input.trim() || isStreaming) return;
+    const userInput = input.trim();
     const result = applyArchitectConversationTurn({
       draft,
       conversation,
-      userInput: input,
+      userInput,
       streamVersion: conversation.streamVersion,
     });
-    if (!result.stale) {
-      onDraftChange(result.draft);
-      onConversationIntelligenceUpdate?.({
-        beforeDraft: draft,
-        afterDraft: result.draft,
-        extraction: result.extraction,
-        userInput: input,
-        naturalLanguageResponse:
-          result.conversation.messages.at(-1)?.content ??
-          'Architect updated the structured project plan.',
+    if (result.stale) return;
+
+    setInput('');
+    onDraftChange(result.draft);
+    const fallbackResponse =
+      result.conversation.messages.at(-1)?.content ??
+      'I have recorded that. Let us keep shaping the plan.';
+    const latestMessage = result.conversation.messages.at(-1);
+    if (!latestMessage || latestMessage.role !== 'architect') return;
+
+    abortRef.current?.abort();
+    const controller = new AbortController();
+    abortRef.current = controller;
+    const runId = streamRunRef.current + 1;
+    streamRunRef.current = runId;
+    setIsStreaming(true);
+    setStreamedId(latestMessage.id);
+    setStreamedText('');
+    onStatusMessage?.('Matrix AI Architect is thinking...');
+
+    let finalDraft = result.draft;
+    let naturalLanguageResponse = fallbackResponse;
+    try {
+      const streamed = await streamArchitectConversationReply({
+        draft: result.draft,
+        signal: controller.signal,
+        onText: (text) => {
+          if (streamRunRef.current !== runId || controller.signal.aborted) return;
+          setStreamedText(text);
+        },
       });
+      if (streamRunRef.current !== runId || controller.signal.aborted) return;
+      if (streamed) {
+        naturalLanguageResponse = streamed;
+        finalDraft = replaceLatestArchitectConversationReply(
+          result.draft,
+          {
+            conversationId: result.conversation.id,
+            streamVersion: result.conversation.streamVersion,
+          },
+          streamed
+        );
+        onDraftChange(finalDraft);
+      }
       onStatusMessage?.(
         result.extraction.confidence > 50
-          ? 'Architect updated the structured draft from your answer.'
-          : 'Architect needs a little more clarity before updating the draft.'
+          ? 'Architect updated the project understanding from your answer.'
+          : 'Architect needs a little more clarity before changing the plan.'
       );
+    } catch (error) {
+      if (streamRunRef.current !== runId || controller.signal.aborted) return;
+      onStatusMessage?.(
+        'Live Architect response was unavailable, so Matrix preserved the safe local planning response.'
+      );
+    } finally {
+      if (streamRunRef.current === runId) {
+        setIsStreaming(false);
+        setStreamedId(null);
+        setStreamedText('');
+        abortRef.current = null;
+      }
     }
-    setInput('');
+
+    if (streamRunRef.current !== runId || controller.signal.aborted) return;
+    onConversationIntelligenceUpdate?.({
+      beforeDraft: draft,
+      afterDraft: finalDraft,
+      extraction: result.extraction,
+      userInput,
+      naturalLanguageResponse,
+    });
   };
 
   const setLevel = (level: ArchitectExperienceLevel) => {
@@ -230,7 +269,9 @@ export default function ArchitectConversationPanel({
           const isArchitect = item.role === 'architect';
           const isSystem = item.role === 'system';
           const isStreaming = item.id === streamedId && isArchitect;
-          const content = isStreaming ? streamedText || item.content.slice(0, 1) : item.content;
+          const content = isStreaming
+            ? streamedText || 'Thinking through your answer...'
+            : item.content;
           return (
             <article
               key={item.id}
@@ -280,10 +321,10 @@ export default function ArchitectConversationPanel({
           />
           <button
             type="submit"
-            disabled={!input.trim()}
+            disabled={!input.trim() || isStreaming}
             className="inline-flex items-center justify-center gap-2 rounded-2xl bg-slate-950 px-5 py-3 text-sm font-bold text-white transition hover:bg-slate-800 disabled:cursor-not-allowed disabled:bg-slate-300"
           >
-            Send
+            {isStreaming ? 'Thinking' : 'Send'}
             <Send size={16} aria-hidden="true" />
           </button>
         </div>
@@ -332,7 +373,7 @@ export default function ArchitectConversationPanel({
                   <button
                     type="button"
                     onClick={() => recordDecision(item.title, 'accepted')}
-                    disabled={state === 'accepted'}
+                    disabled={state === 'accepted' || isStreaming}
                     className={`inline-flex items-center gap-1 rounded-lg px-2 py-1 text-xs font-bold ${
                       state === 'accepted'
                         ? 'cursor-not-allowed bg-emerald-600 text-white'
@@ -344,7 +385,7 @@ export default function ArchitectConversationPanel({
                   <button
                     type="button"
                     onClick={() => recordDecision(item.title, 'rejected')}
-                    disabled={state === 'rejected'}
+                    disabled={state === 'rejected' || isStreaming}
                     className={`inline-flex items-center gap-1 rounded-lg px-2 py-1 text-xs font-bold ${
                       state === 'rejected'
                         ? 'cursor-not-allowed bg-rose-600 text-white'
