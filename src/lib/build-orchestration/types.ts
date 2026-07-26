@@ -1,8 +1,15 @@
 import type { FileNode } from '@/app/chat-workspace/components/types';
+import type { BlueprintDraft } from '@/lib/blueprint-studio/blueprintDraft';
 import type { BuildContract } from '@/lib/build-contract';
 import type { CapabilityResolutionResult } from '@/lib/capabilities';
 import type { ContractReviewReport } from '@/lib/contract-review';
 import type { EngineeringMemory } from '@/lib/engineering-memory';
+import type { EngineeringForemanState } from '@/lib/engineering-foreman';
+import type { MatrixIntelligenceCore } from '@/lib/intelligence-core';
+import type {
+  ArchitectBudgetMode,
+  ArchitectDraft,
+} from '@/lib/matrix-ai-architect/types';
 import type { RepositoryModel } from '@/lib/repository-model';
 import type { TaskExecutionResult, TaskExecutionState } from '@/lib/task-execution';
 import type { TaskGraph, TaskGraphTask } from '@/lib/task-graph';
@@ -66,6 +73,8 @@ export interface InitializedTaskDrivenBuild {
   graph: TaskGraph;
   repositoryModel: RepositoryModel;
   engineeringMemory: EngineeringMemory;
+  engineeringForemanState: EngineeringForemanState;
+  intelligenceCore: MatrixIntelligenceCore;
   files: FileNode[];
 }
 
@@ -85,6 +94,8 @@ export interface BuildOrchestrationSnapshot {
   graph: TaskGraph;
   repositoryModel: RepositoryModel;
   engineeringMemory: EngineeringMemory;
+  engineeringForemanState: EngineeringForemanState;
+  intelligenceCore: MatrixIntelligenceCore;
   files: FileNode[];
   taskExecutionState?: TaskExecutionState;
   contractReviewReport?: ContractReviewReport;
@@ -106,7 +117,12 @@ export interface InitializeTaskDrivenBuildOptions {
   existingGraph?: TaskGraph | null;
   existingRepositoryModel?: RepositoryModel | null;
   existingEngineeringMemory?: EngineeringMemory | null;
+  existingEngineeringForemanState?: EngineeringForemanState | null;
+  existingIntelligenceCore?: MatrixIntelligenceCore | null;
   existingState?: BuildOrchestrationState | null;
+  architectDraft?: ArchitectDraft | null;
+  blueprintDraft?: BlueprintDraft | null;
+  budgetMode?: ArchitectBudgetMode;
   generatedFilePaths?: string[];
   userEditedFilePaths?: string[];
   protectedPaths?: string[];
@@ -131,6 +147,9 @@ export interface RunTaskDrivenBuildOptions extends InitializedTaskDrivenBuild {
   projectId: string;
   contract: BuildContract;
   capabilityResolution: CapabilityResolutionResult;
+  architectDraft?: ArchitectDraft | null;
+  blueprintDraft?: BlueprintDraft | null;
+  budgetMode?: ArchitectBudgetMode;
   signal?: AbortSignal;
   generatedFilePaths?: string[];
   userEditedFilePaths?: string[];

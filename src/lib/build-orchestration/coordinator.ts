@@ -8,6 +8,16 @@ import {
   type EngineeringMemoryValidationEvidence,
 } from '@/lib/engineering-memory';
 import {
+  confirmForemanRepositoryRefresh,
+  createEngineeringForemanState,
+  planNextEngineeringTask,
+  recordForemanFailure,
+  recordValidatedForemanTask,
+  restoreEngineeringForemanState,
+  startForemanTask,
+} from '@/lib/engineering-foreman';
+import { createIntelligenceCore } from '@/lib/intelligence-core';
+import {
   createRepositoryModel,
   refreshRepositoryModel,
 } from '@/lib/repository-model';
@@ -197,6 +207,33 @@ export function initializeTaskDrivenBuild(
   const engineeringMemory = options.existingEngineeringMemory
     ? restoreEngineeringMemory(memorySeed, { repositoryModel, now })
     : memorySeed;
+  const intelligenceCore = createIntelligenceCore({
+    projectId: options.projectId,
+    architectDraft: options.architectDraft,
+    blueprintDraft: options.blueprintDraft,
+    buildContract: options.contract,
+    capabilityResolution: options.capabilityResolution,
+    taskGraph: graph,
+    repositoryModel,
+    engineeringMemory,
+    existingCore: options.existingIntelligenceCore,
+    now,
+  });
+  const restoredForeman = options.existingEngineeringForemanState
+    ? restoreEngineeringForemanState(
+        options.existingEngineeringForemanState,
+        graph,
+        now
+      )
+    : undefined;
+  const engineeringForemanState = createEngineeringForemanState({
+    projectId: options.projectId,
+    taskGraph: graph,
+    contract: options.contract,
+    capabilityResolution: options.capabilityResolution,
+    existingState: restoredForeman,
+    now,
+  });
   const priorMatchesContract =
     options.existingState?.contractId === options.contract.id &&
     options.existingState.contractVersion === options.contract.contractVersion;
@@ -217,7 +254,15 @@ export function initializeTaskDrivenBuild(
         now,
       });
 
-  return { state, graph, repositoryModel, engineeringMemory, files: options.files };
+  return {
+    state,
+    graph,
+    repositoryModel,
+    engineeringMemory,
+    engineeringForemanState,
+    intelligenceCore,
+    files: options.files,
+  };
 }
 
 export async function runTaskDrivenBuild(
@@ -246,6 +291,8 @@ export async function runTaskDrivenBuild(
   let files = options.files;
   let repositoryModel = options.repositoryModel;
   let engineeringMemory = options.engineeringMemory;
+  let engineeringForemanState = options.engineeringForemanState;
+  let intelligenceCore = options.intelligenceCore;
   let taskExecutionState: TaskExecutionState | undefined;
   let contractReviewReport = options.contractReviewReport;
   let finalValidationResult = options.finalValidationResult;
@@ -256,6 +303,8 @@ export async function runTaskDrivenBuild(
     graph,
     repositoryModel,
     engineeringMemory,
+    engineeringForemanState,
+    intelligenceCore,
     files,
     taskExecutionState,
     contractReviewReport,
@@ -304,8 +353,8 @@ export async function runTaskDrivenBuild(
       return stopResult(snapshot(), 'cancelled-by-user');
     }
 
-    const nextTask = getNextReadyTask(graph);
-    if (nextTask) {
+    const graphReadyTask = getNextReadyTask(graph);
+    if (graphReadyTask) {
       if (executions >= maxTaskExecutions) {
         state = nextState(state, graph, {
           status: 'blocked',
@@ -321,6 +370,76 @@ export async function runTaskDrivenBuild(
         return stopResult(snapshot(), 'safety-limit');
       }
 
+      repositoryModel = refreshRepositoryModel(repositoryModel, {
+        files,
+        projectId: options.projectId,
+        generatedFilePaths: options.generatedFilePaths,
+        userEditedFilePaths: options.userEditedFilePaths,
+        protectedPaths: options.protectedPaths,
+      }).model;
+      intelligenceCore = createIntelligenceCore({
+        projectId: options.projectId,
+        architectDraft: options.architectDraft,
+        blueprintDraft: options.blueprintDraft,
+        buildContract: options.contract,
+        capabilityResolution: options.capabilityResolution,
+        taskGraph: graph,
+        repositoryModel,
+        engineeringMemory,
+        existingCore: intelligenceCore,
+      });
+      engineeringForemanState = confirmForemanRepositoryRefresh(
+        engineeringForemanState,
+        repositoryModel
+      );
+      const decision = planNextEngineeringTask({
+        state: engineeringForemanState,
+        taskGraph: graph,
+        contract: options.contract,
+        capabilityResolution: options.capabilityResolution,
+        repositoryModel,
+        intelligenceCore,
+        engineeringMemory,
+        blueprintDraft: options.blueprintDraft,
+        budgetMode: options.budgetMode,
+      });
+      engineeringForemanState = decision.state;
+      if (
+        !decision.taskId ||
+        !decision.packet ||
+        !['schedule', 'repair'].includes(decision.kind)
+      ) {
+        const stopReason: BuildOrchestrationStopReason =
+          decision.kind === 'blocked'
+            ? 'critical-task-failure'
+            : decision.kind === 'cancelled'
+              ? 'cancelled-by-user'
+              : 'no-ready-task';
+        state = nextState(state, graph, {
+          status:
+            decision.kind === 'blocked'
+              ? 'blocked'
+              : decision.kind === 'cancelled'
+                ? 'cancelled'
+                : 'recoverable-failure',
+          stopReason,
+          finishedAt: new Date().toISOString(),
+          errors: [decision.reason],
+        });
+        await emit(options, snapshot(), {
+          type: 'stopped',
+          message: decision.reason,
+        });
+        return stopResult(snapshot(), stopReason);
+      }
+      const nextTask =
+        graph.tasks.find((task) => task.id === decision.taskId) ??
+        graphReadyTask;
+      engineeringForemanState = startForemanTask(
+        engineeringForemanState,
+        nextTask.id,
+        repositoryModel.repositoryFingerprint
+      );
       executions += 1;
       state = nextState(state, graph, {
         status: 'running',
@@ -338,6 +457,9 @@ export async function runTaskDrivenBuild(
         graph,
         files,
         repositoryModel,
+        taskId: nextTask.id,
+        intelligencePacket: decision.packet,
+        responseProtocol: 'structured-operations',
         validationRunner: createTaskValidationRunner({
           requirements: requirementsText(options.contract),
         }),
@@ -370,6 +492,30 @@ export async function runTaskDrivenBuild(
         checkpointOnSuccess:
           taskResult.status === 'passed' ? `${recordedTask.title} passed` : false,
       });
+      intelligenceCore = createIntelligenceCore({
+        projectId: options.projectId,
+        architectDraft: options.architectDraft,
+        blueprintDraft: options.blueprintDraft,
+        buildContract: options.contract,
+        capabilityResolution: options.capabilityResolution,
+        taskGraph: graph,
+        repositoryModel,
+        engineeringMemory,
+        existingCore: intelligenceCore,
+      });
+      engineeringForemanState =
+        taskResult.status === 'passed'
+          ? recordValidatedForemanTask(
+              engineeringForemanState,
+              graph,
+              repositoryModel,
+              engineeringMemory,
+              recordedTask.id
+            )
+          : recordForemanFailure(
+              engineeringForemanState,
+              recordedTask
+            );
       state = nextState(state, graph, {
         status:
           taskResult.status === 'passed'
@@ -393,12 +539,14 @@ export async function runTaskDrivenBuild(
         taskResult,
         message: `${recordedTask.title}: ${taskResult.status}`,
       });
-      await emit(options, snapshot(), {
-        type: 'checkpoint',
-        task: recordedTask,
-        taskResult,
-        message: 'Project files and engineering progress checkpointed.',
-      });
+      if (taskResult.status === 'passed') {
+        await emit(options, snapshot(), {
+          type: 'checkpoint',
+          task: recordedTask,
+          taskResult,
+          message: 'Project files and engineering progress checkpointed.',
+        });
+      }
 
       if (taskResult.status === 'passed') continue;
       if (taskResult.status === 'cancelled') {

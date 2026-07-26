@@ -134,7 +134,9 @@ function taskResult(
   options: TaskExecutionOptions,
   status: 'passed' | 'cancelled'
 ): TaskExecutionResult {
-  const current = getNextReadyTask(options.graph);
+  const current = options.taskId
+    ? options.graph.tasks.find((task) => task.id === options.taskId)
+    : getNextReadyTask(options.graph);
   if (!current) throw new Error('Expected a ready task.');
   const updatedTask = {
     ...current,
@@ -241,8 +243,12 @@ describe('task-driven build orchestration', () => {
     });
     const taskIds: string[] = [];
     const executeTask = vi.fn(async (options: TaskExecutionOptions) => {
-      const ready = getNextReadyTask(options.graph);
+      const ready = options.taskId
+        ? options.graph.tasks.find((task) => task.id === options.taskId)
+        : getNextReadyTask(options.graph);
       if (!ready) throw new Error('Expected one ready task.');
+      expect(options.responseProtocol).toBe('structured-operations');
+      expect(options.intelligencePacket?.task.id).toBe(ready.id);
       taskIds.push(ready.id);
       return taskResult(options, 'passed');
     });
@@ -264,6 +270,10 @@ describe('task-driven build orchestration', () => {
     expect(taskIds).toHaveLength(initialized.graph.tasks.length);
     expect(new Set(taskIds).size).toBe(taskIds.length);
     expect(result.graph.tasks.every((task) => task.status === 'passed')).toBe(true);
+    expect(result.engineeringForemanState.latestCheckpoint?.validatedTaskId).toBe(
+      taskIds.at(-1)
+    );
+    expect(result.engineeringMemory.lastSafeCheckpoint).toBeDefined();
   });
 
   it('does not report completion when final contract evidence is incomplete', async () => {

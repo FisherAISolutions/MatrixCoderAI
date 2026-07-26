@@ -2,6 +2,7 @@ import type { FileNode } from '@/app/chat-workspace/components/types';
 import type { ExtractedResponse } from '@/lib/repo/extractors';
 import type { RepositoryModel, RepositoryTaskContext } from '@/lib/repository-model';
 import type { TaskGraph, TaskGraphTask } from '@/lib/task-graph';
+import type { TaskIntelligencePacket } from '@/lib/engineering-foreman';
 
 export const TASK_EXECUTION_SCHEMA_VERSION = 1;
 export const TASK_EXECUTION_METADATA_VERSION = '2026-07-20';
@@ -150,6 +151,9 @@ export interface TaskExecutionOptions {
   generatedFilePaths?: string[];
   userEditedFilePaths?: string[];
   protectedPaths?: string[];
+  taskId?: string;
+  intelligencePacket?: TaskIntelligencePacket;
+  responseProtocol?: 'legacy-fences' | 'structured-operations';
   shouldAcceptResult?: (guard: TaskExecutionGuard) => boolean;
 }
 
@@ -161,7 +165,7 @@ export interface TaskExecutionRepairOptions {
 
 export interface AppliedTaskChange {
   path: string;
-  kind: 'create' | 'update' | 'edit' | 'skip';
+  kind: 'create' | 'update' | 'edit' | 'delete' | 'dependency' | 'environment' | 'skip';
   description: string;
 }
 
@@ -178,6 +182,8 @@ export interface TaskExecutionResult {
   repositoryModel: RepositoryModel;
   state: TaskExecutionState;
   extracted?: ExtractedResponse;
+  structuredResponse?: import('./structuredOperations').TaskOperationEnvelope;
+  responseValidationErrors?: string[];
   validation?: TaskValidationResult;
   appliedChanges: AppliedTaskChange[];
   rejectedChanges: RejectedTaskChange[];

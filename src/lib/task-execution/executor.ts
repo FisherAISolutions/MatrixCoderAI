@@ -15,9 +15,18 @@ import {
   type TaskGraph,
   type TaskGraphTask,
 } from '@/lib/task-graph';
-import { buildTaskEngineeringInstruction } from './instructionBuilders';
+import {
+  buildStructuredResponseRepairInstruction,
+  buildStructuredTaskEngineeringInstruction,
+  buildTaskEngineeringInstruction,
+} from './instructionBuilders';
 import { applyTaskExecutionResponse } from './patchApplication';
 import { createOperationId, createRunId, createTaskExecutionState } from './state';
+import {
+  applyStructuredTaskOperations,
+  parseTaskOperationEnvelope,
+  type TaskOperationEnvelope,
+} from './structuredOperations';
 import { runTargetedTaskRepair } from './targetedRepair';
 import type {
   TaskExecutionAiClient,
@@ -223,6 +232,31 @@ function startRepositoryModel(options: TaskExecutionOptions, now: Date): Reposit
   });
 }
 
+function selectTask(options: TaskExecutionOptions): TaskGraphTask | undefined {
+  if (!options.taskId) return getNextReadyTask(options.graph) ?? undefined;
+  const task = options.graph.tasks.find((item) => item.id === options.taskId);
+  if (!task) return undefined;
+  const dependenciesPassed = task.dependencies.every((dependencyId) => {
+    const dependency = options.graph.tasks.find((item) => item.id === dependencyId);
+    return dependency && ['passed', 'skipped'].includes(dependency.status);
+  });
+  if (
+    !dependenciesPassed ||
+    !['pending', 'ready', 'recoverable-failure'].includes(task.status)
+  ) {
+    return undefined;
+  }
+  return task;
+}
+
+function structuredMode(
+  repositoryModel: RepositoryModel
+): TaskOperationEnvelope['mode'] {
+  return repositoryModel.files.some((file) => file.readable && !file.missing)
+    ? 'repository-aware'
+    : 'full-file-create';
+}
+
 export async function executeNextTask(
   options: TaskExecutionOptions
 ): Promise<TaskExecutionResult> {
@@ -260,16 +294,23 @@ export async function executeNextTask(
     });
   }
 
-  const task = getNextReadyTask(options.graph);
+  const task = selectTask(options);
   if (!task) {
-    return createResult('idle', {
+    const invalidSelection = Boolean(options.taskId);
+    return createResult(invalidSelection ? 'blocked' : 'idle', {
       graph: options.graph,
       files: options.files,
       repositoryModel,
-      state: createTaskExecutionState('idle', now, {
+      state: createTaskExecutionState(invalidSelection ? 'blocked' : 'idle', now, {
         projectId: options.projectId,
         repositoryFingerprint: repositoryModel.repositoryFingerprint,
+        errors: invalidSelection
+          ? [`Foreman-selected task ${options.taskId} is missing, not ready, or has incomplete dependencies.`]
+          : [],
       }),
+      errors: invalidSelection
+        ? [`Foreman-selected task ${options.taskId} is missing, not ready, or has incomplete dependencies.`]
+        : [],
     });
   }
 
@@ -345,11 +386,54 @@ export async function executeNextTask(
   let appliedChanges: TaskExecutionResult['appliedChanges'] = [];
   let rejectedChanges: TaskExecutionResult['rejectedChanges'] = [];
   let extracted: TaskExecutionResult['extracted'];
+  let structuredResponse: TaskOperationEnvelope | undefined;
+  let responseValidationErrors: string[] = [];
 
   if (!context.expectedOutputsAlreadyExist) {
     const aiClient = options.aiClient ?? defaultAiClient();
-    const messages = buildTaskEngineeringInstruction(runningTask, context);
-    const aiResponse = await aiClient.complete(messages, {
+    const useStructuredOperations =
+      options.responseProtocol === 'structured-operations';
+    const mode = structuredMode(latestModel);
+    if (
+      useStructuredOperations &&
+      (!options.intelligencePacket ||
+        options.intelligencePacket.task.id !== runningTask.id)
+    ) {
+      const reason =
+        'A matching Task Intelligence Packet is required for structured task execution.';
+      graph = recordTaskFailure(graph, runningTask.id, 'validation', reason, now);
+      return {
+        status: 'recoverable-failure',
+        task: graph.tasks.find((item) => item.id === runningTask.id) ?? runningTask,
+        graph,
+        files,
+        repositoryModel: latestModel,
+        state: createTaskExecutionState('recoverable-failure', now, {
+          projectId: options.projectId,
+          activeTaskId: runningTask.id,
+          activeRunId: runId,
+          activeOperationId: operationId,
+          finishedAt: now.toISOString(),
+          repositoryFingerprint: latestModel.repositoryFingerprint,
+          errors: [reason],
+        }),
+        responseValidationErrors: [reason],
+        appliedChanges,
+        rejectedChanges,
+        warnings: [],
+        errors: [reason],
+      };
+    }
+    let messages = useStructuredOperations
+      ? buildStructuredTaskEngineeringInstruction({
+          task: runningTask,
+          context,
+          packet: options.intelligencePacket!,
+          files,
+          mode,
+        })
+      : buildTaskEngineeringInstruction(runningTask, context);
+    let aiResponse = await aiClient.complete(messages, {
       signal: options.signal,
       task: runningTask,
       context,
@@ -402,17 +486,122 @@ export async function executeNextTask(
       });
     }
 
-    const applied = applyTaskExecutionResponse({
-      responseContent: aiResponse.content,
-      files,
-      task: runningTask,
-      repositoryModel: latestModel,
-      now,
-    });
-    files = applied.files;
-    extracted = applied.extracted;
-    appliedChanges = applied.appliedChanges;
-    rejectedChanges = applied.rejectedChanges;
+    if (useStructuredOperations) {
+      let parsed = parseTaskOperationEnvelope(aiResponse.content, {
+        taskId: runningTask.id,
+        mode,
+      });
+      if (!parsed.envelope) {
+        responseValidationErrors = parsed.errors;
+        messages = buildStructuredResponseRepairInstruction({
+          task: runningTask,
+          context,
+          packet: options.intelligencePacket!,
+          files,
+          mode,
+          errors: parsed.errors,
+          invalidResponse: aiResponse.content,
+        });
+        aiResponse = await aiClient.complete(messages, {
+          signal: options.signal,
+          task: runningTask,
+          context,
+          runId,
+          operationId: `${operationId}:response-repair`,
+        });
+        if (isAbort(options.signal) || !guardAccepted(guard, options)) {
+          return createResult(isAbort(options.signal) ? 'cancelled' : 'stale', {
+            task: runningTask,
+            graph,
+            files,
+            repositoryModel: latestModel,
+            state: createTaskExecutionState(
+              isAbort(options.signal) ? 'cancelled' : 'stale',
+              now,
+              {
+                projectId: options.projectId,
+                activeTaskId: runningTask.id,
+                activeRunId: runId,
+                activeOperationId: operationId,
+                warnings: isAbort(options.signal)
+                  ? []
+                  : ['Late response-format repair result was rejected.'],
+                errors: isAbort(options.signal)
+                  ? ['Cancelled during response-format repair.']
+                  : [],
+              }
+            ),
+            warnings: isAbort(options.signal)
+              ? []
+              : ['Late response-format repair result was rejected.'],
+            errors: isAbort(options.signal)
+              ? ['Cancelled during response-format repair.']
+              : [],
+          });
+        }
+        parsed = parseTaskOperationEnvelope(aiResponse.content, {
+          taskId: runningTask.id,
+          mode,
+        });
+        responseValidationErrors = parsed.errors;
+      }
+      if (!parsed.envelope) {
+        const reason =
+          parsed.errors[0] ??
+          'The model did not return a valid structured operation envelope.';
+        graph = recordTaskFailure(graph, runningTask.id, 'validation', reason, now);
+        const responseFailureStatus =
+          graph.tasks.find((item) => item.id === runningTask.id)?.status ===
+          'failed'
+            ? 'failed'
+            : 'recoverable-failure';
+        return {
+          status: responseFailureStatus,
+          task:
+            graph.tasks.find((item) => item.id === runningTask.id) ?? runningTask,
+          graph,
+          files,
+          repositoryModel: latestModel,
+          state: createTaskExecutionState(responseFailureStatus, now, {
+            projectId: options.projectId,
+            activeTaskId: runningTask.id,
+            activeRunId: runId,
+            activeOperationId: operationId,
+            finishedAt: now.toISOString(),
+            repositoryFingerprint: latestModel.repositoryFingerprint,
+            errors: parsed.errors,
+          }),
+          responseValidationErrors: parsed.errors,
+          appliedChanges,
+          rejectedChanges,
+          warnings: [],
+          errors: parsed.errors,
+        };
+      }
+      structuredResponse = parsed.envelope;
+      const applied = applyStructuredTaskOperations({
+        envelope: parsed.envelope,
+        files,
+        task: runningTask,
+        repositoryModel: latestModel,
+        now,
+      });
+      files = applied.files;
+      appliedChanges = applied.appliedChanges;
+      rejectedChanges = applied.rejectedChanges;
+    } else {
+      const applied = applyTaskExecutionResponse({
+        responseContent: aiResponse.content,
+        files,
+        task: runningTask,
+        repositoryModel: latestModel,
+        now,
+      });
+      files = applied.files;
+      extracted = applied.extracted;
+      appliedChanges = applied.appliedChanges;
+      rejectedChanges = applied.rejectedChanges;
+    }
     latestModel = refreshRepositoryModel(latestModel, {
       files,
       projectId: options.projectId,
@@ -511,6 +700,15 @@ export async function executeNextTask(
       generatedFilePaths: options.generatedFilePaths,
       userEditedFilePaths: options.userEditedFilePaths,
       protectedPaths: options.protectedPaths,
+      intelligencePacket: options.intelligencePacket,
+      responseProtocol: options.responseProtocol,
+      touchedPaths: Array.from(
+        new Set(
+          appliedChanges
+            .filter((change) => change.kind !== 'skip')
+            .map((change) => change.path)
+        )
+      ),
     });
 
     files = repair.files;
@@ -577,6 +775,8 @@ export async function executeNextTask(
         warnings: validation.warnings,
       }),
       extracted,
+      structuredResponse,
+      responseValidationErrors,
       validation,
       appliedChanges,
       rejectedChanges,
@@ -612,6 +812,8 @@ export async function executeNextTask(
         errors: validation.errors,
       }),
       extracted,
+      structuredResponse,
+      responseValidationErrors,
       validation,
       appliedChanges,
       rejectedChanges,
@@ -648,6 +850,8 @@ export async function executeNextTask(
         errors: validation.errors,
       }),
       extracted,
+      structuredResponse,
+      responseValidationErrors,
       validation,
       appliedChanges,
       rejectedChanges,
@@ -691,6 +895,8 @@ export async function executeNextTask(
       errors: [...validation.errors, ...rejectedChanges.map((change) => change.reason)],
     }),
     extracted,
+    structuredResponse,
+    responseValidationErrors,
     validation,
     appliedChanges,
     rejectedChanges,

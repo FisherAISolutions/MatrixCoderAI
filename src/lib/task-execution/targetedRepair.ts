@@ -9,8 +9,15 @@ import {
   type RepositoryModel,
 } from '@/lib/repository-model';
 import type { TaskGraphTask } from '@/lib/task-graph';
+import type { TaskIntelligencePacket } from '@/lib/engineering-foreman';
 import { AUTO_FIX_SYSTEM_PROMPT } from '@/lib/validation/autoFixPrompt';
+import { buildStructuredTaskEngineeringInstruction } from './instructionBuilders';
 import { applyTaskExecutionResponse } from './patchApplication';
+import {
+  applyStructuredTaskOperations,
+  parseTaskOperationEnvelope,
+  type TaskOperationEnvelope,
+} from './structuredOperations';
 import type {
   AppliedTaskChange,
   RejectedTaskChange,
@@ -46,6 +53,9 @@ export interface TargetedRepairOptions {
   generatedFilePaths?: string[];
   userEditedFilePaths?: string[];
   protectedPaths?: string[];
+  intelligencePacket?: TaskIntelligencePacket;
+  responseProtocol?: 'legacy-fences' | 'structured-operations';
+  touchedPaths?: string[];
 }
 
 function defaultAiClient(): TaskExecutionAiClient {
@@ -212,6 +222,22 @@ export async function runTargetedTaskRepair(
 
   const aiClient = options.aiClient ?? defaultAiClient();
   let attempts = 0;
+  const touchedPaths = Array.from(
+    new Set(
+      (options.touchedPaths?.length
+        ? options.touchedPaths
+        : options.task.expectedFiles
+      ).filter(Boolean)
+    )
+  );
+  const repairTask: TaskGraphTask =
+    options.responseProtocol === 'structured-operations' && touchedPaths.length
+      ? {
+          ...options.task,
+          allowedFileScope: touchedPaths,
+          expectedFiles: touchedPaths,
+        }
+      : options.task;
 
   while (attempts < maxAttempts) {
     if (options.signal?.aborted) {
@@ -228,10 +254,35 @@ export async function runTargetedTaskRepair(
       };
     }
     attempts += 1;
-    const response = await aiClient.complete(buildTargetedRepairMessages(options), {
+    const context = getRepositoryContextForTask(repairTask, repositoryModel);
+    const mode: TaskOperationEnvelope['mode'] = repositoryModel.files.some(
+      (file) => file.readable && !file.missing
+    )
+      ? 'repository-aware'
+      : 'full-file-create';
+    const useStructured =
+      options.responseProtocol === 'structured-operations' &&
+      options.intelligencePacket?.task.id === repairTask.id;
+    const messages = useStructured
+      ? buildStructuredTaskEngineeringInstruction({
+          task: repairTask,
+          context,
+          packet: options.intelligencePacket!,
+          files,
+          mode,
+          repair: {
+            validationErrors: [
+              options.validation.summary,
+              ...options.validation.errors,
+            ],
+            touchedPaths,
+          },
+        })
+      : buildTargetedRepairMessages({ ...options, task: repairTask });
+    const response = await aiClient.complete(messages, {
       signal: options.signal,
-      task: options.task,
-      context: getRepositoryContextForTask(options.task, repositoryModel),
+      task: repairTask,
+      context,
       runId: options.runId,
       operationId: `${options.operationId}:repair:${attempts}`,
     });
@@ -241,13 +292,31 @@ export async function runTargetedTaskRepair(
       break;
     }
 
-    const applied = applyTaskExecutionResponse({
-      responseContent: response.content,
-      files,
-      task: options.task,
-      repositoryModel,
-      now,
-    });
+    const parsed = useStructured
+      ? parseTaskOperationEnvelope(response.content, {
+          taskId: repairTask.id,
+          mode,
+        })
+      : undefined;
+    if (useStructured && !parsed?.envelope) {
+      errors.push(...(parsed?.errors ?? ['Invalid targeted repair response.']));
+      break;
+    }
+    const applied = useStructured
+      ? applyStructuredTaskOperations({
+          envelope: parsed!.envelope!,
+          files,
+          task: repairTask,
+          repositoryModel,
+          now,
+        })
+      : applyTaskExecutionResponse({
+          responseContent: response.content,
+          files,
+          task: repairTask,
+          repositoryModel,
+          now,
+        });
     files = applied.files;
     appliedChanges.push(...applied.appliedChanges);
     rejectedChanges.push(...applied.rejectedChanges);
