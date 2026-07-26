@@ -3,10 +3,14 @@ import { describe, expect, it } from 'vitest';
 import type { EngineeringMemory } from '@/lib/engineering-memory';
 import {
   cancelGuidedBuild,
+  createGuidedBuildOperationalSummary,
   createGuidedBuildState,
+  estimateGuidedBuildTime,
   markGuidedBuildTaskForResume,
   markGuidedBuildTaskForRetry,
   markGuidedBuildTaskSkipped,
+  readWorkspaceExperienceMode,
+  writeWorkspaceExperienceMode,
 } from '@/lib/guided-build';
 import {
   TASK_GRAPH_METADATA_VERSION,
@@ -405,5 +409,52 @@ describe('guided build state', () => {
       title: 'Planning your application',
       currentAction: 'Waiting for an approved plan',
     });
+  });
+
+  it('defaults to guided mode and persists an explicit advanced choice', () => {
+    const values = new Map<string, string>();
+    const storage = {
+      getItem: (key: string) => values.get(key) ?? null,
+      setItem: (key: string, value: string) => values.set(key, value),
+    };
+
+    expect(readWorkspaceExperienceMode(storage)).toBe('guided');
+    writeWorkspaceExperienceMode(storage, 'advanced');
+    expect(readWorkspaceExperienceMode(storage)).toBe('advanced');
+    values.set('matrix-coder.workspace-experience-mode.v1', 'invalid');
+    expect(readWorkspaceExperienceMode(storage)).toBe('guided');
+  });
+
+  it('summarizes task, validation, repair, repository, and time for guided mode', () => {
+    const failedGraph = graph([
+      task({
+        status: 'recoverable-failure',
+        retryCount: 1,
+        blockedReason: 'Dashboard type check failed.',
+      }),
+      task({
+        id: 'task-follow-up',
+        title: 'Add dashboard filters',
+        status: 'pending',
+        dependencies: ['task-frontend-dashboard'],
+      }),
+    ]);
+    const state = createGuidedBuildState({
+      taskGraph: failedGraph,
+      engineeringMemory: memory(failedGraph),
+    });
+    const summary = createGuidedBuildOperationalSummary({
+      guidedState: state,
+      engineeringMemory: memory(failedGraph),
+    });
+
+    expect(summary.currentTask).toBe('Review and retry this milestone');
+    expect(summary.currentRepair).toBe('Targeted retry available (1/2)');
+    expect(summary.currentValidation).toContain('TypeScript failed');
+    expect(summary.repositoryStatus).toBe('Repository scan pending');
+    expect(summary.completedTasks).toBe(0);
+    expect(summary.remainingTasks).toBe(2);
+    expect(summary.estimatedTime).toBe('About 4-12 min');
+    expect(estimateGuidedBuildTime(0)).toBe('Complete');
   });
 });

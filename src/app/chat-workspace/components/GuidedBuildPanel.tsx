@@ -204,7 +204,7 @@ export default function GuidedBuildPanel({
                   className="flex items-center gap-1 rounded-sm border border-rose-300/60 px-3 py-1 font-mono text-xs uppercase text-rose-100 disabled:opacity-50"
                   disabled={!controller.active && isStreaming}
                   title="Pause the active guided build after preserving completed work."
-                  onClick={() => controller.cancel()}
+                  onClick={() => controller.pause()}
                 >
                   <Pause size={12} />
                   Pause

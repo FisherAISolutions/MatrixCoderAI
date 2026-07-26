@@ -39,6 +39,7 @@ export interface WorkspaceTaskDrivenBuildController {
   resume: (taskId?: string) => Promise<void>;
   retryTask: (taskId: string) => Promise<void>;
   skipOptionalTask: (taskId: string) => Promise<void>;
+  pause: () => void;
   cancel: () => void;
   refresh: () => void;
 }
@@ -123,6 +124,8 @@ export function useTaskDrivenBuild(
     setStatus(nextStatus ?? (loaded.buildContract ? 'idle' : 'unavailable'));
     if (nextStatus === 'recoverable-failure') {
       setStatusMessage('The previous build was interrupted and can be resumed safely.');
+    } else if (nextStatus === 'cancelled') {
+      setStatusMessage('The build is paused. Completed work was preserved and can be resumed.');
     } else if (loaded.buildContract && loaded.capabilityResolution) {
       setStatusMessage('Approved plan is ready for bounded task-driven engineering.');
     } else {
@@ -319,7 +322,11 @@ export function useTaskDrivenBuild(
     } catch (error) {
       if (controller.signal.aborted) {
         setStatus('cancelled');
-        setStatusMessage('Cancelled by user. Completed work was preserved.');
+        setStatusMessage(
+          controller.signal.reason === 'Paused by user'
+            ? 'Paused by user. Completed work was preserved and can be resumed.'
+            : 'Cancelled by user. Completed work was preserved.'
+        );
       } else {
         const message = error instanceof Error ? error.message : String(error);
         setStatus('recoverable-failure');
@@ -397,6 +404,15 @@ export function useTaskDrivenBuild(
     options.onStatusChange('Cancelled by user');
   }, [options]);
 
+  const pause = useCallback(() => {
+    abortRef.current?.abort('Paused by user');
+    setActive(false);
+    setStatus('cancelled');
+    setStatusMessage('Paused by user. Completed work was preserved and can be resumed.');
+    options.onActiveChange(false);
+    options.onStatusChange('Paused by user');
+  }, [options]);
+
   return {
     available: Boolean(
       context.currentProjectId &&
@@ -411,6 +427,7 @@ export function useTaskDrivenBuild(
     resume,
     retryTask,
     skipOptionalTask,
+    pause,
     cancel,
     refresh,
   };

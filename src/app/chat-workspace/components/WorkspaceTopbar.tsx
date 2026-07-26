@@ -22,9 +22,12 @@ import {
   Trash2,
   Palette,
   Rocket,
+  ListChecks,
+  Code2,
 } from 'lucide-react';
 import AppLogo from '@/components/ui/AppLogo';
 import ThemeSwitcher from '@/components/theme/ThemeSwitcher';
+import type { WorkspaceExperienceMode } from '@/lib/guided-build';
 import { AgentType, MemoryStage } from './types';
 
 interface WorkspaceSession {
@@ -55,6 +58,8 @@ interface Props {
    *  that don't want the preview can omit it without breaking. */
   previewOpen?: boolean;
   onTogglePreview?: () => void;
+  workspaceMode?: WorkspaceExperienceMode;
+  onWorkspaceModeChange?: (mode: WorkspaceExperienceMode) => void;
 }
 
 const AGENT_CONFIG: Record<AgentType, { label: string; color: string; className: string }> = {
@@ -105,6 +110,8 @@ export default function WorkspaceTopbar({
   onLogout,
   previewOpen,
   onTogglePreview,
+  workspaceMode = 'advanced',
+  onWorkspaceModeChange,
 }: Props) {
   const router = useRouter();
   const [showSessionMenu, setShowSessionMenu] = useState(false);
@@ -193,13 +200,15 @@ export default function WorkspaceTopbar({
     <header className="flex items-center justify-between h-11 px-4 border-b border-matrix-border bg-matrix-bg flex-shrink-0">
       {/* Left */}
       <div className="flex items-center gap-3">
-        <button
-          onClick={onToggleSidebar}
-          className="text-matrix-green-muted hover:text-matrix-green transition-colors p-1"
-          aria-label={sidebarCollapsed ? 'Expand file tree' : 'Collapse file tree'}
-        >
-          {sidebarCollapsed ? <PanelLeftOpen size={15} /> : <PanelLeftClose size={15} />}
-        </button>
+        {workspaceMode === 'advanced' ? (
+          <button
+            onClick={onToggleSidebar}
+            className="text-matrix-green-muted hover:text-matrix-green transition-colors p-1"
+            aria-label={sidebarCollapsed ? 'Expand file tree' : 'Collapse file tree'}
+          >
+            {sidebarCollapsed ? <PanelLeftOpen size={15} /> : <PanelLeftClose size={15} />}
+          </button>
+        ) : null}
 
         <div className="flex items-center gap-2">
           <AppLogo size={20} />
@@ -370,6 +379,40 @@ export default function WorkspaceTopbar({
 
       {/* Right */}
       <div className="flex items-center gap-3">
+        {onWorkspaceModeChange ? (
+          <div
+            className="hidden items-center rounded-sm border border-matrix-border p-0.5 md:flex"
+            data-testid="workspace-mode-switch"
+          >
+            <button
+              type="button"
+              onClick={() => onWorkspaceModeChange('guided')}
+              className={`flex items-center gap-1.5 rounded-sm px-2 py-1 text-[10px] uppercase tracking-[0.14em] transition-colors ${
+                workspaceMode === 'guided'
+                  ? 'bg-matrix-green-ghost text-matrix-green'
+                  : 'text-matrix-green-muted hover:text-matrix-green'
+              }`}
+              aria-pressed={workspaceMode === 'guided'}
+            >
+              <ListChecks size={11} />
+              Guided
+            </button>
+            <button
+              type="button"
+              onClick={() => onWorkspaceModeChange('advanced')}
+              className={`flex items-center gap-1.5 rounded-sm px-2 py-1 text-[10px] uppercase tracking-[0.14em] transition-colors ${
+                workspaceMode === 'advanced'
+                  ? 'bg-matrix-green-ghost text-matrix-green'
+                  : 'text-matrix-green-muted hover:text-matrix-green'
+              }`}
+              aria-pressed={workspaceMode === 'advanced'}
+            >
+              <Code2 size={11} />
+              Advanced
+            </button>
+          </div>
+        ) : null}
+
         {/* Memory stage */}
         <div className={`flex items-center gap-1.5 text-xs font-mono ${memory.color}`}>
           {memory.icon}

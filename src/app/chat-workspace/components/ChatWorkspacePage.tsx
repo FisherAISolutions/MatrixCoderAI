@@ -7,6 +7,7 @@ import ChatPanel from './ChatPanel';
 import WorkspaceTopbar from './WorkspaceTopbar';
 import TerminalPanel from './TerminalPanel';
 import PreviewPanel from './PreviewPanel';
+import GuidedBuildWorkspace from './GuidedBuildWorkspace';
 import ZipImportProgress, { ZipDropOverlay } from './ZipImportProgress';
 import type { ImportPhase } from './ZipImportProgress';
 import { FileNode, ChatMessage, AgentType, MemoryStage } from './types';
@@ -36,6 +37,11 @@ import {
 } from '@/lib/projects/projectStore';
 import { flattenTree } from '@/lib/repo/heuristics';
 import { useTaskDrivenBuild } from '../hooks/useTaskDrivenBuild';
+import {
+  readWorkspaceExperienceMode,
+  writeWorkspaceExperienceMode,
+  type WorkspaceExperienceMode,
+} from '@/lib/guided-build';
 
 // Helper function to build file tree from flat file list
 function buildFileTree(files: any[]): FileNode[] {
@@ -151,6 +157,8 @@ export default function ChatWorkspacePage() {
   // Matrix Coder AI â€” preview panel state. Default closed.
   const [previewOpen, setPreviewOpen] = useState(false);
   const [previewWidth, setPreviewWidth] = useState(420);
+  const [workspaceMode, setWorkspaceMode] =
+    useState<WorkspaceExperienceMode>('guided');
   const [activeAgent, setActiveAgent] = useState<AgentType | null>(null);
   const [isStreaming, setIsStreaming] = useState(false);
   const [memoryStage, setMemoryStage] = useState<MemoryStage>('context');
@@ -177,6 +185,18 @@ export default function ChatWorkspacePage() {
 
   // Determine session ID to use
   const effectiveSessionId = session?.id || '';
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    setWorkspaceMode(readWorkspaceExperienceMode(window.localStorage));
+  }, []);
+
+  const changeWorkspaceMode = useCallback((mode: WorkspaceExperienceMode) => {
+    setWorkspaceMode(mode);
+    if (typeof window !== 'undefined') {
+      writeWorkspaceExperienceMode(window.localStorage, mode);
+    }
+  }, []);
 
   useEffect(() => {
     if (isLoadingData) return;
@@ -1176,6 +1196,8 @@ export default function ChatWorkspacePage() {
         archivedSessionIds={archivedWorkspaceIds}
         previewOpen={previewOpen}
         onTogglePreview={() => setPreviewOpen((v) => !v)}
+        workspaceMode={workspaceMode}
+        onWorkspaceModeChange={changeWorkspaceMode}
         onCreateNewSession={async () => {
           const newSession = await createNewSession(`Workspace ${sessions.length + 1}`);
           await switchSession(newSession.id);
@@ -1234,52 +1256,65 @@ export default function ChatWorkspacePage() {
       />
 
       <div className="flex flex-1 overflow-hidden">
-        {/* File tree sidebar */}
-        <div
-          className={`workspace-zone workspace-zone-files workspace-zone-frame flex-shrink-0 transition-all duration-300 ease-in-out overflow-hidden border-r border-matrix-border`}
-          style={{ width: sidebarCollapsed ? 0 : sidebarWidth }}
-        >
-          <FileTreeSidebar
-            fileTree={fileTree}
-            activeFile={activeFile}
-            onSelectFile={setActiveFile}
-            onUpdateFile={updateFile}
-            onDeleteFile={deleteFile}
-            onCreateFile={createNewFile}
-            onRenameFile={renameFile}
-            onImportZip={runZipImport}
-            onImportGithub={runGithubImport}
-            isImporting={isImporting}
-            projectName={session?.title}
-            width={sidebarWidth}
-          />
-        </div>
+        {workspaceMode === 'guided' ? (
+          <div className="workspace-zone workspace-zone-guided min-w-0 flex-1 overflow-hidden">
+            <GuidedBuildWorkspace
+              sessionId={effectiveSessionId}
+              controller={taskDrivenBuild}
+              onOpenAdvanced={() => {
+                setSidebarCollapsed(false);
+                changeWorkspaceMode('advanced');
+              }}
+            />
+          </div>
+        ) : (
+          <>
+            {/* File tree sidebar */}
+            <div
+              className="workspace-zone workspace-zone-files workspace-zone-frame flex-shrink-0 overflow-hidden border-r border-matrix-border transition-all duration-300 ease-in-out"
+              style={{ width: sidebarCollapsed ? 0 : sidebarWidth }}
+            >
+              <FileTreeSidebar
+                fileTree={fileTree}
+                activeFile={activeFile}
+                onSelectFile={setActiveFile}
+                onUpdateFile={updateFile}
+                onDeleteFile={deleteFile}
+                onCreateFile={createNewFile}
+                onRenameFile={renameFile}
+                onImportZip={runZipImport}
+                onImportGithub={runGithubImport}
+                isImporting={isImporting}
+                projectName={session?.title}
+                width={sidebarWidth}
+              />
+            </div>
 
-        {/* Resize handle */}
-        {!sidebarCollapsed && (
-          <div
-            className="resize-handle flex-shrink-0"
-            onMouseDown={(e) => {
-              e.preventDefault();
-              const startX = e.clientX;
-              const startW = sidebarWidth;
-              const onMove = (ev: MouseEvent) => {
-                const newW = Math.max(200, Math.min(480, startW + ev.clientX - startX));
-                setSidebarWidth(newW);
-              };
-              const onUp = () => {
-                window.removeEventListener('mousemove', onMove);
-                window.removeEventListener('mouseup', onUp);
-              };
-              window.addEventListener('mousemove', onMove);
-              window.addEventListener('mouseup', onUp);
-            }}
-          />
-        )}
+            {/* Resize handle */}
+            {!sidebarCollapsed && (
+              <div
+                className="resize-handle flex-shrink-0"
+                onMouseDown={(e) => {
+                  e.preventDefault();
+                  const startX = e.clientX;
+                  const startW = sidebarWidth;
+                  const onMove = (ev: MouseEvent) => {
+                    const newW = Math.max(200, Math.min(480, startW + ev.clientX - startX));
+                    setSidebarWidth(newW);
+                  };
+                  const onUp = () => {
+                    window.removeEventListener('mousemove', onMove);
+                    window.removeEventListener('mouseup', onUp);
+                  };
+                  window.addEventListener('mousemove', onMove);
+                  window.addEventListener('mouseup', onUp);
+                }}
+              />
+            )}
 
-        {/* Chat panel */}
-        <div className="workspace-zone workspace-zone-chat flex-1 min-w-0 flex flex-col overflow-hidden">
-          <ChatPanel
+            {/* Chat panel */}
+            <div className="workspace-zone workspace-zone-chat flex min-w-0 flex-1 flex-col overflow-hidden">
+              <ChatPanel
   messages={messages}
   activeFile={activeFile}
   fileTree={fileTree}
@@ -1309,7 +1344,9 @@ export default function ChatWorkspacePage() {
            *  a 0Ã—0 box (invisible). The canonical viewer is rendered by
            *  FileTreeSidebar where its absolute positioning falls
            *  through to the viewport (intended bottom-60% overlay). */}
-        </div>
+            </div>
+          </>
+        )}
 
         {/* Preview panel â€” Matrix Coder AI (2026-01).
          *  Opt-in (closed by default). Sits to the right of the chat
@@ -1356,7 +1393,7 @@ export default function ChatWorkspacePage() {
        *  live logs from validation, auto-fix, and user-run commands.
        *  Persists collapsed state + height to localStorage.
        */}
-      <TerminalPanel />
+      {workspaceMode === 'advanced' ? <TerminalPanel /> : null}
     </div>
   );
 }
