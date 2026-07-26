@@ -30,6 +30,19 @@ export interface CreateContractReviewOptions {
   now?: Date;
 }
 
+type RequirementEvaluation = Pick<
+  ContractReviewRequirementReport,
+  | 'status'
+  | 'evidence'
+  | 'relatedFiles'
+  | 'relatedRoutes'
+  | 'relatedModels'
+  | 'relatedApis'
+  | 'validationResult'
+  | 'missingImplementation'
+  | 'warning'
+>;
+
 function stableHash(value: string): string {
   let hash = 2166136261;
   for (let index = 0; index < value.length; index += 1) {
@@ -83,6 +96,117 @@ function contentMap(files?: FileNode[]): Map<string, string> {
       out.set(normalizeRepositoryPath(file.path), file.content ?? '');
     });
   return out;
+}
+
+function allFilePaths(files?: FileNode[]): Set<string> {
+  return new Set(
+    flattenTree(files ?? [])
+      .filter((file) => file.type === 'file')
+      .map((file) => normalizeRepositoryPath(file.path))
+  );
+}
+
+const REQUIREMENT_STOP_WORDS = new Set([
+  'a',
+  'an',
+  'and',
+  'app',
+  'application',
+  'approved',
+  'be',
+  'for',
+  'from',
+  'in',
+  'include',
+  'included',
+  'is',
+  'must',
+  'of',
+  'or',
+  'plan',
+  'should',
+  'the',
+  'to',
+  'with',
+]);
+
+function requirementTerms(requirement: BuildContractRequirement): string[] {
+  return unique(
+    normalizeText(`${requirement.title} ${requirement.description}`)
+      .split(' ')
+      .filter(
+        (term) =>
+          term.length >= 3 &&
+          !REQUIREMENT_STOP_WORDS.has(term) &&
+          !/^(route|model|integration|capability|requirement)$/.test(term)
+      )
+  );
+}
+
+function matchingContentFiles(
+  contents: Map<string, string>,
+  terms: string[],
+  minimumMatches = 1
+): string[] {
+  if (terms.length === 0) return [];
+  return Array.from(contents.entries())
+    .filter(([, content]) => {
+      const normalized = normalizeText(content);
+      return terms.filter((term) => normalized.includes(term)).length >= minimumMatches;
+    })
+    .map(([path]) => path);
+}
+
+function explicitFileReferences(
+  requirement: BuildContractRequirement
+): string[] {
+  return unique(
+    requirement.evidenceReferences
+      .filter((evidence) => evidence.kind === 'file')
+      .map((evidence) => normalizeRepositoryPath(evidence.ref))
+  );
+}
+
+function evaluateExplicitFiles(
+  requirement: BuildContractRequirement,
+  paths: Set<string>
+): RequirementEvaluation | undefined {
+  const expected = explicitFileReferences(requirement);
+  if (expected.length === 0 || requirement.validationStrategy !== 'file-exists') {
+    return undefined;
+  }
+  const missing = expected.filter((path) => !paths.has(path));
+  if (missing.length > 0) {
+    return {
+      status: 'missing',
+      evidence: missing.map((path) =>
+        fileEvidence(path, 'Required file was not found.')
+      ),
+      relatedFiles: expected,
+      relatedRoutes: [],
+      relatedModels: [],
+      relatedApis: [],
+      validationResult: 'failed',
+      missingImplementation: `Create the required file${missing.length === 1 ? '' : 's'} ${missing.join(', ')}.`,
+    };
+  }
+  return {
+    status: 'satisfied',
+    evidence: expected.map((path) =>
+      ({
+        kind: /\.(?:png|jpe?g|gif|webp|ico|svg|woff2?|ttf|pdf)$/i.test(path)
+          ? 'asset'
+          : 'file',
+        ref: path,
+        description: 'Required repository artifact exists.',
+      }) satisfies ContractReviewEvidence
+    ),
+    relatedFiles: expected,
+    relatedRoutes: [],
+    relatedModels: [],
+    relatedApis: [],
+    validationResult: 'passed',
+  };
 }
 
 function categoryForRequirement(
@@ -306,18 +430,7 @@ function evaluateRoute(
 function evaluateNavigation(
   contract: BuildContract,
   contents: Map<string, string>
-): Pick<
-  ContractReviewRequirementReport,
-  | 'status'
-  | 'evidence'
-  | 'relatedFiles'
-  | 'relatedRoutes'
-  | 'relatedModels'
-  | 'relatedApis'
-  | 'validationResult'
-  | 'missingImplementation'
-  | 'warning'
-> {
+): RequirementEvaluation {
   const requiredRoutes = contract.routes
     .filter((route) => route.required && route.path !== '/')
     .map((route) => route.path);
@@ -343,6 +456,71 @@ function evaluateNavigation(
     evidence: [fileEvidence('src/app/page.tsx', 'Home navigation links required routes.')],
     relatedFiles: ['src/app/page.tsx'],
     relatedRoutes: requiredRoutes,
+    relatedModels: [],
+    relatedApis: [],
+    validationResult: 'passed',
+  };
+}
+
+function evaluateLayout(
+  repositoryModel: RepositoryModel,
+  validationResult: ValidationResult | null | undefined
+): RequirementEvaluation {
+  const layoutFiles = repositoryModel.layouts
+    .filter((layout) => layout.readable)
+    .map((layout) => layout.filePath);
+  if (layoutFiles.length === 0) {
+    return {
+      status: 'missing',
+      evidence: [
+        fileEvidence('src/app/layout.tsx', 'No readable App Router layout was found.'),
+      ],
+      relatedFiles: ['src/app/layout.tsx'],
+      relatedRoutes: [],
+      relatedModels: [],
+      relatedApis: [],
+      validationResult: 'failed',
+      missingImplementation: 'Create the approved App Router layout.',
+    };
+  }
+  const quality = validationForStep(validationResult, 'generated-quality');
+  if (quality === 'failed') {
+    return {
+      status: 'failed validation',
+      evidence: [
+        ...layoutFiles.map((path) => fileEvidence(path)),
+        ...validationEvidence(validationResult, 'generated-quality'),
+      ],
+      relatedFiles: layoutFiles,
+      relatedRoutes: [],
+      relatedModels: [],
+      relatedApis: [],
+      validationResult: 'failed',
+      missingImplementation: 'Fix the layout issues reported by generated quality.',
+    };
+  }
+  if (quality !== 'passed') {
+    return {
+      status: 'blocked',
+      evidence: layoutFiles.map((path) =>
+        fileEvidence(path, 'Layout exists but generated quality has not passed.')
+      ),
+      relatedFiles: layoutFiles,
+      relatedRoutes: [],
+      relatedModels: [],
+      relatedApis: [],
+      validationResult: quality === 'blocked' ? 'blocked' : 'not run',
+      missingImplementation: 'Run generated quality to prove the approved layout.',
+    };
+  }
+  return {
+    status: 'satisfied',
+    evidence: [
+      ...layoutFiles.map((path) => fileEvidence(path, 'Readable App Router layout exists.')),
+      ...validationEvidence(validationResult, 'generated-quality'),
+    ],
+    relatedFiles: layoutFiles,
+    relatedRoutes: [],
     relatedModels: [],
     relatedApis: [],
     validationResult: 'passed',
@@ -444,6 +622,61 @@ function evaluateDataModel(
   };
 }
 
+function evaluateRelationship(
+  requirement: BuildContractRequirement,
+  repositoryModel: RepositoryModel,
+  contents: Map<string, string>
+): RequirementEvaluation {
+  const terms = requirementTerms(requirement);
+  const modelTerms = terms.filter((term) =>
+    !['relationship', 'belongs', 'many', 'has', 'references'].includes(term)
+  );
+  const minimumMatches = Math.min(2, modelTerms.length);
+  const schemaPaths = repositoryModel.databaseSchemas.map((schema) => schema.filePath);
+  const candidatePaths = unique([
+    ...schemaPaths,
+    ...matchingContentFiles(contents, modelTerms, Math.max(1, minimumMatches)),
+  ]);
+  const matching = candidatePaths.filter((path) => {
+    const normalized = normalizeText(contents.get(path) ?? '');
+    const matchedTerms = modelTerms.filter((term) => normalized.includes(term));
+    const relationSignal =
+      /references|foreign key|belongsTo|hasMany|relation|owner_id|user_id/i.test(
+        contents.get(path) ?? ''
+      );
+    return matchedTerms.length >= Math.max(1, minimumMatches) && relationSignal;
+  });
+  if (matching.length === 0) {
+    return {
+      status: 'missing',
+      evidence: [
+        {
+          kind: 'model',
+          ref: requirement.title,
+          description: 'No schema or typed relationship evidence was found.',
+        },
+      ],
+      relatedFiles: schemaPaths.length ? schemaPaths : ['supabase/migrations/**', 'src/types/**'],
+      relatedRoutes: [],
+      relatedModels: modelTerms,
+      relatedApis: [],
+      validationResult: 'failed',
+      missingImplementation: `Implement and document ${requirement.description}.`,
+    };
+  }
+  return {
+    status: 'satisfied',
+    evidence: matching.map((path) =>
+      fileEvidence(path, 'Relationship fields or schema constraints were found.')
+    ),
+    relatedFiles: matching,
+    relatedRoutes: [],
+    relatedModels: modelTerms,
+    relatedApis: [],
+    validationResult: 'passed',
+  };
+}
+
 function evaluateApi(
   requirement: BuildContractRequirement,
   contract: BuildContract,
@@ -501,44 +734,13 @@ function evaluateApi(
   };
 }
 
-function hasNamedSignal(
-  name: string,
-  repositoryModel: RepositoryModel,
-  contents: Map<string, string>
-): boolean {
-  const target = normalizeText(name);
-  const dependencies = repositoryModel.dependencies.some((item) =>
-    normalizeText(item.name).includes(target)
-  );
-  const provider = repositoryModel.providerIntegrations.some((item) =>
-    normalizeText(item.name).includes(target)
-  );
-  const content = Array.from(contents.values()).some((value) =>
-    normalizeText(value).includes(target)
-  );
-  return dependencies || provider || content;
-}
-
 function evaluateSimpleSignal(
   requirement: BuildContractRequirement,
   repositoryModel: RepositoryModel,
   contents: Map<string, string>
-): Pick<
-  ContractReviewRequirementReport,
-  | 'status'
-  | 'evidence'
-  | 'relatedFiles'
-  | 'relatedRoutes'
-  | 'relatedModels'
-  | 'relatedApis'
-  | 'validationResult'
-  | 'missingImplementation'
-  | 'warning'
-> {
-  const text = `${requirement.title} ${requirement.description}`;
-  const matchingFiles = Array.from(contents.entries())
-    .filter(([, content]) => normalizeText(content).includes(normalizeText(text).slice(0, 30)))
-    .map(([path]) => path);
+): RequirementEvaluation {
+  const terms = requirementTerms(requirement);
+  const matchingFiles = matchingContentFiles(contents, terms);
   if (requirement.type === 'authentication') {
     if (/no authentication/i.test(requirement.description)) {
       return {
@@ -564,57 +766,184 @@ function evaluateSimpleSignal(
       };
     }
   }
-  if (requirement.type === 'storage' && repositoryModel.storageImplementation.length > 0) {
-    const files = unique(repositoryModel.storageImplementation.flatMap((item) => item.files));
-    return {
-      status: 'satisfied',
-      evidence: files.map((path) => fileEvidence(path, 'Storage signal found.')),
-      relatedFiles: files,
-      relatedRoutes: [],
-      relatedModels: [],
-      relatedApis: [],
-      validationResult: 'passed',
-    };
+  if (requirement.type === 'storage') {
+    const requested = normalizeText(`${requirement.title} ${requirement.description}`);
+    const storageSignals = repositoryModel.storageImplementation.filter((item) => {
+      if (/supabase|upload|media|photo|image|file/.test(requested)) {
+        return item.name === 'supabase-storage';
+      }
+      if (/local|browser/.test(requested)) return item.name === 'localStorage';
+      return true;
+    });
+    const files = unique(storageSignals.flatMap((item) => item.files));
+    if (files.length > 0) {
+      return {
+        status: 'satisfied',
+        evidence: files.map((path) => fileEvidence(path, 'Required storage implementation found.')),
+        relatedFiles: files,
+        relatedRoutes: [],
+        relatedModels: [],
+        relatedApis: [],
+        validationResult: 'passed',
+      };
+    }
   }
-  if (
-    requirement.type === 'integration' &&
-    hasNamedSignal(requirement.title.replace(/^Integration:\s*/i, ''), repositoryModel, contents)
-  ) {
-    return {
-      status: 'satisfied',
-      evidence: [{ kind: 'note', ref: requirement.title, description: 'Integration signal found.' }],
-      relatedFiles: matchingFiles,
-      relatedRoutes: [],
-      relatedModels: [],
-      relatedApis: [],
-      validationResult: 'passed',
-    };
+  if (requirement.type === 'integration') {
+    const integrationName = normalizeText(
+      requirement.title.replace(/^Integration:\s*/i, '')
+    );
+    const providerSignals = repositoryModel.providerIntegrations.filter((item) =>
+      normalizeText(item.name).includes(integrationName)
+    );
+    const providerFiles = unique(providerSignals.flatMap((item) => item.files));
+    const implementationFiles = unique([
+      ...matchingFiles.filter(
+        (path) =>
+          ![
+            'package.json',
+            'package-lock.json',
+            'yarn.lock',
+            'pnpm-lock.yaml',
+            '.env',
+            '.env.example',
+            'README.md',
+          ].includes(path)
+      ),
+      ...providerFiles.filter((path) => path !== 'package.json'),
+    ]);
+    const dependencyOnly =
+      providerFiles.includes('package.json') || repositoryModel.dependencies.some((item) =>
+        normalizeText(item.name).includes(integrationName)
+      );
+    if (implementationFiles.length > 0) {
+      return {
+        status: 'satisfied',
+        evidence: implementationFiles.map((path) => ({
+          kind: 'integration',
+          ref: path,
+          description: `${requirement.title} implementation evidence found.`,
+        })),
+        relatedFiles: implementationFiles,
+        relatedRoutes: [],
+        relatedModels: [],
+        relatedApis: repositoryModel.apis
+          .filter((api) => implementationFiles.includes(api.filePath))
+          .map((api) => api.path),
+        validationResult: 'passed',
+      };
+    }
+    if (dependencyOnly) {
+      return {
+        status: 'partially satisfied',
+        evidence: [
+          {
+            kind: 'configuration',
+            ref: 'package.json',
+            description: `${requirement.title} dependency exists without implementation evidence.`,
+          },
+        ],
+        relatedFiles: ['package.json'],
+        relatedRoutes: [],
+        relatedModels: [],
+        relatedApis: [],
+        validationResult: 'failed',
+        missingImplementation: `Connect and use ${requirement.title.replace(/^Integration:\s*/i, '')}; the dependency alone is not implementation evidence.`,
+      };
+    }
   }
-  if (
-    requirement.type === 'ai-capability' &&
-    (repositoryModel.apis.some((api) => api.path.includes('/api/ai')) ||
-      repositoryModel.environmentVariableNames.some((name) =>
-        /OPENAI|ANTHROPIC|GEMINI|AI/i.test(name)
-      ))
-  ) {
-    const apis = repositoryModel.apis
-      .filter((api) => api.path.includes('/api/ai'))
-      .map((api) => api.path);
-    return {
-      status: 'satisfied',
-      evidence: apis.map((api) => ({ kind: 'api' as const, ref: api })),
-      relatedFiles: repositoryModel.apis
-        .filter((api) => api.path.includes('/api/ai'))
-        .map((api) => api.filePath),
-      relatedRoutes: [],
-      relatedModels: [],
-      relatedApis: apis,
-      validationResult: 'passed',
-    };
+  if (requirement.type === 'billing') {
+    const billingTerms = unique([
+      ...terms,
+      'billing',
+      'checkout',
+      'payment',
+      'subscription',
+      'stripe',
+    ]);
+    const files = matchingContentFiles(contents, billingTerms, 2);
+    const apis = repositoryModel.apis.filter((api) =>
+      /billing|checkout|payment|subscription|stripe/i.test(api.path)
+    );
+    const relatedFiles = unique([...files, ...apis.map((api) => api.filePath)]);
+    if (relatedFiles.length > 0) {
+      return {
+        status: 'satisfied',
+        evidence: relatedFiles.map((path) => ({
+          kind: 'integration',
+          ref: path,
+          description: 'Billing workflow implementation found.',
+        })),
+        relatedFiles,
+        relatedRoutes: [],
+        relatedModels: [],
+        relatedApis: apis.map((api) => api.path),
+        validationResult: 'passed',
+      };
+    }
+  }
+  if (requirement.type === 'ai-capability') {
+    const aiTerms = unique([...terms, 'openai', 'anthropic', 'gemini']);
+    const relatedApis = repositoryModel.apis.filter((api) => {
+      const content = contents.get(api.filePath) ?? '';
+      return (
+        /\/api\/(?:ai|generate|chat|story|image)/i.test(api.path) ||
+        aiTerms.some((term) => normalizeText(content).includes(term))
+      );
+    });
+    const providerEnv = repositoryModel.environmentVariableNames.filter((name) =>
+      /OPENAI|ANTHROPIC|GEMINI|AI_/i.test(name)
+    );
+    const relatedFiles = unique(relatedApis.map((api) => api.filePath));
+    if (relatedApis.length > 0 && providerEnv.length > 0) {
+      return {
+        status: 'satisfied',
+        evidence: [
+          ...relatedApis.map((api) => ({
+            kind: 'api' as const,
+            ref: api.path,
+            description: 'Server API implements the AI capability.',
+          })),
+          ...providerEnv.map((name) => ({
+            kind: 'env' as const,
+            ref: name,
+            description: 'Server provider environment contract is present.',
+          })),
+        ],
+        relatedFiles,
+        relatedRoutes: [],
+        relatedModels: [],
+        relatedApis: relatedApis.map((api) => api.path),
+        validationResult: 'passed',
+      };
+    }
+    if (relatedApis.length > 0 || providerEnv.length > 0) {
+      return {
+        status: 'partially satisfied',
+        evidence: [
+          ...relatedApis.map((api) => ({ kind: 'api' as const, ref: api.path })),
+          ...providerEnv.map((name) => ({ kind: 'env' as const, ref: name })),
+        ],
+        relatedFiles,
+        relatedRoutes: [],
+        relatedModels: [],
+        relatedApis: relatedApis.map((api) => api.path),
+        validationResult: 'failed',
+        missingImplementation:
+          relatedApis.length === 0
+            ? `Create a server API for ${requirement.title}.`
+            : `Document the server-only provider environment variable for ${requirement.title}.`,
+      };
+    }
   }
   return {
     status: requirement.status === 'optional' ? 'manually review' : 'missing',
-    evidence: [],
+    evidence: [
+      {
+        kind: 'note',
+        ref: requirement.stableId,
+        description: 'No sufficient repository implementation evidence was found.',
+      },
+    ],
     relatedFiles: matchingFiles,
     relatedRoutes: [],
     relatedModels: [],
@@ -627,6 +956,108 @@ function evaluateSimpleSignal(
     warning:
       requirement.status === 'optional'
         ? 'Optional capability was not deterministically verified.'
+        : undefined,
+  };
+}
+
+function evaluateRolePermission(
+  requirement: BuildContractRequirement,
+  repositoryModel: RepositoryModel,
+  contents: Map<string, string>
+): RequirementEvaluation {
+  const authorizationFiles = Array.from(contents.entries())
+    .filter(([, content]) =>
+      /auth\.uid\(\)|row level security|enable row level security|create policy|owner_id|user_id|role\s*[:=]|permission/i.test(
+        content
+      )
+    )
+    .map(([path]) => path);
+  const relatedFiles = unique([
+    ...authorizationFiles,
+    ...repositoryModel.authImplementation.flatMap((item) => item.files),
+  ]);
+  if (repositoryModel.authImplementation.length > 0 && authorizationFiles.length > 0) {
+    return {
+      status: 'satisfied',
+      evidence: authorizationFiles.map((path) =>
+        fileEvidence(path, 'Role, ownership, or permission enforcement found.')
+      ),
+      relatedFiles,
+      relatedRoutes: [],
+      relatedModels: [],
+      relatedApis: [],
+      validationResult: 'passed',
+    };
+  }
+  return {
+    status: 'missing',
+    evidence: [
+      {
+        kind: 'note',
+        ref: requirement.stableId,
+        description: 'Authentication and enforceable ownership/permission evidence are both required.',
+      },
+    ],
+    relatedFiles,
+    relatedRoutes: [],
+    relatedModels: [],
+    relatedApis: [],
+    validationResult: 'failed',
+    missingImplementation: `Implement and enforce ${requirement.description}.`,
+  };
+}
+
+function evaluateBackgroundJob(
+  requirement: BuildContractRequirement,
+  repositoryModel: RepositoryModel,
+  contents: Map<string, string>
+): RequirementEvaluation {
+  const terms = requirementTerms(requirement);
+  const files = Array.from(contents.entries())
+    .filter(([path, content]) => {
+      const jobSignal =
+        /cron|queue|worker|background job|schedule|inngest|trigger\.dev|bullmq/i.test(
+          `${path} ${content}`
+        );
+      const normalized = normalizeText(content);
+      return jobSignal && (terms.length === 0 || terms.some((term) => normalized.includes(term)));
+    })
+    .map(([path]) => path);
+  const apis = repositoryModel.apis.filter((api) => files.includes(api.filePath));
+  if (files.length > 0) {
+    return {
+      status: 'satisfied',
+      evidence: files.map((path) =>
+        fileEvidence(path, 'Background job or scheduler implementation found.')
+      ),
+      relatedFiles: files,
+      relatedRoutes: [],
+      relatedModels: [],
+      relatedApis: apis.map((api) => api.path),
+      validationResult: 'passed',
+    };
+  }
+  return {
+    status: requirement.status === 'optional' ? 'manually review' : 'missing',
+    evidence: [
+      {
+        kind: 'note',
+        ref: requirement.stableId,
+        description: 'No background job implementation evidence was found.',
+      },
+    ],
+    relatedFiles: [],
+    relatedRoutes: [],
+    relatedModels: [],
+    relatedApis: [],
+    validationResult: requirement.status === 'optional' ? 'manual' : 'failed',
+    missingImplementation:
+      requirement.status === 'required'
+        ? `Implement ${requirement.description}.`
+        : undefined,
+    warning:
+      requirement.status === 'optional'
+        ? 'Optional background work requires manual review if intentionally deferred.'
         : undefined,
   };
 }
@@ -730,6 +1161,175 @@ function evaluateValidationBacked(
   };
 }
 
+function evaluateAccessibility(
+  requirement: BuildContractRequirement,
+  contents: Map<string, string>,
+  validationResult: ValidationResult | null | undefined
+): RequirementEvaluation {
+  const quality = validationForStep(validationResult, 'generated-quality');
+  const files = Array.from(contents.entries())
+    .filter(([path, content]) =>
+      /^(?:src\/)?(?:app|components)\//.test(path) &&
+      /aria-[a-z-]+|htmlFor\s*=|<nav\b|<main\b|<button\b|role\s*=\s*["']/i.test(content)
+    )
+    .map(([path]) => path);
+  if (quality === 'passed' && files.length > 0) {
+    return {
+      status: 'satisfied',
+      evidence: [
+        ...files.slice(0, 8).map((path) => ({
+          kind: 'component' as const,
+          ref: path,
+          description: 'Semantic or accessible UI implementation found.',
+        })),
+        ...validationEvidence(validationResult, 'generated-quality'),
+      ],
+      relatedFiles: files,
+      relatedRoutes: [],
+      relatedModels: [],
+      relatedApis: [],
+      validationResult: 'passed',
+    };
+  }
+  if (quality === 'failed') {
+    return {
+      status: 'failed validation',
+      evidence: validationEvidence(validationResult, 'generated-quality'),
+      relatedFiles: files,
+      relatedRoutes: [],
+      relatedModels: [],
+      relatedApis: [],
+      validationResult: 'failed',
+      missingImplementation: `Fix accessibility evidence for ${requirement.description}.`,
+    };
+  }
+  if (quality === 'passed') {
+    return {
+      status: 'partially satisfied',
+      evidence: validationEvidence(validationResult, 'generated-quality'),
+      relatedFiles: [],
+      relatedRoutes: [],
+      relatedModels: [],
+      relatedApis: [],
+      validationResult: 'failed',
+      missingImplementation:
+        'Add semantic labels, controls, and keyboard-accessible structure that can be verified in the repository.',
+    };
+  }
+  return {
+    status: 'blocked',
+    evidence: [
+      {
+        kind: 'note',
+        ref: requirement.stableId,
+        description: 'Accessibility evidence awaits generated-quality validation.',
+      },
+    ],
+    relatedFiles: files,
+    relatedRoutes: [],
+    relatedModels: [],
+    relatedApis: [],
+    validationResult: quality === 'blocked' ? 'blocked' : 'not run',
+    missingImplementation: 'Run generated quality before accepting accessibility.',
+  };
+}
+
+function evaluateAcceptance(
+  requirement: BuildContractRequirement,
+  repositoryModel: RepositoryModel,
+  contents: Map<string, string>,
+  validationResult: ValidationResult | null | undefined
+): RequirementEvaluation {
+  if (/test|spec|coverage/i.test(requirement.description)) {
+    const terms = requirementTerms(requirement);
+    const matchingTests = repositoryModel.tests.filter((path) => {
+      const content = contents.get(path) ?? '';
+      return terms.length === 0 || terms.some((term) => normalizeText(content).includes(term));
+    });
+    if (matchingTests.length > 0) {
+      return {
+        status: 'satisfied',
+        evidence: matchingTests.map((path) => ({
+          kind: 'test',
+          ref: path,
+          description: 'Repository test covers the acceptance requirement.',
+        })),
+        relatedFiles: matchingTests,
+        relatedRoutes: [],
+        relatedModels: [],
+        relatedApis: [],
+        validationResult: 'passed',
+      };
+    }
+    return {
+      status: 'missing',
+      evidence: [
+        {
+          kind: 'test',
+          ref: requirement.stableId,
+          description: 'No matching repository test was found.',
+        },
+      ],
+      relatedFiles: ['tests/**'],
+      relatedRoutes: [],
+      relatedModels: [],
+      relatedApis: [],
+      validationResult: 'failed',
+      missingImplementation: `Add focused test evidence for ${requirement.description}.`,
+    };
+  }
+  if (/loading|error|empty state|failure|recover/i.test(requirement.description)) {
+    const files = Array.from(contents.entries())
+      .filter(([, content]) => /loading|error|empty|retry|try again|no .* found/i.test(content))
+      .map(([path]) => path);
+    const quality = validationForStep(validationResult, 'generated-quality');
+    if (files.length > 0 && quality === 'passed') {
+      return {
+        status: 'satisfied',
+        evidence: [
+          ...files.slice(0, 8).map((path) => fileEvidence(path, 'User-facing state evidence found.')),
+          ...validationEvidence(validationResult, 'generated-quality'),
+        ],
+        relatedFiles: files,
+        relatedRoutes: [],
+        relatedModels: [],
+        relatedApis: [],
+        validationResult: 'passed',
+      };
+    }
+    return {
+      status: quality === 'failed' ? 'failed validation' : 'missing',
+      evidence: [
+        ...validationEvidence(validationResult, 'generated-quality'),
+        {
+          kind: 'note',
+          ref: requirement.stableId,
+          description: 'Required loading/error/empty-state evidence was not found.',
+        },
+      ],
+      relatedFiles: files,
+      relatedRoutes: [],
+      relatedModels: [],
+      relatedApis: [],
+      validationResult: quality === 'failed' ? 'failed' : 'not run',
+      missingImplementation: `Implement ${requirement.description}.`,
+    };
+  }
+  return evaluateValidationBacked(requirement, validationResult, 'runtime-smoke');
+}
+
+function validationStepForStrategy(
+  requirement: BuildContractRequirement
+): ValidationStep | undefined {
+  if (requirement.validationStrategy === 'type-check') return 'type-check';
+  if (requirement.validationStrategy === 'build') return 'build';
+  if (requirement.validationStrategy === 'runtime-smoke') return 'runtime-smoke';
+  if (requirement.validationStrategy === 'generated-quality') {
+    return 'generated-quality';
+  }
+  return undefined;
+}
+
 function manualReview(
   requirement: BuildContractRequirement
 ): Pick<
@@ -762,19 +1362,25 @@ function evaluateRequirement(
     contract: BuildContract;
     repositoryModel: RepositoryModel;
     contents: Map<string, string>;
+    allPaths: Set<string>;
     validationResult?: ValidationResult | null;
   }
 ): Omit<
   ContractReviewRequirementReport,
   'requirementId' | 'requirementType' | 'category' | 'requirementDescription' | 'required'
 > {
+  const explicitFiles = evaluateExplicitFiles(requirement, options.allPaths);
+  if (explicitFiles) return explicitFiles;
   if (requirement.type === 'route') {
     return evaluateRoute(requirement, options.repositoryModel);
   }
-  if (requirement.type === 'navigation' || requirement.type === 'layout') {
+  if (requirement.type === 'navigation') {
     return evaluateNavigation(options.contract, options.contents);
   }
-  if (requirement.type === 'data-model' || requirement.type === 'relationship') {
+  if (requirement.type === 'layout') {
+    return evaluateLayout(options.repositoryModel, options.validationResult);
+  }
+  if (requirement.type === 'data-model') {
     return evaluateDataModel(
       requirement,
       options.contract,
@@ -782,8 +1388,29 @@ function evaluateRequirement(
       options.contents
     );
   }
+  if (requirement.type === 'relationship') {
+    return evaluateRelationship(
+      requirement,
+      options.repositoryModel,
+      options.contents
+    );
+  }
   if (requirement.type === 'api') {
     return evaluateApi(requirement, options.contract, options.repositoryModel);
+  }
+  if (requirement.type === 'role-permission') {
+    return evaluateRolePermission(
+      requirement,
+      options.repositoryModel,
+      options.contents
+    );
+  }
+  if (requirement.type === 'background-job') {
+    return evaluateBackgroundJob(
+      requirement,
+      options.repositoryModel,
+      options.contents
+    );
   }
   if (requirement.type === 'environment-variable') {
     return evaluateEnvVar(requirement, options.repositoryModel, options.contents);
@@ -791,16 +1418,31 @@ function evaluateRequirement(
   if (requirement.type === 'deployment') {
     return evaluateValidationBacked(requirement, options.validationResult, 'build');
   }
+  if (requirement.type === 'accessibility') {
+    return evaluateAccessibility(
+      requirement,
+      options.contents,
+      options.validationResult
+    );
+  }
+  if (requirement.type === 'acceptance') {
+    return evaluateAcceptance(
+      requirement,
+      options.repositoryModel,
+      options.contents,
+      options.validationResult
+    );
+  }
   if (
     requirement.type === 'visual' ||
     requirement.type === 'responsive' ||
-    requirement.type === 'constraint' ||
-    requirement.type === 'acceptance'
+    requirement.type === 'constraint'
   ) {
+    const step = validationStepForStrategy(requirement) ?? 'generated-quality';
     return evaluateValidationBacked(
       requirement,
       options.validationResult,
-      requirement.type === 'acceptance' ? 'runtime-smoke' : 'generated-quality'
+      step
     );
   }
   if (
@@ -811,6 +1453,14 @@ function evaluateRequirement(
     requirement.type === 'billing'
   ) {
     return evaluateSimpleSignal(requirement, options.repositoryModel, options.contents);
+  }
+  const strategyStep = validationStepForStrategy(requirement);
+  if (strategyStep) {
+    return evaluateValidationBacked(
+      requirement,
+      options.validationResult,
+      strategyStep
+    );
   }
   return manualReview(requirement);
 }
@@ -832,7 +1482,10 @@ function taskCategoryForRequirement(
 }
 
 function repairScope(report: ContractReviewRequirementReport): string[] {
-  if (report.relatedFiles.length > 0) return report.relatedFiles;
+  const concreteRelatedFiles = report.relatedFiles.filter(
+    (path) => path && path !== 'src/**'
+  );
+  if (concreteRelatedFiles.length > 0) return concreteRelatedFiles;
   if (report.relatedRoutes.length > 0) {
     return report.relatedRoutes.map(routeFileFor);
   }
@@ -842,7 +1495,59 @@ function repairScope(report: ContractReviewRequirementReport): string[] {
   if (report.relatedModels.length > 0) {
     return report.relatedModels.map((name) => `src/types/${slugify(name)}.ts`);
   }
-  return ['src/**'];
+  if (report.requirementType === 'layout') {
+    return ['src/app/layout.tsx', 'src/components/layout/**'];
+  }
+  if (report.requirementType === 'navigation') {
+    return ['src/app/page.tsx', 'src/components/navigation/**'];
+  }
+  if (
+    report.requirementType === 'authentication' ||
+    report.requirementType === 'role-permission'
+  ) {
+    return [
+      'src/lib/auth/**',
+      'src/components/auth/**',
+      'src/app/**/page.tsx',
+      'supabase/migrations/**',
+    ];
+  }
+  if (
+    report.requirementType === 'integration' ||
+    report.requirementType === 'billing' ||
+    report.requirementType === 'ai-capability'
+  ) {
+    return ['package.json', '.env.example', 'src/app/api/**', 'src/lib/integrations/**'];
+  }
+  if (report.requirementType === 'storage') {
+    return ['src/lib/storage/**', 'src/app/api/**', 'supabase/migrations/**'];
+  }
+  if (report.requirementType === 'background-job') {
+    return ['src/lib/jobs/**', 'src/app/api/**', 'vercel.json'];
+  }
+  if (report.requirementType === 'environment-variable') {
+    return ['.env.example', 'src/lib/env.ts'];
+  }
+  if (report.requirementType === 'deployment') {
+    return [
+      'package.json',
+      'next.config.ts',
+      'next.config.mjs',
+      'vercel.json',
+    ];
+  }
+  if (report.requirementType === 'acceptance') {
+    return ['tests/**', 'src/**/*.test.ts', 'src/**/*.test.tsx'];
+  }
+  if (
+    report.requirementType === 'visual' ||
+    report.requirementType === 'responsive' ||
+    report.requirementType === 'accessibility' ||
+    report.requirementType === 'constraint'
+  ) {
+    return ['src/app/**/page.tsx', 'src/components/**', 'src/app/globals.css'];
+  }
+  return ['src/lib/**'];
 }
 
 function createRepairTask(
@@ -876,7 +1581,7 @@ function createRepairTask(
     ],
     validationCommands: ['npm run type-check'],
     retryCount: 0,
-    maximumRetryCount: 2,
+    maximumRetryCount: 1,
     failureClassification: 'none',
     createdAt: nowIso,
     updatedAt: nowIso,
@@ -940,9 +1645,33 @@ function summaryForReport(
   const builtApis = satisfied.flatMap((item) =>
     item.relatedApis.map((api) => `API ${api}`)
   );
+  const builtArtifacts = satisfied.flatMap((item) =>
+    item.evidence
+      .filter((evidence) =>
+        [
+          'component',
+          'integration',
+          'test',
+          'deployment',
+          'asset',
+          'configuration',
+        ].includes(evidence.kind)
+      )
+      .map((evidence) => {
+        if (evidence.kind === 'test') return `Test ${evidence.ref}`;
+        if (evidence.kind === 'asset') return `Asset ${evidence.ref}`;
+        if (evidence.kind === 'integration') return `Integration ${evidence.ref}`;
+        return `Artifact ${evidence.ref}`;
+      })
+  );
 
   return {
-    whatWasBuilt: unique([...builtRoutes, ...builtModels, ...builtApis]),
+    whatWasBuilt: unique([
+      ...builtRoutes,
+      ...builtModels,
+      ...builtApis,
+      ...builtArtifacts,
+    ]),
     whatPassed: satisfied.map((item) => item.requirementDescription),
     whatRemains: remaining.map(
       (item) => item.missingImplementation ?? item.requirementDescription
@@ -965,12 +1694,14 @@ export function createContractReviewReport(
   const now = options.now ?? new Date();
   const nowIso = now.toISOString();
   const contents = contentMap(options.files);
+  const allPaths = allFilePaths(options.files);
   const buildPassed = buildValidationPassed(options.validationResult);
   const reportsWithoutTasks = options.contract.requirements.map((requirement) => {
     const evaluated = evaluateRequirement(requirement, {
       contract: options.contract,
       repositoryModel: options.repositoryModel,
       contents,
+      allPaths,
       validationResult: options.validationResult,
     });
     const required = requirement.status === 'required';
@@ -981,6 +1712,16 @@ export function createContractReviewReport(
       requirementDescription: requirement.description,
       required,
       ...evaluated,
+      evidence:
+        evaluated.evidence.length > 0
+          ? evaluated.evidence
+          : [
+              {
+                kind: 'note' as const,
+                ref: requirement.stableId,
+                description: 'No repository evidence was found.',
+              },
+            ],
       warning:
         !required && evaluated.status !== 'satisfied'
           ? evaluated.warning ?? 'Optional requirement is not required for completion.'

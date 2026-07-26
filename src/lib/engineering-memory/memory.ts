@@ -21,6 +21,7 @@ import {
   type EngineeringMemoryRestoreAction,
   type EngineeringMemorySummary,
   type EngineeringMemoryValidationEvidence,
+  type RecordContractReviewOptions,
   type RecordTaskExecutionOptions,
   type RestoreEngineeringMemoryOptions,
 } from './types';
@@ -362,6 +363,163 @@ export function recordTaskExecutionInMemory(
     ...next,
     restoreOptions: restoreOptionsForMemory(next),
   };
+}
+
+function contractEvidenceKind(
+  kind: RecordContractReviewOptions['report']['requirementReports'][number]['evidence'][number]['kind']
+): EngineeringMemoryValidationEvidence['kind'] {
+  if (kind === 'route') return 'route';
+  if (kind === 'validation') return 'validation';
+  if (kind === 'file' || kind === 'component' || kind === 'test' || kind === 'asset') {
+    return 'file';
+  }
+  if (kind === 'note') return 'note';
+  return 'requirement';
+}
+
+function contractEvidenceStatus(
+  status: RecordContractReviewOptions['report']['requirementReports'][number]['status']
+): EngineeringMemoryValidationEvidence['status'] {
+  if (status === 'satisfied') return 'passed';
+  if (status === 'blocked') return 'blocked';
+  if (status === 'manually review') return 'unknown';
+  return 'failed';
+}
+
+function contractReviewEvidence(
+  options: RecordContractReviewOptions
+): EngineeringMemoryValidationEvidence[] {
+  return options.report.requirementReports.flatMap((requirement) =>
+    requirement.evidence.map((evidence) => ({
+      kind: contractEvidenceKind(evidence.kind),
+      ref: evidence.ref,
+      status: contractEvidenceStatus(requirement.status),
+      description: `[contract:${requirement.requirementId}] ${
+        evidence.description ?? requirement.requirementDescription
+      }`,
+    }))
+  );
+}
+
+function dedupeValidationEvidence(
+  evidence: EngineeringMemoryValidationEvidence[]
+): EngineeringMemoryValidationEvidence[] {
+  const byKey = new Map<string, EngineeringMemoryValidationEvidence>();
+  evidence.forEach((item) => {
+    byKey.set(
+      `${item.kind}:${item.ref}:${item.status}:${item.description ?? ''}`,
+      item
+    );
+  });
+  return Array.from(byKey.values());
+}
+
+export function recordContractReviewInMemory(
+  memory: EngineeringMemory,
+  options: RecordContractReviewOptions
+): EngineeringMemory {
+  const now = options.now ?? new Date();
+  const nowIso = now.toISOString();
+  const reviewedIds = new Set(
+    options.report.requirementReports.map((requirement) => requirement.requirementId)
+  );
+  const satisfiedIds = options.report.requirementReports
+    .filter((requirement) => requirement.status === 'satisfied')
+    .map((requirement) => requirement.requirementId);
+  const currentEvidence = contractReviewEvidence(options);
+  const previousEvidence = memory.validationEvidence.filter(
+    (evidence) =>
+      !Array.from(reviewedIds).some((requirementId) =>
+        evidence.description?.startsWith(`[contract:${requirementId}]`)
+      )
+  );
+  const issueByRequirement = new Map(
+    memory.unresolvedIssues
+      .filter((issue) => issue.requirementId)
+      .map((issue) => [issue.requirementId!, issue])
+  );
+  const unrelatedIssues = memory.unresolvedIssues.filter(
+    (issue) => !issue.requirementId || !reviewedIds.has(issue.requirementId)
+  );
+  const contractIssues = options.report.requirementReports.flatMap(
+    (requirement): EngineeringMemoryIssue[] => {
+      const previous = issueByRequirement.get(requirement.requirementId);
+      if (requirement.status === 'satisfied') {
+        return previous
+          ? [
+              {
+                ...previous,
+                resolvedAt: previous.resolvedAt ?? nowIso,
+              },
+            ]
+          : [];
+      }
+      if (!requirement.required) return [];
+      return [
+        {
+          id: previous?.id ?? `contract-issue-${requirement.requirementId}`,
+          severity:
+            requirement.status === 'blocked' ||
+            requirement.status === 'manually review'
+              ? 'warning'
+              : 'error',
+          title: `Build Contract requirement needs attention`,
+          description:
+            requirement.missingImplementation ??
+            requirement.warning ??
+            requirement.requirementDescription,
+          taskId: requirement.recommendedRepairTask?.id,
+          requirementId: requirement.requirementId,
+          createdAt: previous?.createdAt ?? nowIso,
+          resolvedAt: undefined,
+        },
+      ];
+    }
+  );
+  const graph = options.taskGraph ?? memory.taskGraph;
+  const baseCompleted = memory.completedRequirementIds.filter(
+    (requirementId) => !reviewedIds.has(requirementId)
+  );
+  let next: EngineeringMemory = {
+    ...memory,
+    buildContractId: options.report.contractId,
+    buildContractVersion: options.report.contractVersion,
+    taskGraph: graph ? clone(graph) : undefined,
+    completedRequirementIds: unique([...baseCompleted, ...satisfiedIds]),
+    validationEvidence: dedupeValidationEvidence([
+      ...previousEvidence,
+      ...currentEvidence,
+    ]),
+    unresolvedIssues: [...unrelatedIssues, ...contractIssues],
+    latestRepositoryFingerprint:
+      options.repositoryModel?.repositoryFingerprint ??
+      options.report.repositoryFingerprint,
+    generatedFileOwnership: mergeFileOwnership(
+      memory.generatedFileOwnership,
+      fileOwnershipFromRepository(options.repositoryModel, graph)
+    ),
+    resumableTaskId: chooseResumableTaskId(graph),
+    overallBuildStatus: options.report.completionAllowed
+      ? 'passed'
+      : options.report.blockedRequirementIds.length > 0
+        ? 'blocked'
+        : 'recoverable',
+    updatedAt: nowIso,
+  };
+
+  next = {
+    ...next,
+    restoreOptions: restoreOptionsForMemory(next),
+  };
+
+  if (options.report.completionAllowed && options.checkpointOnCompletion) {
+    next = createEngineeringMemoryCheckpoint(next, {
+      label: 'Build Contract evidence satisfied',
+      now,
+    });
+  }
+
+  return next;
 }
 
 function recoverInterruptedGraph(

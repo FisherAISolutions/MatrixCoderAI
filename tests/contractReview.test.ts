@@ -9,7 +9,10 @@ import {
   type BuildContractRequirement,
   type BuildContractRequirementType,
 } from '@/lib/build-contract';
-import { createContractReviewReport } from '@/lib/contract-review';
+import {
+  createContractCompletionReport,
+  createContractReviewReport,
+} from '@/lib/contract-review';
 import { createRepositoryModel } from '@/lib/repository-model';
 import type { ValidationResult } from '@/lib/validation/engine';
 
@@ -382,5 +385,162 @@ describe('contract-based final review', () => {
 
     expect(report.completionAllowed).toBe(true);
     expect(report.summary.deploymentReadiness).toBe('ready');
+  });
+
+  it('does not accept an integration dependency without implementation evidence', () => {
+    const files = [
+      file(
+        'package.json',
+        JSON.stringify({
+          dependencies: {
+            stripe: '^18.0.0',
+          },
+        }),
+        'json'
+      ),
+    ];
+    const stripe = {
+      ...requirement(
+        'integration',
+        'Stripe',
+        'Stripe billing integration must be connected.'
+      ),
+      title: 'Integration: Stripe',
+    };
+    const report = createContractReviewReport({
+      contract: contract({
+        integrations: ['Stripe'],
+        requirements: [stripe],
+      }),
+      repositoryModel: createRepositoryModel({ files }),
+      files,
+      validationResult: buildPassed(),
+    });
+    const result = report.requirementReports[0];
+
+    expect(result.status).toBe('partially satisfied');
+    expect(result.evidence).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ kind: 'configuration', ref: 'package.json' }),
+      ])
+    );
+    expect(result.recommendedRepairTask?.allowedFileScope).not.toContain('src/**');
+    expect(report.completionAllowed).toBe(false);
+  });
+
+  it('requires enforceable ownership evidence for role and permission requirements', () => {
+    const files = [
+      file(
+        'src/lib/auth/server.ts',
+        'export async function getUser(supabase: { auth: { getUser(): Promise<unknown> } }) { return supabase.auth.getUser(); }'
+      ),
+      file(
+        'supabase/migrations/20260721_profiles.sql',
+        'alter table profiles enable row level security;\ncreate policy "owners" on profiles using (auth.uid() = user_id);',
+        'sql'
+      ),
+    ];
+    const report = createContractReviewReport({
+      contract: contract({
+        requirements: [
+          requirement(
+            'role-permission',
+            'profile ownership',
+            'Users may access only profiles they own.'
+          ),
+        ],
+      }),
+      repositoryModel: createRepositoryModel({ files }),
+      files,
+      validationResult: buildPassed(),
+    });
+
+    expect(report.requirementReports[0]).toMatchObject({
+      status: 'satisfied',
+      validationResult: 'passed',
+    });
+    expect(report.requirementReports[0].relatedFiles).toContain(
+      'supabase/migrations/20260721_profiles.sql'
+    );
+  });
+
+  it('requires repository test evidence for test acceptance criteria', () => {
+    const testRequirement = requirement(
+      'acceptance',
+      'checkout tests',
+      'Focused tests must cover checkout failures.'
+    );
+    const withoutTest = [file('src/lib/checkout.ts', 'export const checkout = () => false;')];
+    const missing = createContractReviewReport({
+      contract: contract({ requirements: [testRequirement] }),
+      repositoryModel: createRepositoryModel({ files: withoutTest }),
+      files: withoutTest,
+      validationResult: buildPassed(),
+    });
+    const withTest = [
+      ...withoutTest,
+      file(
+        'tests/checkout.test.ts',
+        "it('covers checkout failures', () => { expect(false).toBe(false); });"
+      ),
+    ];
+    const satisfied = createContractReviewReport({
+      contract: contract({ requirements: [testRequirement] }),
+      repositoryModel: createRepositoryModel({ files: withTest }),
+      files: withTest,
+      validationResult: buildPassed(),
+    });
+
+    expect(missing.requirementReports[0].status).toBe('missing');
+    expect(satisfied.requirementReports[0].status).toBe('satisfied');
+    expect(satisfied.requirementReports[0].evidence[0]).toMatchObject({
+      kind: 'test',
+      ref: 'tests/checkout.test.ts',
+    });
+  });
+
+  it('can prove explicit asset requirements without treating binary content as source', () => {
+    const assetRequirement: BuildContractRequirement = {
+      ...requirement(
+        'visual',
+        'brand logo',
+        'The approved brand logo must be included.'
+      ),
+      validationStrategy: 'file-exists',
+      evidenceReferences: [{ kind: 'file', ref: 'public/brand-logo.png' }],
+    };
+    const files = [file('public/brand-logo.png', '', 'unknown')];
+    const report = createContractReviewReport({
+      contract: contract({ requirements: [assetRequirement] }),
+      repositoryModel: createRepositoryModel({ files }),
+      files,
+      validationResult: buildPassed(),
+    });
+
+    expect(report.requirementReports[0].status).toBe('satisfied');
+    expect(report.requirementReports[0].evidence[0]).toMatchObject({
+      kind: 'asset',
+      ref: 'public/brand-logo.png',
+    });
+  });
+
+  it('provides evidence for every requirement and matching plain and technical summaries', () => {
+    const files = [
+      file('src/app/page.tsx', 'export default function Page() { return <main>Home</main>; }'),
+    ];
+    const report = createContractReviewReport({
+      contract: contract(),
+      repositoryModel: createRepositoryModel({ files }),
+      files,
+      validationResult: buildPassed(),
+    });
+    const completion = createContractCompletionReport(report);
+
+    expect(report.requirementReports.every((item) => item.evidence.length > 0)).toBe(
+      true
+    );
+    expect(completion.plainLanguage.complete).toBe(report.completionAllowed);
+    expect(completion.technical.requirements).toEqual(report.requirementReports);
+    expect(completion.technical.requirements).not.toBe(report.requirementReports);
   });
 });

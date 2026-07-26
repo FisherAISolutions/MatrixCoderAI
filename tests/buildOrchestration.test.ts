@@ -274,6 +274,10 @@ describe('task-driven build orchestration', () => {
       taskIds.at(-1)
     );
     expect(result.engineeringMemory.lastSafeCheckpoint).toBeDefined();
+    expect(result.engineeringMemory.lastSafeCheckpoint?.label).toBe(
+      'Build Contract evidence satisfied'
+    );
+    expect(result.engineeringMemory.overallBuildStatus).toBe('passed');
   });
 
   it('does not report completion when final contract evidence is incomplete', async () => {
@@ -300,6 +304,7 @@ describe('task-driven build orchestration', () => {
     expect(result.state.status).toBe('recoverable-failure');
     expect(result.stopReason).toBe('contract-incomplete');
     expect(result.contractReviewReport?.completionAllowed).toBe(false);
+    expect(result.engineeringMemory.overallBuildStatus).toBe('recoverable');
   });
 
   it('persists a cancelled task as resumable before the stopped checkpoint', async () => {

@@ -4,11 +4,18 @@ import type { FileNode } from '@/app/chat-workspace/components/types';
 import type { BuildContract } from '@/lib/build-contract';
 import type { CapabilityResolutionResult } from '@/lib/capabilities';
 import {
+  CONTRACT_REVIEW_METADATA_VERSION,
+  CONTRACT_REVIEW_SCHEMA_VERSION,
+  type ContractReviewReport,
+  type ContractReviewRequirementStatus,
+} from '@/lib/contract-review';
+import {
   cloneEngineeringMemoryForProject,
   createEngineeringMemory,
   createEngineeringMemoryCheckpoint,
   deserializeEngineeringMemory,
   getEngineeringMemorySummary,
+  recordContractReviewInMemory,
   recordTaskExecutionInMemory,
   restoreEngineeringMemory,
   serializeEngineeringMemory,
@@ -170,6 +177,67 @@ function capabilities(): CapabilityResolutionResult {
   };
 }
 
+function contractReview(
+  status: ContractReviewRequirementStatus
+): ContractReviewReport {
+  const satisfied = status === 'satisfied';
+  const blocked = status === 'blocked';
+  return {
+    schemaVersion: CONTRACT_REVIEW_SCHEMA_VERSION,
+    metadataVersion: CONTRACT_REVIEW_METADATA_VERSION,
+    id: `review-${status}`,
+    projectId: 'project-1',
+    projectName: 'Demo',
+    contractId: 'contract-1',
+    contractVersion: 1,
+    repositoryFingerprint: `repository-${status}`,
+    buildValidationPassed: true,
+    generatedAt: now.toISOString(),
+    requirementReports: [
+      {
+        requirementId: 'req-route-dashboard',
+        requirementType: 'route',
+        category: 'required routes',
+        requirementDescription: 'The dashboard route must exist.',
+        required: true,
+        status,
+        evidence: [
+          {
+            kind: 'route',
+            ref: '/dashboard',
+            description: satisfied
+              ? 'Dashboard route exists.'
+              : 'Dashboard route is missing.',
+          },
+        ],
+        relatedFiles: ['src/app/dashboard/page.tsx'],
+        relatedRoutes: ['/dashboard'],
+        relatedModels: [],
+        relatedApis: [],
+        validationResult: satisfied ? 'passed' : blocked ? 'blocked' : 'failed',
+        missingImplementation: satisfied
+          ? undefined
+          : 'Create the dashboard route.',
+      },
+    ],
+    completionAllowed: satisfied,
+    blockingRequirementIds:
+      !satisfied && !blocked ? ['req-route-dashboard'] : [],
+    optionalMissingRequirementIds: [],
+    blockedRequirementIds: blocked ? ['req-route-dashboard'] : [],
+    manualReviewRequirementIds: [],
+    summary: {
+      whatWasBuilt: satisfied ? ['Route /dashboard'] : [],
+      whatPassed: satisfied ? ['The dashboard route must exist.'] : [],
+      whatRemains: satisfied ? [] : ['Create the dashboard route.'],
+      blockedEnvironmentalItems: blocked ? ['Create the dashboard route.'] : [],
+      requiredEnvironmentVariables: [],
+      manualSetupSteps: [],
+      deploymentReadiness: satisfied ? 'ready' : blocked ? 'blocked' : 'not ready',
+    },
+  };
+}
+
 describe('engineering memory', () => {
   it('persists and restores structured memory across refresh', () => {
     const repositoryModel = createRepositoryModel({
@@ -322,5 +390,78 @@ describe('engineering memory', () => {
     expect(cloned.taskGraph?.projectId).toBe('project-b');
     cloned.taskGraph!.tasks[0]!.title = 'Changed';
     expect(memory.taskGraph?.tasks[0]?.title).toBe('Implement dashboard route');
+  });
+
+  it('reconciles optimistic task completion with final contract evidence', () => {
+    const memory = createEngineeringMemory({
+      projectId: 'project-1',
+      taskGraph: graph([task({ status: 'passed' })]),
+      now,
+    });
+    expect(memory.completedRequirementIds).toContain('req-route-dashboard');
+
+    const reviewed = recordContractReviewInMemory(memory, {
+      report: contractReview('missing'),
+      taskGraph: graph([task({ status: 'passed' })]),
+      now: new Date('2026-07-20T12:15:00.000Z'),
+    });
+
+    expect(reviewed.completedRequirementIds).not.toContain('req-route-dashboard');
+    expect(reviewed.overallBuildStatus).toBe('recoverable');
+    expect(reviewed.unresolvedIssues).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          id: 'contract-issue-req-route-dashboard',
+          requirementId: 'req-route-dashboard',
+          severity: 'error',
+        }),
+      ])
+    );
+    expect(reviewed.validationEvidence).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          kind: 'route',
+          ref: '/dashboard',
+          status: 'failed',
+          description: expect.stringContaining(
+            '[contract:req-route-dashboard]'
+          ),
+        }),
+      ])
+    );
+  });
+
+  it('persists satisfied contract evidence and a final safe checkpoint', () => {
+    const initial = recordContractReviewInMemory(
+      createEngineeringMemory({
+        projectId: 'project-1',
+        taskGraph: graph([task({ status: 'passed' })]),
+        now,
+      }),
+      {
+        report: contractReview('missing'),
+        now,
+      }
+    );
+    const satisfied = recordContractReviewInMemory(initial, {
+      report: contractReview('satisfied'),
+      taskGraph: graph([task({ status: 'passed' })]),
+      checkpointOnCompletion: true,
+      now: new Date('2026-07-20T12:20:00.000Z'),
+    });
+    const restored = deserializeEngineeringMemory(
+      serializeEngineeringMemory(satisfied)
+    );
+
+    expect(restored?.completedRequirementIds).toContain('req-route-dashboard');
+    expect(restored?.overallBuildStatus).toBe('passed');
+    expect(restored?.lastSafeCheckpoint?.label).toBe(
+      'Build Contract evidence satisfied'
+    );
+    expect(
+      restored?.unresolvedIssues.find(
+        (issue) => issue.requirementId === 'req-route-dashboard'
+      )?.resolvedAt
+    ).toBeDefined();
   });
 });

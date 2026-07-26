@@ -1,5 +1,6 @@
 import type { CapabilityApplicability } from '@/lib/capabilities';
 import type { RepositoryModel } from '@/lib/repository-model';
+import type { ContractReviewReport } from '@/lib/contract-review';
 import type {
   EngineeringDiscipline,
   TaskFailureClassification,
@@ -140,6 +141,14 @@ export interface RecordTaskExecutionOptions {
   repositoryModel?: RepositoryModel | null;
   taskGraph?: TaskGraph | null;
   checkpointOnSuccess?: boolean | string;
+  now?: Date;
+}
+
+export interface RecordContractReviewOptions {
+  report: ContractReviewReport;
+  repositoryModel?: RepositoryModel | null;
+  taskGraph?: TaskGraph | null;
+  checkpointOnCompletion?: boolean;
   now?: Date;
 }
 

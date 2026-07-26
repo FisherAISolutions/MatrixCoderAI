@@ -2,6 +2,7 @@ import type { FileNode } from '@/app/chat-workspace/components/types';
 import { createContractReviewReport } from '@/lib/contract-review';
 import {
   createEngineeringMemory,
+  recordContractReviewInMemory,
   recordTaskExecutionInMemory,
   restoreEngineeringMemory,
   type EngineeringMemory,
@@ -660,6 +661,23 @@ export async function runTaskDrivenBuild(
     });
 
     if (contractReviewReport.completionAllowed) {
+      engineeringMemory = recordContractReviewInMemory(engineeringMemory, {
+        report: contractReviewReport,
+        repositoryModel,
+        taskGraph: graph,
+        checkpointOnCompletion: true,
+      });
+      intelligenceCore = createIntelligenceCore({
+        projectId: options.projectId,
+        architectDraft: options.architectDraft,
+        blueprintDraft: options.blueprintDraft,
+        buildContract: options.contract,
+        capabilityResolution: options.capabilityResolution,
+        taskGraph: graph,
+        repositoryModel,
+        engineeringMemory,
+        existingCore: intelligenceCore,
+      });
       state = nextState(state, graph, {
         status: 'completed',
         stopReason: 'completed',
@@ -679,6 +697,22 @@ export async function runTaskDrivenBuild(
       .filter((task): task is TaskGraphTask => Boolean(task));
     const merged = mergeRepairTasks(graph, repairs);
     graph = merged.graph;
+    engineeringMemory = recordContractReviewInMemory(engineeringMemory, {
+      report: contractReviewReport,
+      repositoryModel,
+      taskGraph: graph,
+    });
+    intelligenceCore = createIntelligenceCore({
+      projectId: options.projectId,
+      architectDraft: options.architectDraft,
+      blueprintDraft: options.blueprintDraft,
+      buildContract: options.contract,
+      capabilityResolution: options.capabilityResolution,
+      taskGraph: graph,
+      repositoryModel,
+      engineeringMemory,
+      existingCore: intelligenceCore,
+    });
     if (
       merged.added.length > 0 &&
       state.contractRepairRound < state.maximumContractRepairRounds

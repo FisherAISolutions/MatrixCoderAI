@@ -38,7 +38,20 @@ export type ContractReviewValidationResult =
   | 'manual';
 
 export interface ContractReviewEvidence {
-  kind: 'file' | 'route' | 'model' | 'api' | 'validation' | 'env' | 'note';
+  kind:
+    | 'file'
+    | 'route'
+    | 'model'
+    | 'api'
+    | 'validation'
+    | 'env'
+    | 'component'
+    | 'integration'
+    | 'test'
+    | 'deployment'
+    | 'asset'
+    | 'configuration'
+    | 'note';
   ref: string;
   description?: string;
 }
@@ -89,4 +102,29 @@ export interface ContractReviewReport {
   blockedRequirementIds: string[];
   manualReviewRequirementIds: string[];
   summary: ContractReviewFinalSummary;
+}
+
+export interface ContractCompletionPlainLanguageReport {
+  headline: string;
+  complete: boolean;
+  built: string[];
+  passed: string[];
+  remaining: string[];
+  blocked: string[];
+  manualSetup: string[];
+  deploymentReadiness: ContractReviewFinalSummary['deploymentReadiness'];
+}
+
+export interface ContractCompletionTechnicalReport {
+  contractId: string;
+  contractVersion: number;
+  repositoryFingerprint: string;
+  buildValidationPassed: boolean;
+  completionAllowed: boolean;
+  requirements: ContractReviewRequirementReport[];
+}
+
+export interface ContractCompletionReport {
+  plainLanguage: ContractCompletionPlainLanguageReport;
+  technical: ContractCompletionTechnicalReport;
 }
