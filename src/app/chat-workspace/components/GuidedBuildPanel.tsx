@@ -126,7 +126,14 @@ export default function GuidedBuildPanel({
 
       {expanded ? (
         <div className="space-y-3 px-4 pb-4">
-          <div className="h-1 overflow-hidden rounded-full bg-matrix-green-ghost">
+          <div
+            className="h-1 overflow-hidden rounded-full bg-matrix-green-ghost"
+            role="progressbar"
+            aria-label="Overall guided build progress"
+            aria-valuemin={0}
+            aria-valuemax={100}
+            aria-valuenow={guidedState.progress.percentComplete}
+          >
             <div
               className="h-full bg-matrix-green transition-all"
               style={{ width: `${guidedState.progress.percentComplete}%` }}
@@ -213,7 +220,11 @@ export default function GuidedBuildPanel({
             </div>
           </div>
 
-          <p className="font-mono text-xs text-matrix-green-muted">
+          <p
+            className="font-mono text-xs text-matrix-green-muted"
+            role="status"
+            aria-live="polite"
+          >
             {controller.statusMessage}
           </p>
 
@@ -273,7 +284,14 @@ export default function GuidedBuildPanel({
                   <p className="mt-2 font-mono text-xs text-matrix-green">
                     Current action: {milestone.currentAction}
                   </p>
-                  <div className="mt-3 h-1 overflow-hidden rounded-full bg-black/30">
+                  <div
+                    className="mt-3 h-1 overflow-hidden rounded-full bg-black/30"
+                    role="progressbar"
+                    aria-label={`${milestone.title} progress`}
+                    aria-valuemin={0}
+                    aria-valuemax={100}
+                    aria-valuenow={milestone.progress}
+                  >
                     <div
                       className="h-full bg-current transition-all"
                       style={{ width: `${milestone.progress}%` }}

@@ -1,0 +1,21 @@
+# Private Beta Release Checklist
+
+- [ ] Git working tree reviewed and release commit/tag identified
+- [ ] Environment validation passes with production names configured
+- [ ] Supabase migrations reviewed, backed up, and applied in staging
+- [ ] Two-user Supabase RLS and ownership audit completed
+- [x] Focused and full Vitest suites pass (86 files / 740 tests)
+- [x] Playwright desktop/mobile smoke passes (10 tests)
+- [x] TypeScript and production build pass (Next.js 15.5.21)
+- [x] Secret scan and dependency health review completed (0 audit findings)
+- [ ] Cancellation, refresh/resume, project switch, and restore manually checked
+- [ ] Stripe test checkout, verified webhook, idempotency, portal, and grace tested
+- [ ] Vercel guarded staging deployment and recovery tested
+- [x] Core benchmark plan and bounded dry-run certification reviewed
+- [ ] At least one approved core live benchmark result recorded separately
+- [ ] Health endpoint, error reporting, alerts, status communication, and support owner ready
+- [ ] Backup restore and rollback procedure rehearsed
+- [ ] Known issues and safe plan/build limits published to testers
+- [ ] Terms, Privacy, Acceptable Use, AI disclosure, and data-request text professionally reviewed
+- [ ] Controlled beta allowlist configured and direct Supabase public signup disabled
+- [ ] AI, task-build, deployment, and checkout kill switches tested

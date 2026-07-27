@@ -103,11 +103,18 @@ export default function AuthPage() {
             </p>
           </div>
           {/* Tab toggle */}
-          <div className="mb-6 flex overflow-hidden rounded-xl border border-matrix-border/80 bg-matrix-panel/50 p-1">
+          <div
+            className="mb-6 flex overflow-hidden rounded-xl border border-matrix-border/80 bg-matrix-panel/50 p-1"
+            role="tablist"
+            aria-label="Authentication mode"
+          >
             {(['login', 'signup'] as const).map((t) => (
               <button
                 key={`tab-${t}`}
                 onClick={() => setTab(t)}
+                role="tab"
+                aria-selected={tab === t}
+                aria-controls="authentication-form"
                 className={`flex-1 rounded-lg py-2.5 text-xs font-mono tracking-widest uppercase transition-all duration-150 ${
                   tab === t
                     ? 'bg-matrix-green text-black font-bold shadow-[0_0_24px_rgba(0,255,102,0.25)]' : 'text-matrix-green-muted hover:text-matrix-green hover:bg-matrix-green-ghost'
@@ -119,7 +126,12 @@ export default function AuthPage() {
           </div>
 
           {/* Form */}
-          <div className="animate-fade-in" key={tab}>
+          <div
+            id="authentication-form"
+            className="animate-fade-in"
+            key={tab}
+            role="tabpanel"
+          >
             {tab === 'login' ? (
               <LoginForm onSwitchToSignup={() => setTab('signup')} />
             ) : (

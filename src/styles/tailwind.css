@@ -2,6 +2,22 @@
 @tailwind components;
 @tailwind utilities;
 
+:focus-visible {
+  outline: 2px solid #00ff66;
+  outline-offset: 3px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    scroll-behavior: auto !important;
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}
+
 @import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:ital,wght@0,100..800;1,100..800&family=DM+Sans:wght@300;400;500;600;700&display=swap');
 
 @layer base {

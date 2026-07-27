@@ -28,6 +28,10 @@ export const SERVER_ENV_KEYS = [
   'MATRIX_DISABLE_CHECKOUT',
   'MATRIX_ERROR_REPORTING_URL',
   'MATRIX_ERROR_REPORTING_TOKEN',
+  'MATRIX_BETA_ACCESS_MODE',
+  'MATRIX_BETA_ALLOWED_EMAILS',
+  'MATRIX_BETA_FEEDBACK_URL',
+  'MATRIX_STATUS_PAGE_URL',
 ] as const;
 
 export type PublicEnvKey = (typeof PUBLIC_ENV_KEYS)[number];
@@ -197,6 +201,30 @@ export const ENV_SPECS = [
     visibility: 'server',
     requirement: 'optional',
     description: 'Optional server-only error-reporting token.',
+  },
+  {
+    key: 'MATRIX_BETA_ACCESS_MODE',
+    visibility: 'server',
+    requirement: 'optional',
+    description: 'Private-beta registration mode: open, controlled, or closed.',
+  },
+  {
+    key: 'MATRIX_BETA_ALLOWED_EMAILS',
+    visibility: 'server',
+    requirement: 'optional',
+    description: 'Comma-separated email allowlist used only for controlled signup.',
+  },
+  {
+    key: 'MATRIX_BETA_FEEDBACK_URL',
+    visibility: 'server',
+    requirement: 'optional',
+    description: 'Optional operator-configured private-beta feedback destination.',
+  },
+  {
+    key: 'MATRIX_STATUS_PAGE_URL',
+    visibility: 'server',
+    requirement: 'optional',
+    description: 'Optional operator-configured status and incident communication page.',
   },
   {
     key: 'NEXT_PUBLIC_VERCEL_TOKEN_CONFIGURED',

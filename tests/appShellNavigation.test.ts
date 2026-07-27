@@ -9,11 +9,12 @@ describe('app shell navigation', () => {
   it('contains the primary application destinations', () => {
     expect(APP_SHELL_NAV_ITEMS.map((item) => item.href)).toEqual([
       '/dashboard',
-      '/chat-workspace',
-      '/matrix-build-suite',
-      '/blueprint-studio',
-      '/deployment-center',
       '/projects',
+      '/matrix-ai-architect',
+      '/blueprint-studio',
+      '/chat-workspace',
+      '/deployment-center',
+      '/matrix-build-suite',
       '/history',
       '/settings',
     ]);
@@ -24,19 +25,16 @@ describe('app shell navigation', () => {
       (item) => item.href
     );
 
-    expect(unavailable).toEqual([
-      '/projects',
-      '/history',
-      '/settings',
-    ]);
+    expect(unavailable).toEqual(['/history', '/settings']);
   });
 
   it('keeps quick actions focused on existing destinations', () => {
     expect(APP_SHELL_QUICK_ACTIONS.map((item) => item.href)).toEqual([
       '/chat-workspace',
+      '/matrix-ai-architect',
       '/matrix-build-suite',
       '/deployment-center',
-      '/projects/new',
+      '/projects',
     ]);
   });
 

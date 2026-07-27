@@ -1,23 +1,17 @@
 'use client';
-/**
- * Landing-page Footer.
- *
- * Brand row + minimal nav + colophon. Kept short — most users on a
- * landing page either convert or bounce; the footer should not become
- * a distraction.
- */
 
 import Link from 'next/link';
 import AppLogo from '@/components/ui/AppLogo';
+import { MATRIX_RELEASE } from '@/lib/release/releaseInfo';
 
 export default function LandingFooter() {
   return (
-    <footer className="relative z-10 border-t border-matrix-border mt-16">
-      <div className="max-w-7xl mx-auto px-6 lg:px-10 py-10 flex flex-col md:flex-row items-start md:items-center justify-between gap-6">
+    <footer className="relative z-10 mt-16 border-t border-matrix-border">
+      <div className="mx-auto flex max-w-7xl flex-col items-start justify-between gap-6 px-6 py-10 md:flex-row md:items-center lg:px-10">
         <div className="flex items-center gap-3">
           <AppLogo size={28} />
           <div>
-            <p className="text-matrix-green text-sm font-bold tracking-[0.32em] neon-text-glow">
+            <p className="text-sm font-bold tracking-[0.32em] text-matrix-green neon-text-glow">
               MATRIX CODER AI
             </p>
             <p className="text-[10px] uppercase tracking-[0.28em] text-matrix-green-muted">
@@ -26,26 +20,41 @@ export default function LandingFooter() {
           </div>
         </div>
 
-        <nav className="flex flex-wrap items-center gap-x-6 gap-y-2 text-[11px] uppercase tracking-[0.32em] text-matrix-green-muted">
-          <a href="#features" className="hover:text-matrix-green transition-colors">
+        <nav
+          aria-label="Footer"
+          className="flex flex-wrap items-center gap-x-6 gap-y-2 text-[11px] uppercase tracking-[0.32em] text-matrix-green-muted"
+        >
+          <a href="#features" className="transition-colors hover:text-matrix-green">
             features
           </a>
-          <a href="#workflow" className="hover:text-matrix-green transition-colors">
+          <a href="#workflow" className="transition-colors hover:text-matrix-green">
             workflow
           </a>
-          <a href="#faq" className="hover:text-matrix-green transition-colors">
+          <a href="#faq" className="transition-colors hover:text-matrix-green">
             faq
           </a>
           <Link
+            href="/support"
+            className="transition-colors hover:text-matrix-green"
+          >
+            support
+          </Link>
+          <Link
+            href="/legal/privacy"
+            className="transition-colors hover:text-matrix-green"
+          >
+            privacy
+          </Link>
+          <Link
             href="/sign-up-login-screen"
-            className="hover:text-matrix-green transition-colors"
+            className="transition-colors hover:text-matrix-green"
             data-testid="footer-signin-link"
           >
             sign in
           </Link>
           <Link
             href="/sign-up-login-screen"
-            className="text-matrix-green hover:text-matrix-green-bright transition-colors"
+            className="text-matrix-green transition-colors hover:text-matrix-green-bright"
             data-testid="footer-signup-link"
           >
             start building
@@ -54,11 +63,12 @@ export default function LandingFooter() {
       </div>
 
       <div className="border-t border-matrix-border">
-        <div className="max-w-7xl mx-auto px-6 lg:px-10 py-5 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-2 text-[10px] uppercase tracking-[0.32em] text-matrix-green-muted">
-          <p>// © {new Date().getFullYear()} matrix coder ai · all systems online</p>
-          <p className="opacity-70">
-            ↳ built inside matrix coder ai
+        <div className="mx-auto flex max-w-7xl flex-col items-start justify-between gap-2 px-6 py-5 text-[10px] uppercase tracking-[0.32em] text-matrix-green-muted sm:flex-row sm:items-center lg:px-10">
+          <p>
+            // {new Date().getFullYear()} matrix coder ai ·{' '}
+            {MATRIX_RELEASE.channel} · v{MATRIX_RELEASE.version}
           </p>
+          <p className="opacity-70">built inside matrix coder ai</p>
         </div>
       </div>
     </footer>

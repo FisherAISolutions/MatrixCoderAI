@@ -256,8 +256,15 @@ export function canStartLiveEngineeringBenchmark(options: {
   if (options.fixtureId === 'all') {
     errors.push('Refusing to run all live engineering benchmarks.');
   }
-  if (options.fixtureId && options.fixtureId !== 'simple-business-website') {
-    errors.push('Only simple-business-website is enabled for the first live benchmark.');
+  if (
+    options.fixtureId &&
+    ![
+      'simple-business-website',
+      'crud-saas-dashboard',
+      'children-story-platform',
+    ].includes(options.fixtureId)
+  ) {
+    errors.push('The requested live engineering benchmark fixture is not certified.');
   }
   if (options.confirmation !== LIVE_ENGINEERING_BENCHMARK_CONFIRMATION) {
     errors.push(

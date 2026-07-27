@@ -6,6 +6,7 @@ import { useEffect, useMemo, useState, type ReactNode } from 'react';
 import { ChevronLeft, ChevronRight, Menu, X } from 'lucide-react';
 import { useAuth } from '@/contexts/AuthContext';
 import AppLogo from '@/components/ui/AppLogo';
+import { MATRIX_RELEASE } from '@/lib/release/releaseInfo';
 import {
   APP_SHELL_NAV_ITEMS,
   APP_SHELL_QUICK_ACTIONS,
@@ -176,6 +177,13 @@ function Sidebar({
               <p className="mt-1 text-[10px] uppercase tracking-[0.2em] text-slate-500">
                 Matrix session ready
               </p>
+              <p className="mt-2 text-[9px] uppercase tracking-[0.16em] text-slate-600">
+                {MATRIX_RELEASE.channel} · v{MATRIX_RELEASE.version}
+              </p>
+              <div className="mt-2 flex flex-wrap gap-x-3 gap-y-1 text-[9px] uppercase tracking-[0.12em] text-slate-500">
+                <Link href="/support" className="hover:text-matrix-green">Feedback</Link>
+                <Link href="/legal/privacy" className="hover:text-matrix-green">Privacy</Link>
+              </div>
             </>
           ) : (
             <div className="mx-auto flex h-8 w-8 items-center justify-center rounded-lg border border-matrix-green/60 text-xs font-bold text-matrix-green">
@@ -220,6 +228,15 @@ export function AppShell({
   useEffect(() => {
     setMobileOpen(false);
   }, [pathname]);
+
+  useEffect(() => {
+    if (!mobileOpen) return;
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') setMobileOpen(false);
+    };
+    window.addEventListener('keydown', closeOnEscape);
+    return () => window.removeEventListener('keydown', closeOnEscape);
+  }, [mobileOpen]);
 
   const resolvedBreadcrumbs = useMemo<BreadcrumbItem[]>(() => {
     if (breadcrumbs?.length) return breadcrumbs;

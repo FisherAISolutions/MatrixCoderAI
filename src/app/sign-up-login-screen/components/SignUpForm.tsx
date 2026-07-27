@@ -53,6 +53,21 @@ export default function SignUpForm({ onSwitchToLogin }: Props) {
     setIsLoading(true);
     setAuthError(null);
     try {
+      const accessResponse = await fetch('/api/beta/access', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ email: data.email }),
+      });
+      const access = (await accessResponse.json()) as {
+        allowed?: boolean;
+        reason?: string;
+      };
+      if (!accessResponse.ok || !access.allowed) {
+        throw new Error(
+          access.reason ??
+            'This private beta currently requires an invitation.'
+        );
+      }
       // Supabase Auth signUp({ email, password }) + create user profile row
       await signUp(data.email, data.password);
       toast.success('Account initialized', {
@@ -194,9 +209,9 @@ export default function SignUpForm({ onSwitchToLogin }: Props) {
         />
         <label htmlFor="signup-terms" className="text-xs font-mono text-matrix-green-muted cursor-pointer leading-relaxed">
           I accept the{' '}
-          <a href="#" className="text-matrix-green hover:underline">Terms of Service</a>
+          <a href="/legal/terms" className="text-matrix-green hover:underline">Terms of Service</a>
           {' '}and{' '}
-          <a href="#" className="text-matrix-green hover:underline">Privacy Policy</a>
+          <a href="/legal/privacy" className="text-matrix-green hover:underline">Privacy Policy</a>
         </label>
       </div>
       {errors.acceptTerms && (
