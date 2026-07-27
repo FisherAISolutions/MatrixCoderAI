@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import toast from 'react-hot-toast';
 import {
@@ -16,6 +16,9 @@ import {
 import {
   createMatrixProject,
   createProjectFromWorkspaceSnapshot,
+  clearMatrixProjectOpenHandoff,
+  clearMatrixProjectWorkspaceContext,
+  clearMatrixProjectWorkspaceSnapshot,
   deleteMatrixProject,
   duplicateMatrixProject,
   loadMatrixProjects,
@@ -33,6 +36,7 @@ import {
   type MatrixProjectWorkspaceSnapshot,
 } from '@/lib/projects/projectStore';
 import WorkflowNav from '@/components/workflow/WorkflowNav';
+import { useAuth } from '@/contexts/AuthContext';
 
 function formatDate(value: string): string {
   const date = new Date(value);
@@ -101,9 +105,14 @@ function saveStateToastMessage(
           'This project changed elsewhere. Your local edits were preserved.',
       };
     case 'save-failed':
+    case 'unauthorized':
       return {
         type: 'error',
-        message: result.warning ?? 'Project changes could not be saved.',
+        message:
+          result.warning ??
+          (result.saveState === 'unauthorized'
+            ? 'Sign in again before accessing projects.'
+            : 'Project changes could not be saved.'),
       };
     case 'offline-local-only':
       return {
@@ -136,6 +145,8 @@ function notifyPersistenceResult(
 
 export default function ProjectsClient() {
   const router = useRouter();
+  const { user } = useAuth();
+  const refreshSequenceRef = useRef(0);
   const [projects, setProjects] = useState<MatrixProject[]>([]);
   const [query, setQuery] = useState('');
   const [isLoading, setIsLoading] = useState(true);
@@ -148,27 +159,40 @@ export default function ProjectsClient() {
     useState<MatrixProjectWorkspaceSnapshot | null>(null);
 
   const refreshProjects = useCallback(async () => {
+    if (!user?.id) return;
+    const requestId = ++refreshSequenceRef.current;
     setIsLoading(true);
-    const result = await loadMatrixProjects();
+    const result = await loadMatrixProjects({ userId: user.id });
+    if (requestId !== refreshSequenceRef.current) return;
     setProjects(result.projects);
     setSource(result.source);
     setWarning(result.warning ?? null);
     setIsLoading(false);
-  }, []);
+  }, [user?.id]);
 
   useEffect(() => {
+    if (!user?.id) return;
     void refreshProjects();
 
     if (typeof window === 'undefined') return;
-    const snapshot = loadMatrixProjectWorkspaceSnapshot(window.localStorage);
-    const context = loadMatrixProjectWorkspaceContext(window.localStorage);
+    const snapshot = loadMatrixProjectWorkspaceSnapshot(
+      window.localStorage,
+      user.id
+    );
+    const context = loadMatrixProjectWorkspaceContext(
+      window.localStorage,
+      user.id
+    );
     setWorkspaceSnapshot(snapshot);
     setActiveProjectId(context.currentProjectId ?? null);
     if (snapshot?.name) {
       setProjectName(snapshot.name);
       setProjectDescription(snapshot.description);
     }
-  }, [refreshProjects]);
+    return () => {
+      refreshSequenceRef.current += 1;
+    };
+  }, [refreshProjects, user?.id]);
 
   const filteredProjects = useMemo(() => {
     const normalized = query.trim().toLowerCase();
@@ -188,14 +212,28 @@ export default function ProjectsClient() {
       successMessage: string,
       options: Parameters<typeof saveMatrixProject>[2] = {}
     ) => {
-      const result = await saveMatrixProject(nextProject, existing, options);
+      if (!user?.id) {
+        const result: MatrixProjectPersistenceResult = {
+          projects: existing,
+          source: 'local',
+          saveState: 'unauthorized',
+          syncStatus: 'unauthorized',
+          warning: 'Sign in again before saving this project.',
+        };
+        notifyPersistenceResult(result, successMessage);
+        return result;
+      }
+      const result = await saveMatrixProject(nextProject, existing, {
+        ...options,
+        userId: user.id,
+      });
       setProjects(result.projects);
       setSource(result.source);
       setWarning(result.warning ?? null);
       notifyPersistenceResult(result, successMessage);
       return result;
     },
-    []
+    [user?.id]
   );
 
   const handleCreateProject = useCallback(
@@ -227,30 +265,47 @@ export default function ProjectsClient() {
           ? 'Current workspace saved as a project.'
           : 'Blank project created.'
       );
-      if (result.saveState !== 'conflict' && result.saveState !== 'save-failed') {
+      if (
+        result.saveState !== 'conflict' &&
+        result.saveState !== 'save-failed' &&
+        result.saveState !== 'unauthorized'
+      ) {
         const projectToOpen =
           result.projects.find((item) => item.id === nextProject.id) ??
           nextProject;
         const snapshot = buildSnapshotFromProject(projectToOpen);
-        saveMatrixProjectWorkspaceSnapshot(window.localStorage, snapshot);
-        saveMatrixProjectWorkspaceContext(window.localStorage, {
-          currentProjectId: projectToOpen.id,
-          currentProjectName: projectToOpen.name,
-          buildManifest: projectToOpen.buildManifest,
-          blueprintDraft: projectToOpen.blueprintDraft,
-          architectDraft: projectToOpen.architectDraft,
-          buildContract: projectToOpen.buildContract,
-          capabilityResolution: projectToOpen.capabilityResolution,
-          taskGraph: projectToOpen.taskGraph,
-          repositoryModel: projectToOpen.repositoryModel,
-          engineeringMemory: projectToOpen.engineeringMemory,
-          taskExecutionState: projectToOpen.taskExecutionState,
-          buildOrchestrationState: projectToOpen.buildOrchestrationState,
-          contractReviewReport: projectToOpen.contractReviewReport,
-          intelligenceCore: projectToOpen.intelligenceCore,
-          changePlan: projectToOpen.changePlan,
-        });
-        writeMatrixProjectOpenHandoff(window.sessionStorage, projectToOpen);
+        saveMatrixProjectWorkspaceSnapshot(
+          window.localStorage,
+          snapshot,
+          user?.id
+        );
+        saveMatrixProjectWorkspaceContext(
+          window.localStorage,
+          {
+            currentProjectId: projectToOpen.id,
+            currentProjectName: projectToOpen.name,
+            buildManifest: projectToOpen.buildManifest,
+            blueprintDraft: projectToOpen.blueprintDraft,
+            architectDraft: projectToOpen.architectDraft,
+            buildContract: projectToOpen.buildContract,
+            capabilityResolution: projectToOpen.capabilityResolution,
+            taskGraph: projectToOpen.taskGraph,
+            repositoryModel: projectToOpen.repositoryModel,
+            engineeringMemory: projectToOpen.engineeringMemory,
+            taskExecutionState: projectToOpen.taskExecutionState,
+            buildOrchestrationState: projectToOpen.buildOrchestrationState,
+            contractReviewReport: projectToOpen.contractReviewReport,
+            intelligenceCore: projectToOpen.intelligenceCore,
+            changePlan: projectToOpen.changePlan,
+          },
+          user?.id
+        );
+        writeMatrixProjectOpenHandoff(
+          window.sessionStorage,
+          projectToOpen,
+          new Date(),
+          user?.id
+        );
         setWorkspaceSnapshot(snapshot);
         setActiveProjectId(projectToOpen.id);
       }
@@ -259,7 +314,8 @@ export default function ProjectsClient() {
       if (
         mode === 'blank' &&
         result.saveState !== 'conflict' &&
-        result.saveState !== 'save-failed'
+        result.saveState !== 'save-failed' &&
+        result.saveState !== 'unauthorized'
       ) {
         router.push('/matrix-ai-architect');
       }
@@ -271,6 +327,7 @@ export default function ProjectsClient() {
       projects,
       workspaceSnapshot,
       router,
+      user?.id,
     ]
   );
 
@@ -325,18 +382,26 @@ export default function ProjectsClient() {
       const result: MatrixProjectPersistenceResult = await deleteMatrixProject(
         project.id,
         projects,
-        { expectedName: project.name }
+        { expectedName: project.name, userId: user?.id }
       );
       setProjects(result.projects);
       setSource(result.source);
       setWarning(result.warning ?? null);
-      const deleted = result.saveState !== 'conflict' && result.saveState !== 'save-failed';
+      const deleted =
+        result.saveState !== 'conflict' &&
+        result.saveState !== 'save-failed' &&
+        result.saveState !== 'unauthorized';
       if (deleted && activeProjectId === project.id) {
+        clearMatrixProjectWorkspaceSnapshot(window.localStorage, user?.id);
+        clearMatrixProjectWorkspaceContext(window.localStorage, user?.id);
+        clearMatrixProjectOpenHandoff(window.sessionStorage, user?.id);
+        setWorkspaceSnapshot(null);
         setActiveProjectId(null);
+        router.replace('/projects');
       }
       notifyPersistenceResult(result, 'Project deleted.');
     },
-    [activeProjectId, projects]
+    [activeProjectId, projects, router, user?.id]
   );
 
   const handleOpenProject = useCallback(
@@ -345,6 +410,7 @@ export default function ProjectsClient() {
       const openedProject = markMatrixProjectOpened(project);
       const result = await saveMatrixProject(openedProject, projects, {
         expectedUpdatedAt: project.updatedAt,
+        userId: user?.id,
       });
       const projectToOpen =
         result.projects.find((item) => item.id === openedProject.id) ??
@@ -352,38 +418,52 @@ export default function ProjectsClient() {
       setProjects(result.projects);
       setSource(result.source);
       setWarning(result.warning ?? null);
-      if (result.saveState === 'conflict' || result.saveState === 'save-failed') {
+      if (
+        result.saveState === 'conflict' ||
+        result.saveState === 'save-failed' ||
+        result.saveState === 'unauthorized'
+      ) {
         notifyPersistenceResult(result, 'Project opened.');
         return;
       }
 
       saveMatrixProjectWorkspaceSnapshot(
         window.localStorage,
-        buildSnapshotFromProject(projectToOpen)
+        buildSnapshotFromProject(projectToOpen),
+        user?.id
       );
-      saveMatrixProjectWorkspaceContext(window.localStorage, {
-        currentProjectId: projectToOpen.id,
-        currentProjectName: projectToOpen.name,
-        buildManifest: projectToOpen.buildManifest,
-        blueprintDraft: projectToOpen.blueprintDraft,
-        architectDraft: projectToOpen.architectDraft,
-        buildContract: projectToOpen.buildContract,
-        capabilityResolution: projectToOpen.capabilityResolution,
-        taskGraph: projectToOpen.taskGraph,
-        repositoryModel: projectToOpen.repositoryModel,
-        engineeringMemory: projectToOpen.engineeringMemory,
-        taskExecutionState: projectToOpen.taskExecutionState,
-        buildOrchestrationState: projectToOpen.buildOrchestrationState,
-        contractReviewReport: projectToOpen.contractReviewReport,
-        intelligenceCore: projectToOpen.intelligenceCore,
-        changePlan: projectToOpen.changePlan,
-      });
-      writeMatrixProjectOpenHandoff(window.sessionStorage, projectToOpen);
+      saveMatrixProjectWorkspaceContext(
+        window.localStorage,
+        {
+          currentProjectId: projectToOpen.id,
+          currentProjectName: projectToOpen.name,
+          buildManifest: projectToOpen.buildManifest,
+          blueprintDraft: projectToOpen.blueprintDraft,
+          architectDraft: projectToOpen.architectDraft,
+          buildContract: projectToOpen.buildContract,
+          capabilityResolution: projectToOpen.capabilityResolution,
+          taskGraph: projectToOpen.taskGraph,
+          repositoryModel: projectToOpen.repositoryModel,
+          engineeringMemory: projectToOpen.engineeringMemory,
+          taskExecutionState: projectToOpen.taskExecutionState,
+          buildOrchestrationState: projectToOpen.buildOrchestrationState,
+          contractReviewReport: projectToOpen.contractReviewReport,
+          intelligenceCore: projectToOpen.intelligenceCore,
+          changePlan: projectToOpen.changePlan,
+        },
+        user?.id
+      );
+      writeMatrixProjectOpenHandoff(
+        window.sessionStorage,
+        projectToOpen,
+        new Date(),
+        user?.id
+      );
       setActiveProjectId(projectToOpen.id);
       notifyPersistenceResult(result, projectToOpen.name + ' loaded into Workspace.');
       router.push('/chat-workspace');
     },
-    [projects, router]
+    [projects, router, user?.id]
   );
 
   return (

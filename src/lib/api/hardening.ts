@@ -29,6 +29,19 @@ export function rejectIfRequestTooLarge(
 export async function parseJsonBody<T>(
   request: NextRequest
 ): Promise<JsonParseResult<T>> {
+  const contentType = request.headers.get('content-type')?.toLowerCase() ?? '';
+  if (
+    !contentType.startsWith('application/json') &&
+    !contentType.includes('+json')
+  ) {
+    return {
+      ok: false,
+      response: NextResponse.json(
+        { error: 'Content-Type must be application/json.' },
+        { status: 415 }
+      ),
+    };
+  }
   try {
     return { ok: true, body: (await request.json()) as T };
   } catch {

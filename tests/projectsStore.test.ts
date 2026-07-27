@@ -6,6 +6,7 @@ import {
 } from '@/lib/engineering-memory';
 import {
   MATRIX_PROJECTS_OPEN_HANDOFF_KEY,
+  MATRIX_PROJECT_OPEN_HANDOFF_TTL_MS,
   MATRIX_PROJECTS_STORAGE_KEY,
   MATRIX_PROJECTS_VERSION,
   MATRIX_PROJECTS_WORKSPACE_CONTEXT_KEY,
@@ -33,6 +34,7 @@ import {
   type SupabaseProjectMutationBuilder,
 } from '@/lib/projects/projectStore';
 import { createArchitectDraft } from '@/lib/matrix-ai-architect';
+import { getUserScopedStorageKey } from '@/lib/storage/userScope';
 
 function createMemoryStorage(): Storage {
   const values = new Map<string, string>();
@@ -450,7 +452,7 @@ describe('projectStore', () => {
 
     const first = controller.scheduleSave(firstProject, []);
     const second = controller.scheduleSave(secondProject, []);
-    await expect(first).resolves.toMatchObject({ saveState: 'unsaved' });
+    await expect(first).resolves.toMatchObject({ saveState: 'stale' });
 
     await vi.advanceTimersByTimeAsync(25);
     await expect(second).resolves.toMatchObject({ saveState: 'saved' });
@@ -458,7 +460,7 @@ describe('projectStore', () => {
     expect(saveCalls[0]?.name).toBe('Second');
   });
 
-  it('ignores an older in-flight autosave response', async () => {
+  it('serializes autosaves and ignores an older in-flight response', async () => {
     vi.useFakeTimers();
     const resolvers: Array<(result: MatrixProjectPersistenceResult) => void> = [];
     const saveFn: typeof saveMatrixProject = (project) => {
@@ -479,10 +481,29 @@ describe('projectStore', () => {
     const second = controller.scheduleSave(makeProject({ name: 'Second' }), []);
     await vi.advanceTimersByTimeAsync(0);
 
+    expect(resolvers).toHaveLength(1);
+    resolvers[0]?.({ projects: [], source: 'local', saveState: 'saved' });
+    await expect(first).resolves.toMatchObject({ saveState: 'stale' });
+    await vi.waitFor(() => expect(resolvers).toHaveLength(2));
     resolvers[1]?.({ projects: [], source: 'local', saveState: 'saved' });
     await expect(second).resolves.toMatchObject({ saveState: 'saved' });
-    resolvers[0]?.({ projects: [], source: 'local', saveState: 'saved' });
-    await expect(first).resolves.toMatchObject({ saveState: 'unsaved' });
+  });
+
+  it('cancels pending autosave without discarding in-memory work', async () => {
+    vi.useFakeTimers();
+    const saveFn = vi.fn<typeof saveMatrixProject>();
+    const controller = createMatrixProjectAutosaveController(25, saveFn);
+    const pendingSave = controller.scheduleSave(makeProject(), []);
+
+    controller.cancel();
+
+    await expect(pendingSave).resolves.toMatchObject({
+      saveState: 'cancelled',
+      projects: [],
+    });
+    expect(controller.getState()).toBe('cancelled');
+    await vi.advanceTimersByTimeAsync(25);
+    expect(saveFn).not.toHaveBeenCalled();
   });
 
   it('handles corrupt local project records without throwing', async () => {
@@ -645,20 +666,245 @@ describe('projectStore', () => {
 
   it('writes and consumes project open handoff once', () => {
     const project = makeProject();
+    const now = new Date('2026-07-08T00:00:00.000Z');
     writeMatrixProjectOpenHandoff(
       sessionStorage,
       project,
-      new Date('2026-07-08T00:00:00.000Z')
+      now
     );
 
     expect(sessionStorage.getItem(MATRIX_PROJECTS_OPEN_HANDOFF_KEY)).toContain(
       'project-1'
     );
 
-    const firstRead = readMatrixProjectOpenHandoff(sessionStorage);
+    const firstRead = readMatrixProjectOpenHandoff(sessionStorage, { now });
     expect(firstRead?.projectId).toBe('project-1');
 
     const secondRead = readMatrixProjectOpenHandoff(sessionStorage);
     expect(secondRead).toBeNull();
+  });
+
+  it('isolates local projects and workspace restore data by user', async () => {
+    const userOneProject = makeProject({ id: 'user-one-project', name: 'One' });
+    const userTwoProject = makeProject({ id: 'user-two-project', name: 'Two' });
+
+    await saveMatrixProject(userOneProject, [], {
+      storage: localStorage,
+      supabaseClient: null,
+      userId: 'user-1',
+    });
+    await saveMatrixProject(userTwoProject, [], {
+      storage: localStorage,
+      supabaseClient: null,
+      userId: 'user-2',
+    });
+    saveMatrixProjectWorkspaceSnapshot(
+      localStorage,
+      {
+        name: 'One',
+        description: '',
+        files: userOneProject.files,
+        chatMessages: [],
+        validationStatus: 'unknown',
+        deploymentStatus: 'unknown',
+        updatedAt: userOneProject.updatedAt,
+      },
+      'user-1'
+    );
+
+    const userOne = await loadMatrixProjects({
+      storage: localStorage,
+      supabaseClient: null,
+      userId: 'user-1',
+    });
+    const userTwo = await loadMatrixProjects({
+      storage: localStorage,
+      supabaseClient: null,
+      userId: 'user-2',
+    });
+
+    expect(userOne.projects.map((project) => project.id)).toEqual([
+      'user-one-project',
+    ]);
+    expect(userTwo.projects.map((project) => project.id)).toEqual([
+      'user-two-project',
+    ]);
+    expect(
+      loadMatrixProjectWorkspaceSnapshot(localStorage, 'user-1')?.name
+    ).toBe('One');
+    expect(
+      loadMatrixProjectWorkspaceSnapshot(localStorage, 'user-2')
+    ).toBeNull();
+  });
+
+  it('rejects expired and cross-user project handoffs', () => {
+    const project = makeProject();
+    const createdAt = new Date('2026-07-08T00:00:00.000Z');
+    writeMatrixProjectOpenHandoff(
+      sessionStorage,
+      project,
+      createdAt,
+      'user-1'
+    );
+
+    expect(
+      readMatrixProjectOpenHandoff(sessionStorage, {
+        userId: 'user-2',
+        now: createdAt,
+      })
+    ).toBeNull();
+    expect(
+      sessionStorage.getItem(
+        getUserScopedStorageKey(
+          MATRIX_PROJECTS_OPEN_HANDOFF_KEY,
+          'user-1',
+          sessionStorage
+        )
+      )
+    ).not.toBeNull();
+
+    expect(
+      readMatrixProjectOpenHandoff(sessionStorage, {
+        userId: 'user-1',
+        now: new Date(
+          createdAt.getTime() + MATRIX_PROJECT_OPEN_HANDOFF_TTL_MS + 1
+        ),
+      })
+    ).toBeNull();
+  });
+
+  it('fails closed when a configured cloud client has no authenticated user', async () => {
+    const client = {
+      auth: {
+        getUser: async () => ({ data: { user: null } }),
+      },
+      from: vi.fn(),
+    } as unknown as SupabaseProjectClient;
+
+    const result = await loadMatrixProjects({
+      storage: localStorage,
+      supabaseClient: client,
+    });
+
+    expect(result.saveState).toBe('unauthorized');
+    expect(result.projects).toEqual([]);
+    expect(client.from).not.toHaveBeenCalled();
+  });
+
+  it('uses the atomic save RPC with the expected cloud version', async () => {
+    const base = makeProject({ saveVersion: 2 });
+    const next = renameMatrixProject(
+      base,
+      'Atomic update',
+      new Date('2026-07-09T00:00:00.000Z')
+    );
+    const rpc = vi.fn(async () => ({
+      data: [
+        {
+          id: next.id,
+          user_id: 'user-1',
+          name: next.name,
+          description: next.description,
+          payload: next,
+          created_at: next.createdAt,
+          updated_at: next.updatedAt,
+        },
+      ],
+      error: null,
+    }));
+    const client = createRemoteProjectSupabaseClient(base, []);
+    client.rpc = rpc;
+
+    const result = await saveMatrixProject(next, [base], {
+      storage: localStorage,
+      supabaseClient: client,
+      userId: 'user-1',
+      expectedUpdatedAt: base.updatedAt,
+    });
+
+    expect(result.saveState).toBe('saved');
+    expect(rpc).toHaveBeenCalledWith(
+      'save_matrix_project_if_version',
+      expect.objectContaining({
+        project_id: base.id,
+        expected_save_version: 2,
+        project_save_version: 3,
+      })
+    );
+  });
+
+  it('preserves newer same-user local work when cloud access returns', async () => {
+    const remote = makeProject({
+      id: 'shared-project',
+      name: 'Cloud copy',
+      updatedAt: '2026-07-08T00:00:00.000Z',
+      saveVersion: 2,
+    });
+    const local = makeProject({
+      id: 'shared-project',
+      name: 'Offline edits',
+      updatedAt: '2026-07-09T00:00:00.000Z',
+      saveVersion: 3,
+    });
+    await saveMatrixProject(local, [], {
+      storage: localStorage,
+      supabaseClient: null,
+      userId: 'user-1',
+    });
+
+    const result = await loadMatrixProjects({
+      storage: localStorage,
+      supabaseClient: createRemoteProjectSupabaseClient(remote, []),
+      userId: 'user-1',
+    });
+
+    expect(result.projects).toHaveLength(1);
+    expect(result.projects[0]?.name).toBe('Offline edits');
+    expect(result.source).toBe('local');
+    expect(result.saveState).toBe('offline-local-only');
+    expect(result.syncStatus).toBe('offline-local');
+    expect(result.warning).toContain('needs to be saved to the cloud');
+  });
+
+  it('redacts secrets from persisted project files and chat without mutating source', async () => {
+    const project = makeProject({
+      files: [
+        {
+          id: 'env',
+          name: '.env.local',
+          path: '.env.local',
+          type: 'file',
+          content: 'OPENAI_API_KEY=sk-super-secret-value',
+        },
+      ],
+      chatMessages: [
+        {
+          id: 'message',
+          role: 'user',
+          content: 'Use Bearer abcdefghijklmnopqrstuvwxyz',
+          timestamp: '2026-07-08T00:00:00.000Z',
+        },
+      ],
+    });
+
+    const result = await saveMatrixProject(project, [], {
+      storage: localStorage,
+      supabaseClient: null,
+      userId: 'user-1',
+    });
+
+    const persisted =
+      localStorage.getItem(getMatrixProjectsLocalStorageKey('user-1')) ?? '';
+    expect(persisted).not.toContain('sk-super-secret-value');
+    expect(persisted).not.toContain('abcdefghijklmnopqrstuvwxyz');
+    expect(persisted).toContain('[redacted-secret]');
+    expect(
+      project.files[0]?.type === 'file' ? project.files[0].content : ''
+    ).toContain('sk-super-secret-value');
+    expect(
+      result.projects[0]?.files[0]?.type === 'file'
+        ? result.projects[0].files[0].content
+        : ''
+    ).toContain('sk-super-secret-value');
   });
 });

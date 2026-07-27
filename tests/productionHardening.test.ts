@@ -1,5 +1,6 @@
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
+import type { NextRequest } from 'next/server';
 import { describe, expect, it } from 'vitest';
 import {
   getOptionalServerEnv,
@@ -9,7 +10,14 @@ import {
   validateEnvironment,
 } from '@/lib/env';
 import { redactSecrets } from '@/lib/logger';
-import { rejectIfRequestTooLarge } from '@/lib/api/hardening';
+import {
+  parseJsonBody,
+  rejectIfRequestTooLarge,
+} from '@/lib/api/hardening';
+import {
+  MATRIX_ACTIVE_USER_SCOPE_KEY,
+  getUserScopedStorageKey,
+} from '@/lib/storage/userScope';
 
 describe('production hardening helpers', () => {
   it('validates required and optional environment variables without exposing values', () => {
@@ -104,11 +112,43 @@ describe('production hardening helpers', () => {
       headers: { 'content-length': '1025' },
     });
 
-    const response = rejectIfRequestTooLarge(request as any, 1024);
+    const response = rejectIfRequestTooLarge(
+      request as unknown as NextRequest,
+      1024
+    );
     expect(response?.status).toBe(413);
     await expect(response?.json()).resolves.toMatchObject({
       error: 'Request body is too large.',
     });
+  });
+
+  it('rejects JSON API requests with an incorrect content type', async () => {
+    const request = new Request('https://matrix.test/api/demo', {
+      method: 'POST',
+      headers: { 'content-type': 'text/plain' },
+      body: '{"ok":true}',
+    });
+
+    const result = await parseJsonBody(request as unknown as NextRequest);
+    expect(result.ok).toBe(false);
+    expect(result.response?.status).toBe(415);
+    await expect(result.response?.json()).resolves.toMatchObject({
+      error: 'Content-Type must be application/json.',
+    });
+  });
+
+  it('builds user-scoped storage keys without placing secrets in the scope', () => {
+    const storage = {
+      getItem: (key: string) =>
+        key === MATRIX_ACTIVE_USER_SCOPE_KEY ? 'user-123' : null,
+    };
+
+    expect(getUserScopedStorageKey('matrix:test', undefined, storage)).toBe(
+      'matrix:test:user:user-123'
+    );
+    expect(getUserScopedStorageKey('matrix:test', 'other-user', storage)).toBe(
+      'matrix:test:user:other-user'
+    );
   });
 
   it('keeps auth credentials out of URL query fallback submissions', () => {
@@ -122,10 +162,12 @@ describe('production hardening helpers', () => {
     );
 
     for (const source of [loginForm, signUpForm]) {
-      expect(source).toContain('method="post"');
-      expect(source).toContain('action="/sign-up-login-screen"');
+      expect(source).not.toContain('method="get"');
+      expect(source).not.toContain('action="/sign-up-login-screen"');
       expect(source).not.toMatch(/router\.(?:push|replace)\([^)]*(?:email|password)/i);
       expect(source).not.toMatch(/(?:localStorage|sessionStorage)\.[^(]+\([^)]*(?:email|password)/i);
     }
+    expect(loginForm).not.toContain('DEMO_CREDENTIALS');
+    expect(loginForm).not.toContain('matrix://pilot');
   });
 });

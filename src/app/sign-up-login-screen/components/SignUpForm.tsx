@@ -73,7 +73,7 @@ export default function SignUpForm({ onSwitchToLogin }: Props) {
   };
 
   return (
-    <form onSubmit={handleSubmit(onSubmit)} method="post" action="/sign-up-login-screen" className="flex flex-col gap-4" noValidate>
+    <form onSubmit={handleSubmit(onSubmit)} className="flex flex-col gap-4" noValidate>
       {/* Email */}
       <div className="flex flex-col gap-1.5">
         <label htmlFor="signup-email" className="text-xs font-mono text-matrix-green-muted tracking-widest uppercase">

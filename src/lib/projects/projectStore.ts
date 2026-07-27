@@ -77,6 +77,10 @@ import {
 } from '@/lib/matrix-ai-architect/architectDraft';
 import type { ArchitectDraft } from '@/lib/matrix-ai-architect/types';
 import { supabase as defaultSupabase } from '@/lib/supabase';
+import {
+  getActiveStorageUserId,
+  getUserScopedStorageKey,
+} from '@/lib/storage/userScope';
 
 export const MATRIX_PROJECTS_STORAGE_KEY = 'matrix-coder:projects';
 export const MATRIX_PROJECTS_LOCAL_NAMESPACE_PREFIX =
@@ -88,6 +92,7 @@ export const MATRIX_PROJECTS_WORKSPACE_CONTEXT_KEY =
 export const MATRIX_PROJECTS_OPEN_HANDOFF_KEY =
   'matrix-coder:project-open-handoff';
 export const MATRIX_PROJECTS_VERSION = 2;
+export const MATRIX_PROJECT_OPEN_HANDOFF_TTL_MS = 15 * 60 * 1000;
 
 export type MatrixProjectSaveState =
   | 'unsaved'
@@ -95,7 +100,19 @@ export type MatrixProjectSaveState =
   | 'saved'
   | 'save-failed'
   | 'offline-local-only'
-  | 'conflict';
+  | 'conflict'
+  | 'stale'
+  | 'cancelled'
+  | 'unauthorized';
+
+export type MatrixProjectSyncStatus =
+  | 'synced'
+  | 'saving'
+  | 'offline-local'
+  | 'conflict'
+  | 'failed'
+  | 'restoring'
+  | 'unauthorized';
 
 export type MatrixProjectValidationStatus =
   | 'unknown'
@@ -232,6 +249,7 @@ export interface MatrixProjectPersistenceResult {
   projects: MatrixProject[];
   source: 'supabase' | 'local';
   saveState?: MatrixProjectSaveState;
+  syncStatus?: MatrixProjectSyncStatus;
   conflictProject?: MatrixProject;
   warning?: string;
 }
@@ -274,6 +292,10 @@ export interface SupabaseProjectClient {
       eq: (column: string, value: string) => SupabaseProjectMutationBuilder;
     };
   };
+  rpc?: (
+    functionName: string,
+    args: Record<string, unknown>
+  ) => Promise<SupabaseQueryResult<SupabaseProjectRecord>>;
 }
 
 export interface SupabaseProjectMutationBuilder
@@ -363,6 +385,55 @@ function createProjectId(now = new Date()): string {
 
 function cloneJson<T>(value: T): T {
   return JSON.parse(JSON.stringify(value)) as T;
+}
+
+function redactPersistentSecrets(value: string): string {
+  return value
+    .replace(
+      /\b(Bearer)\s+[A-Za-z0-9._~+/=-]{12,}/gi,
+      '$1 [redacted-secret]'
+    )
+    .replace(/\bsk-[A-Za-z0-9_-]{12,}\b/g, '[redacted-secret]')
+    .replace(
+      /\b((?:OPENAI|ANTHROPIC|GEMINI|PERPLEXITY|VERCEL|STRIPE|SUPABASE)_[A-Z0-9_]*(?:KEY|TOKEN|SECRET)|DATABASE_URL|SUPABASE_SERVICE_ROLE_KEY)\s*=\s*([^\s"'`]+)/gi,
+      '$1=[redacted-secret]'
+    );
+}
+
+function sanitizePersistentFiles(nodes: FileNode[]): FileNode[] {
+  return nodes.map((node) => {
+    const next = { ...node };
+    if (node.type === 'folder') {
+      next.children = sanitizePersistentFiles(node.children ?? []);
+      return next;
+    }
+    if (typeof node.content !== 'string') return next;
+
+    const basename = node.path.replace(/\\/g, '/').split('/').pop() ?? '';
+    const isPrivateEnv =
+      /^\.env(?:\..+)?$/i.test(basename) &&
+      !/\.example$|\.sample$|\.template$/i.test(basename);
+    next.content = isPrivateEnv
+      ? node.content.replace(
+          /^(\s*(?:export\s+)?(?:[A-Z0-9_]*(?:SECRET|TOKEN|PASSWORD|PRIVATE_KEY|SERVICE_ROLE)[A-Z0-9_]*|OPENAI_API_KEY|ANTHROPIC_API_KEY|GEMINI_API_KEY|PERPLEXITY_API_KEY|DATABASE_URL)\s*=).+$/gim,
+          '$1[redacted-secret]'
+        )
+      : redactPersistentSecrets(node.content);
+    return next;
+  });
+}
+
+function sanitizePersistentChatMessages(
+  messages: ChatMessage[]
+): ChatMessage[] {
+  return messages.map((message) => ({
+    ...cloneJson(message),
+    content: redactPersistentSecrets(message.content),
+    codeBlocks: message.codeBlocks?.map((block) => ({
+      ...block,
+      code: redactPersistentSecrets(block.code),
+    })),
+  }));
 }
 
 function normalizeWorkspaceState(
@@ -658,6 +729,7 @@ export function readLocalProjectsDiagnostics(
         parsed &&
         typeof parsed === 'object' &&
         parsed.version === MATRIX_PROJECTS_VERSION &&
+        parsed.userId === (userId?.trim() || 'anonymous') &&
         Array.isArray(parsed.projects)
       ) {
         return {
@@ -711,7 +783,7 @@ function writeLocalProjects(
   const envelope: MatrixProjectLocalEnvelope = {
     version: MATRIX_PROJECTS_VERSION,
     userId: userId?.trim() || 'anonymous',
-    projects: sortProjects(projects).map(serializeProject),
+    projects: sortProjects(projects).map(serializeProjectForPersistence),
     savedAt: new Date().toISOString(),
   };
   try {
@@ -725,12 +797,18 @@ function writeLocalProjects(
 }
 
 async function loadRemoteProjects(
-  supabaseClient: SupabaseProjectClient
+  supabaseClient: SupabaseProjectClient,
+  expectedUserId?: string
 ): Promise<MatrixProjectPersistenceResult> {
   const userResult = await supabaseClient.auth.getUser();
   const user = userResult.data?.user;
   if (!user?.id) {
-    return { projects: [], source: 'supabase', warning: 'No authenticated user.' };
+    throw new ProjectAuthorizationError();
+  }
+  if (expectedUserId && user.id !== expectedUserId) {
+    throw new ProjectAuthorizationError(
+      'The active account does not own this project scope.'
+    );
   }
 
   const response = await supabaseClient
@@ -766,17 +844,68 @@ async function loadRemoteProjects(
   return {
     projects: sortProjects(projects),
     source: 'supabase',
+    syncStatus: 'synced',
+  };
+}
+
+function serializeProjectForPersistence(project: MatrixProject): MatrixProject {
+  const serialized = serializeProject(project);
+  return {
+    ...serialized,
+    files: sanitizePersistentFiles(serialized.files),
+    chatMessages: sanitizePersistentChatMessages(serialized.chatMessages),
+  };
+}
+
+function reconcileRemoteAndLocalProjects(
+  remoteProjects: MatrixProject[],
+  localProjects: MatrixProject[]
+): { projects: MatrixProject[]; hasPendingLocalChanges: boolean } {
+  const reconciled = new Map(
+    remoteProjects.map((project) => [project.id, project] as const)
+  );
+  let hasPendingLocalChanges = false;
+
+  for (const localProject of localProjects) {
+    const remoteProject = reconciled.get(localProject.id);
+    const localUpdatedAt = Date.parse(localProject.updatedAt);
+    const remoteUpdatedAt = remoteProject
+      ? Date.parse(remoteProject.updatedAt)
+      : Number.NEGATIVE_INFINITY;
+    const localIsNewer =
+      !remoteProject ||
+      localProject.saveVersion > remoteProject.saveVersion ||
+      (localProject.saveVersion === remoteProject.saveVersion &&
+        Number.isFinite(localUpdatedAt) &&
+        (!Number.isFinite(remoteUpdatedAt) || localUpdatedAt > remoteUpdatedAt));
+
+    if (localIsNewer) {
+      reconciled.set(localProject.id, localProject);
+      hasPendingLocalChanges = true;
+    }
+  }
+
+  return {
+    projects: sortProjects(Array.from(reconciled.values())),
+    hasPendingLocalChanges,
   };
 }
 
 async function saveRemoteProject(
   supabaseClient: SupabaseProjectClient,
-  project: MatrixProject
+  project: MatrixProject,
+  expectedSaveVersion: number | null,
+  expectedUserId?: string
 ): Promise<void> {
   const userResult = await supabaseClient.auth.getUser();
   const user = userResult.data?.user;
   if (!user?.id) {
-    throw new Error('No authenticated user.');
+    throw new ProjectAuthorizationError();
+  }
+  if (expectedUserId && user.id !== expectedUserId) {
+    throw new ProjectAuthorizationError(
+      'The active account does not own this project scope.'
+    );
   }
 
   const row: SupabaseProjectRecord = {
@@ -784,7 +913,7 @@ async function saveRemoteProject(
     user_id: user.id,
     name: project.name,
     description: project.description,
-    payload: serializeProject(project),
+    payload: serializeProjectForPersistence(project),
     created_at: project.createdAt,
     updated_at: project.updatedAt,
     workspace_id: project.workspaceId ?? project.id,
@@ -793,23 +922,76 @@ async function saveRemoteProject(
     last_opened_at: project.lastOpenedAt ?? null,
   };
 
+  if (supabaseClient.rpc) {
+    const atomicResponse = await supabaseClient.rpc(
+      'save_matrix_project_if_version',
+      {
+        project_id: row.id,
+        project_name: row.name,
+        project_description: row.description,
+        project_payload: row.payload,
+        project_created_at: row.created_at,
+        project_workspace_id: row.workspace_id,
+        project_favorite: row.favorite,
+        project_save_version: row.save_version,
+        project_last_opened_at: row.last_opened_at,
+        expected_save_version: expectedSaveVersion,
+      }
+    );
+    if (!atomicResponse.error) {
+      const rows = Array.isArray(atomicResponse.data)
+        ? atomicResponse.data
+        : atomicResponse.data
+          ? [atomicResponse.data]
+          : [];
+      if (rows.length === 0) throw new ProjectVersionConflictError();
+      return;
+    }
+    if (
+      !/function .* does not exist|could not find the function/i.test(
+        atomicResponse.error.message ?? ''
+      )
+    ) {
+      throw new Error(atomicResponse.error.message || 'Unable to save project.');
+    }
+  }
+
   const response = await supabaseClient
     .from('matrix_projects')
     .upsert(row, { onConflict: 'id' });
-
   if (response.error) {
     throw new Error(response.error.message || 'Unable to save project.');
   }
 }
 
+class ProjectAuthorizationError extends Error {
+  constructor(message = 'An authenticated project owner is required.') {
+    super(message);
+    this.name = 'ProjectAuthorizationError';
+  }
+}
+
+class ProjectVersionConflictError extends Error {
+  constructor() {
+    super('A newer cloud copy exists.');
+    this.name = 'ProjectVersionConflictError';
+  }
+}
+
 async function deleteRemoteProject(
   supabaseClient: SupabaseProjectClient,
-  projectId: string
+  projectId: string,
+  expectedUserId?: string
 ): Promise<void> {
   const userResult = await supabaseClient.auth.getUser();
   const user = userResult.data?.user;
   if (!user?.id) {
-    throw new Error('No authenticated user.');
+    throw new ProjectAuthorizationError();
+  }
+  if (expectedUserId && user.id !== expectedUserId) {
+    throw new ProjectAuthorizationError(
+      'The active account does not own this project scope.'
+    );
   }
 
   const response = await supabaseClient
@@ -838,12 +1020,10 @@ async function resolveStorageUserId(
 ): Promise<string | undefined> {
   if (options.userId?.trim()) return options.userId.trim();
   if (!supabaseClient) return undefined;
-  try {
-    const userResult = await supabaseClient.auth.getUser();
-    return userResult.data?.user?.id ?? undefined;
-  } catch {
-    return undefined;
-  }
+  const userResult = await supabaseClient.auth.getUser();
+  const userId = userResult.data?.user?.id?.trim();
+  if (!userId) throw new ProjectAuthorizationError();
+  return userId;
 }
 
 function fileTreeContainsPath(nodes: FileNode[], path: string): boolean {
@@ -1089,19 +1269,61 @@ export async function loadMatrixProjects(
 ): Promise<MatrixProjectPersistenceResult> {
   const storage = getStorage(options.storage);
   const supabaseClient = resolveSupabaseClient(options.supabaseClient);
-  const storageUserId = await resolveStorageUserId(options, supabaseClient);
+  let storageUserId: string | undefined;
+  try {
+    storageUserId = await resolveStorageUserId(options, supabaseClient);
+  } catch (error) {
+    return {
+      projects: [],
+      source: 'local',
+      saveState: 'unauthorized',
+      syncStatus: 'unauthorized',
+      warning:
+        error instanceof Error
+          ? error.message
+          : 'An authenticated project owner is required.',
+    };
+  }
 
   if (supabaseClient) {
     try {
-      const remote = await loadRemoteProjects(supabaseClient);
-      writeLocalProjects(storage, remote.projects, storageUserId);
-      return { ...remote, saveState: 'saved' };
+      const remote = await loadRemoteProjects(supabaseClient, storageUserId);
+      const local = readLocalProjectsDiagnostics(storage, storageUserId);
+      const reconciled = reconcileRemoteAndLocalProjects(
+        remote.projects,
+        local.projects
+      );
+      const localWarning = writeLocalProjects(
+        storage,
+        reconciled.projects,
+        storageUserId
+      );
+      if (reconciled.hasPendingLocalChanges) {
+        return {
+          projects: reconciled.projects,
+          source: 'local',
+          saveState: localWarning ? 'save-failed' : 'offline-local-only',
+          syncStatus: localWarning ? 'failed' : 'offline-local',
+          warning:
+            localWarning ??
+            'Newer local work is preserved and still needs to be saved to the cloud.',
+        };
+      }
+      return {
+        ...remote,
+        projects: reconciled.projects,
+        saveState: 'saved',
+        syncStatus: localWarning ? 'failed' : 'synced',
+        warning: localWarning,
+      };
     } catch (error) {
       const local = readLocalProjectsDiagnostics(storage, storageUserId);
+      const unauthorized = error instanceof ProjectAuthorizationError;
       return {
-        projects: local.projects,
+        projects: unauthorized ? [] : local.projects,
         source: 'local',
-        saveState: 'offline-local-only',
+        saveState: unauthorized ? 'unauthorized' : 'offline-local-only',
+        syncStatus: unauthorized ? 'unauthorized' : 'offline-local',
         warning:
           local.warning ??
           (error instanceof Error
@@ -1116,6 +1338,7 @@ export async function loadMatrixProjects(
     projects: local.projects,
     source: 'local',
     saveState: 'offline-local-only',
+    syncStatus: 'offline-local',
     warning: local.warning,
   };
 }
@@ -1127,7 +1350,21 @@ export async function saveMatrixProject(
 ): Promise<MatrixProjectPersistenceResult> {
   const storage = getStorage(options.storage);
   const supabaseClient = resolveSupabaseClient(options.supabaseClient);
-  const storageUserId = await resolveStorageUserId(options, supabaseClient);
+  let storageUserId: string | undefined;
+  try {
+    storageUserId = await resolveStorageUserId(options, supabaseClient);
+  } catch (error) {
+    return {
+      projects: sortProjects(existing),
+      source: 'local',
+      saveState: 'unauthorized',
+      syncStatus: 'unauthorized',
+      warning:
+        error instanceof Error
+          ? error.message
+          : 'An authenticated project owner is required.',
+    };
+  }
   const existingProject = existing.find((item) => item.id === project.id);
 
   if (
@@ -1139,6 +1376,7 @@ export async function saveMatrixProject(
       projects: sortProjects(existing),
       source: 'local',
       saveState: 'conflict',
+      syncStatus: 'conflict',
       conflictProject: existingProject,
       warning:
         'This project changed elsewhere after you opened it. Your local edits were preserved and were not overwritten.',
@@ -1147,7 +1385,7 @@ export async function saveMatrixProject(
 
   if (supabaseClient && options.expectedUpdatedAt) {
     try {
-      const remote = await loadRemoteProjects(supabaseClient);
+      const remote = await loadRemoteProjects(supabaseClient, storageUserId);
       const remoteProject = remote.projects.find((item) => item.id === project.id);
       if (
         remoteProject &&
@@ -1157,12 +1395,22 @@ export async function saveMatrixProject(
           projects: sortProjects(existing),
           source: 'supabase',
           saveState: 'conflict',
+          syncStatus: 'conflict',
           conflictProject: remoteProject,
           warning:
             'A newer cloud copy exists. Your local edits were preserved and were not overwritten.',
         };
       }
-    } catch {
+    } catch (error) {
+      if (error instanceof ProjectAuthorizationError) {
+        return {
+          projects: sortProjects(existing),
+          source: 'local',
+          saveState: 'unauthorized',
+          syncStatus: 'unauthorized',
+          warning: error.message,
+        };
+      }
       // If the cloud check is unavailable, keep the local draft and fall back below.
     }
   }
@@ -1182,18 +1430,59 @@ export async function saveMatrixProject(
 
   if (supabaseClient) {
     try {
-      await withBoundedRetry(() => saveRemoteProject(supabaseClient, projectToSave));
+      await withBoundedRetry(() =>
+        saveRemoteProject(
+          supabaseClient,
+          projectToSave,
+          existingProject?.saveVersion ?? null,
+          storageUserId
+        )
+      );
       return {
         projects: nextProjects,
         source: 'supabase',
-        saveState: localWarning ? 'save-failed' : 'saved',
-        warning: localWarning,
+        saveState: 'saved',
+        syncStatus: localWarning ? 'failed' : 'synced',
+        warning: localWarning
+          ? `Cloud save succeeded, but the local recovery cache failed: ${localWarning}`
+          : undefined,
       };
     } catch (error) {
+      if (error instanceof ProjectVersionConflictError) {
+        let conflictProject: MatrixProject | undefined;
+        try {
+          const remote = await loadRemoteProjects(supabaseClient, storageUserId);
+          conflictProject = remote.projects.find(
+            (item) => item.id === project.id
+          );
+        } catch {
+          // Preserve the local recovery copy even if the newer cloud copy
+          // cannot be reloaded for display.
+        }
+        return {
+          projects: nextProjects,
+          source: 'supabase',
+          saveState: 'conflict',
+          syncStatus: 'conflict',
+          conflictProject,
+          warning:
+            'A newer cloud copy exists. Your local edits remain in the local recovery cache.',
+        };
+      }
+      if (error instanceof ProjectAuthorizationError) {
+        return {
+          projects: nextProjects,
+          source: 'local',
+          saveState: 'unauthorized',
+          syncStatus: 'unauthorized',
+          warning: `${error.message} Unsaved work remains in the user-scoped local recovery cache.`,
+        };
+      }
       return {
         projects: nextProjects,
         source: 'local',
         saveState: localWarning ? 'save-failed' : 'offline-local-only',
+        syncStatus: localWarning ? 'failed' : 'offline-local',
         warning:
           localWarning ??
           (error instanceof Error
@@ -1207,6 +1496,7 @@ export async function saveMatrixProject(
     projects: nextProjects,
     source: 'local',
     saveState: localWarning ? 'save-failed' : 'offline-local-only',
+    syncStatus: localWarning ? 'failed' : 'offline-local',
     warning: localWarning,
   };
 }
@@ -1218,12 +1508,31 @@ export async function deleteMatrixProject(
 ): Promise<MatrixProjectPersistenceResult> {
   const storage = getStorage(options.storage);
   const supabaseClient = resolveSupabaseClient(options.supabaseClient);
-  const storageUserId = await resolveStorageUserId(options, supabaseClient);
+  let storageUserId: string | undefined;
+  try {
+    storageUserId = await resolveStorageUserId(options, supabaseClient);
+  } catch (error) {
+    return {
+      projects: sortProjects(existing),
+      source: 'local',
+      saveState: 'unauthorized',
+      syncStatus: 'unauthorized',
+      warning:
+        error instanceof Error
+          ? error.message
+          : 'An authenticated project owner is required.',
+    };
+  }
   const project = existing.find((item) => item.id === projectId);
   const nextProjects = existing.filter((item) => item.id !== projectId);
 
   if (!project) {
-    return { projects: sortProjects(existing), source: 'local', saveState: 'saved' };
+    return {
+      projects: sortProjects(existing),
+      source: 'local',
+      saveState: 'saved',
+      syncStatus: supabaseClient ? 'synced' : 'offline-local',
+    };
   }
 
   if (options.expectedName && options.expectedName !== project.name) {
@@ -1231,6 +1540,7 @@ export async function deleteMatrixProject(
       projects: sortProjects(existing),
       source: 'local',
       saveState: 'conflict',
+      syncStatus: 'conflict',
       conflictProject: project,
       warning: 'Project name changed before deletion. Delete was cancelled.',
     };
@@ -1238,19 +1548,29 @@ export async function deleteMatrixProject(
 
   if (supabaseClient) {
     try {
-      await withBoundedRetry(() => deleteRemoteProject(supabaseClient, projectId));
+      await withBoundedRetry(() =>
+        deleteRemoteProject(supabaseClient, projectId, storageUserId)
+      );
       const localWarning = writeLocalProjects(storage, nextProjects, storageUserId);
       return {
         projects: sortProjects(nextProjects),
         source: 'supabase',
         saveState: localWarning ? 'save-failed' : 'saved',
+        syncStatus: localWarning ? 'failed' : 'synced',
         warning: localWarning,
       };
     } catch (error) {
       return {
         projects: sortProjects(existing),
         source: 'local',
-        saveState: 'save-failed',
+        saveState:
+          error instanceof ProjectAuthorizationError
+            ? 'unauthorized'
+            : 'save-failed',
+        syncStatus:
+          error instanceof ProjectAuthorizationError
+            ? 'unauthorized'
+            : 'failed',
         warning:
           error instanceof Error
             ? error.message
@@ -1264,6 +1584,7 @@ export async function deleteMatrixProject(
     projects: sortProjects(nextProjects),
     source: 'local',
     saveState: localWarning ? 'save-failed' : 'offline-local-only',
+    syncStatus: localWarning ? 'failed' : 'offline-local',
     warning: localWarning,
   };
 }
@@ -1296,6 +1617,7 @@ export interface MatrixProjectAutosaveController {
     existing: MatrixProject[],
     options?: SaveMatrixProjectOptions
   ) => Promise<MatrixProjectPersistenceResult>;
+  cancel: () => void;
 }
 
 export function createMatrixProjectAutosaveController(
@@ -1305,8 +1627,16 @@ export function createMatrixProjectAutosaveController(
   let state: MatrixProjectSaveState = 'saved';
   let sequence = 0;
   let timer: ReturnType<typeof setTimeout> | null = null;
-  let pendingResolve:
-    | ((result: MatrixProjectPersistenceResult) => void)
+  let inFlight = false;
+  let cancelledThrough = 0;
+  let pending:
+    | {
+        requestId: number;
+        project: MatrixProject;
+        existing: MatrixProject[];
+        options: SaveMatrixProjectOptions;
+        resolve: (result: MatrixProjectPersistenceResult) => void;
+      }
     | null = null;
 
   const staleResult = (
@@ -1315,9 +1645,64 @@ export function createMatrixProjectAutosaveController(
   ): MatrixProjectPersistenceResult => ({
     projects,
     source: 'local',
-    saveState: 'unsaved',
+    saveState: 'stale',
+    syncStatus: 'saving',
     warning,
   });
+
+  const cancelledResult = (
+    projects: MatrixProject[]
+  ): MatrixProjectPersistenceResult => ({
+    projects,
+    source: 'local',
+    saveState: 'cancelled',
+    syncStatus: 'failed',
+    warning: 'The pending save was cancelled. Unsaved work remains in memory.',
+  });
+
+  const runNext = () => {
+    if (inFlight || !pending) return;
+    const current = pending;
+    pending = null;
+    inFlight = true;
+
+    void saveFn(current.project, current.existing, current.options)
+      .then((result) => {
+        if (current.requestId <= cancelledThrough) {
+          current.resolve(cancelledResult(current.existing));
+          return;
+        }
+        if (current.requestId !== sequence) {
+          current.resolve(staleResult(current.existing));
+          return;
+        }
+        state = result.saveState ?? 'saved';
+        current.resolve(result);
+      })
+      .catch((error) => {
+        if (current.requestId <= cancelledThrough) {
+          current.resolve(cancelledResult(current.existing));
+          return;
+        }
+        if (current.requestId !== sequence) {
+          current.resolve(staleResult(current.existing));
+          return;
+        }
+        state = 'save-failed';
+        current.resolve({
+          projects: current.existing,
+          source: 'local',
+          saveState: 'save-failed',
+          syncStatus: 'failed',
+          warning:
+            error instanceof Error ? error.message : 'Project save failed.',
+        });
+      })
+      .finally(() => {
+        inFlight = false;
+        if (pending) runNext();
+      });
+  };
 
   return {
     getState: () => state,
@@ -1326,48 +1711,56 @@ export function createMatrixProjectAutosaveController(
       const requestId = sequence;
       state = 'saving';
       if (timer) clearTimeout(timer);
-      if (pendingResolve) {
-        pendingResolve(staleResult(existing, 'A superseded pending save was cancelled.'));
+      if (pending) {
+        pending.resolve(
+          staleResult(
+            pending.existing,
+            'A superseded pending save was not persisted.'
+          )
+        );
+        pending = null;
       }
 
       return new Promise((resolve) => {
-        pendingResolve = resolve;
+        pending = { requestId, project, existing, options, resolve };
         timer = setTimeout(() => {
           timer = null;
-          pendingResolve = null;
-          void saveFn(project, existing, options)
-            .then((result) => {
-              if (requestId !== sequence) {
-                resolve(staleResult(existing));
-                return;
-              }
-              state = result.saveState ?? 'saved';
-              resolve(result);
-            })
-            .catch((error) => {
-              if (requestId === sequence) state = 'save-failed';
-              resolve({
-                projects: existing,
-                source: 'local',
-                saveState: 'save-failed',
-                warning:
-                  error instanceof Error ? error.message : 'Project save failed.',
-              });
-            });
+          runNext();
         }, saveDelayMs);
       });
+    },
+    cancel: () => {
+      cancelledThrough = sequence;
+      state = 'cancelled';
+      if (timer) {
+        clearTimeout(timer);
+        timer = null;
+      }
+      if (pending) {
+        pending.resolve(cancelledResult(pending.existing));
+        pending = null;
+      }
     },
   };
 }
 
 export function saveMatrixProjectWorkspaceSnapshot(
   storage: StorageLike,
-  snapshot: MatrixProjectWorkspaceSnapshot
+  snapshot: MatrixProjectWorkspaceSnapshot,
+  userId?: string
 ): void {
+  const ownerUserId = userId?.trim() || getActiveStorageUserId(storage);
   storage.setItem(
-    MATRIX_PROJECTS_WORKSPACE_SNAPSHOT_KEY,
+    getUserScopedStorageKey(
+      MATRIX_PROJECTS_WORKSPACE_SNAPSHOT_KEY,
+      ownerUserId,
+      storage
+    ),
     JSON.stringify({
       ...snapshot,
+      files: sanitizePersistentFiles(snapshot.files),
+      chatMessages: sanitizePersistentChatMessages(snapshot.chatMessages),
+      ...(ownerUserId ? { ownerUserId } : {}),
       ...(snapshot.buildManifest
         ? {
             buildManifest: JSON.parse(
@@ -1471,13 +1864,30 @@ export function saveMatrixProjectWorkspaceSnapshot(
 }
 
 export function loadMatrixProjectWorkspaceSnapshot(
-  storage: Pick<Storage, 'getItem'>
+  storage: Pick<Storage, 'getItem'>,
+  userId?: string
 ): MatrixProjectWorkspaceSnapshot | null {
-  const raw = storage.getItem(MATRIX_PROJECTS_WORKSPACE_SNAPSHOT_KEY);
+  const ownerUserId = userId?.trim() || getActiveStorageUserId(storage);
+  const raw = storage.getItem(
+    getUserScopedStorageKey(
+      MATRIX_PROJECTS_WORKSPACE_SNAPSHOT_KEY,
+      ownerUserId,
+      storage
+    )
+  );
   if (!raw) return null;
 
   try {
-    const parsed = JSON.parse(raw) as Partial<MatrixProjectWorkspaceSnapshot>;
+    const parsed = JSON.parse(raw) as Partial<MatrixProjectWorkspaceSnapshot> & {
+      ownerUserId?: unknown;
+    };
+    if (
+      ownerUserId &&
+      parsed.ownerUserId !== undefined &&
+      parsed.ownerUserId !== ownerUserId
+    ) {
+      return null;
+    }
     if (
       typeof parsed.name !== 'string' ||
       typeof parsed.description !== 'string' ||
@@ -1591,11 +2001,18 @@ export function loadMatrixProjectWorkspaceSnapshot(
 
 export function saveMatrixProjectWorkspaceContext(
   storage: StorageLike,
-  context: MatrixProjectWorkspaceContext
+  context: MatrixProjectWorkspaceContext,
+  userId?: string
 ): void {
+  const ownerUserId = userId?.trim() || getActiveStorageUserId(storage);
   storage.setItem(
-    MATRIX_PROJECTS_WORKSPACE_CONTEXT_KEY,
+    getUserScopedStorageKey(
+      MATRIX_PROJECTS_WORKSPACE_CONTEXT_KEY,
+      ownerUserId,
+      storage
+    ),
     JSON.stringify({
+      ...(ownerUserId ? { ownerUserId } : {}),
       ...(context.currentProjectId
         ? { currentProjectId: context.currentProjectId }
         : {}),
@@ -1705,13 +2122,30 @@ export function saveMatrixProjectWorkspaceContext(
 }
 
 export function loadMatrixProjectWorkspaceContext(
-  storage: Pick<Storage, 'getItem'>
+  storage: Pick<Storage, 'getItem'>,
+  userId?: string
 ): MatrixProjectWorkspaceContext {
-  const raw = storage.getItem(MATRIX_PROJECTS_WORKSPACE_CONTEXT_KEY);
+  const ownerUserId = userId?.trim() || getActiveStorageUserId(storage);
+  const raw = storage.getItem(
+    getUserScopedStorageKey(
+      MATRIX_PROJECTS_WORKSPACE_CONTEXT_KEY,
+      ownerUserId,
+      storage
+    )
+  );
   if (!raw) return {};
 
   try {
-    const parsed = JSON.parse(raw) as Partial<MatrixProjectWorkspaceContext>;
+    const parsed = JSON.parse(raw) as Partial<MatrixProjectWorkspaceContext> & {
+      ownerUserId?: unknown;
+    };
+    if (
+      ownerUserId &&
+      parsed.ownerUserId !== undefined &&
+      parsed.ownerUserId !== ownerUserId
+    ) {
+      return {};
+    }
     return {
       currentProjectId:
         typeof parsed.currentProjectId === 'string' &&
@@ -1788,16 +2222,38 @@ export function loadMatrixProjectWorkspaceContext(
 }
 
 export function clearMatrixProjectWorkspaceContext(
-  storage: Pick<Storage, 'removeItem'>
+  storage: Pick<Storage, 'getItem' | 'removeItem'>,
+  userId?: string
 ): void {
-  storage.removeItem(MATRIX_PROJECTS_WORKSPACE_CONTEXT_KEY);
+  storage.removeItem(
+    getUserScopedStorageKey(
+      MATRIX_PROJECTS_WORKSPACE_CONTEXT_KEY,
+      userId,
+      storage
+    )
+  );
+}
+
+export function clearMatrixProjectWorkspaceSnapshot(
+  storage: Pick<Storage, 'getItem' | 'removeItem'>,
+  userId?: string
+): void {
+  storage.removeItem(
+    getUserScopedStorageKey(
+      MATRIX_PROJECTS_WORKSPACE_SNAPSHOT_KEY,
+      userId,
+      storage
+    )
+  );
 }
 
 export function writeMatrixProjectOpenHandoff(
-  storage: Pick<Storage, 'setItem'>,
+  storage: Pick<Storage, 'getItem' | 'setItem'>,
   project: MatrixProject,
-  now = new Date()
+  now = new Date(),
+  userId?: string
 ): MatrixProjectOpenHandoff {
+  const ownerUserId = userId?.trim() || getActiveStorageUserId(storage);
   const handoff: MatrixProjectOpenHandoff = {
     source: 'projects',
     projectId: project.id,
@@ -1806,25 +2262,61 @@ export function writeMatrixProjectOpenHandoff(
     message: `${project.name} loaded from Projects. Review and continue working.`,
   };
 
-  storage.setItem(MATRIX_PROJECTS_OPEN_HANDOFF_KEY, JSON.stringify(handoff));
+  storage.setItem(
+    getUserScopedStorageKey(
+      MATRIX_PROJECTS_OPEN_HANDOFF_KEY,
+      ownerUserId,
+      storage
+    ),
+    JSON.stringify({
+      ...handoff,
+      ...(ownerUserId ? { ownerUserId } : {}),
+    })
+  );
   return handoff;
 }
 
 export function readMatrixProjectOpenHandoff(
-  storage: Pick<Storage, 'getItem' | 'removeItem'>
+  storage: Pick<Storage, 'getItem' | 'removeItem'>,
+  options: { now?: Date; userId?: string } = {}
 ): MatrixProjectOpenHandoff | null {
-  const raw = storage.getItem(MATRIX_PROJECTS_OPEN_HANDOFF_KEY);
+  const ownerUserId =
+    options.userId?.trim() || getActiveStorageUserId(storage);
+  const key = getUserScopedStorageKey(
+    MATRIX_PROJECTS_OPEN_HANDOFF_KEY,
+    ownerUserId,
+    storage
+  );
+  const raw = storage.getItem(key);
   if (!raw) return null;
-  storage.removeItem(MATRIX_PROJECTS_OPEN_HANDOFF_KEY);
+  storage.removeItem(key);
 
   try {
-    const parsed = JSON.parse(raw) as Partial<MatrixProjectOpenHandoff>;
+    const parsed = JSON.parse(raw) as Partial<MatrixProjectOpenHandoff> & {
+      ownerUserId?: unknown;
+    };
     if (
       parsed.source !== 'projects' ||
       typeof parsed.projectId !== 'string' ||
       typeof parsed.projectName !== 'string' ||
       typeof parsed.createdAt !== 'string' ||
       typeof parsed.message !== 'string'
+    ) {
+      return null;
+    }
+    if (
+      ownerUserId &&
+      parsed.ownerUserId !== undefined &&
+      parsed.ownerUserId !== ownerUserId
+    ) {
+      return null;
+    }
+    const createdAtMs = Date.parse(parsed.createdAt);
+    const nowMs = (options.now ?? new Date()).getTime();
+    if (
+      !Number.isFinite(createdAtMs) ||
+      createdAtMs > nowMs + 5 * 60 * 1000 ||
+      nowMs - createdAtMs > MATRIX_PROJECT_OPEN_HANDOFF_TTL_MS
     ) {
       return null;
     }
@@ -1838,4 +2330,17 @@ export function readMatrixProjectOpenHandoff(
   } catch {
     return null;
   }
+}
+
+export function clearMatrixProjectOpenHandoff(
+  storage: Pick<Storage, 'getItem' | 'removeItem'>,
+  userId?: string
+): void {
+  storage.removeItem(
+    getUserScopedStorageKey(
+      MATRIX_PROJECTS_OPEN_HANDOFF_KEY,
+      userId,
+      storage
+    )
+  );
 }

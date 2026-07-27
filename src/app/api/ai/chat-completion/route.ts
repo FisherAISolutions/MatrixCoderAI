@@ -3,7 +3,10 @@ import OpenAI from 'openai';
 import { buildChatCompletionParameters } from '@/lib/ai/chatRequestBuilder';
 import { getOptionalServerEnv } from '@/lib/env';
 import { logError, publicErrorMessage } from '@/lib/logger';
-import { rejectIfRequestTooLarge } from '@/lib/api/hardening';
+import {
+  parseJsonBody,
+  rejectIfRequestTooLarge,
+} from '@/lib/api/hardening';
 
 /**
  * Chat-completion proxy.
@@ -43,6 +46,14 @@ const MAX_TOTAL_PROMPT_CHARS = 400_000; // ~100K tokens for current large-contex
 const MAX_MESSAGE_COUNT = 200;
 const MAX_CHAT_BODY_BYTES = 2 * 1024 * 1024;
 
+interface ChatCompletionRequestBody {
+  provider?: string;
+  model?: string;
+  messages?: OpenAI.Chat.Completions.ChatCompletionMessageParam[];
+  stream?: boolean;
+  parameters?: Record<string, unknown>;
+}
+
 function totalPromptChars(messages: unknown[]): number {
   let total = 0;
   for (const m of messages) {
@@ -74,10 +85,12 @@ export async function POST(request: NextRequest) {
   const tooLarge = rejectIfRequestTooLarge(request, MAX_CHAT_BODY_BYTES);
   if (tooLarge) return tooLarge;
 
-  let body: any = {};
+  let body: ChatCompletionRequestBody = {};
 
   try {
-    body = await request.json();
+    const parsedBody = await parseJsonBody<ChatCompletionRequestBody>(request);
+    if (!parsedBody.ok) return parsedBody.response;
+    body = parsedBody.body ?? {};
     const { provider, model, messages, stream = false, parameters = {} } = body;
 
     if (!provider || !model || !messages?.length) {

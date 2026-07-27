@@ -1,5 +1,13 @@
 'use client';
-import { createContext, useContext, useEffect, useState, ReactNode, useCallback } from 'react';
+import {
+  createContext,
+  useContext,
+  useEffect,
+  useState,
+  useRef,
+  ReactNode,
+  useCallback,
+} from 'react';
 import { User } from '@supabase/supabase-js';
 import {
   supabase,
@@ -19,6 +27,11 @@ import {
   clearStoredActiveFilePath,
 } from '@/lib/storage/persistence';
 import { logToTerminal } from '@/lib/terminal/store';
+import {
+  clearActiveStorageUserId,
+  getUserScopedStorageKey,
+  setActiveStorageUserId,
+} from '@/lib/storage/userScope';
 
 const ARCHIVED_WORKSPACES_KEY = 'matrix-coder:archived-workspace-ids';
 const AUTH_OPERATION_TIMEOUT_MS = 15000;
@@ -33,6 +46,29 @@ function withTimeout<T>(promise: Promise<T>, timeoutMs: number, label: string): 
   return Promise.race([promise, timeout]).finally(() => {
     if (timer) clearTimeout(timer);
   });
+}
+
+export function sanitizeAuthenticationError(
+  error: unknown,
+  fallback = 'Authentication could not be completed.'
+): string {
+  const message = error instanceof Error ? error.message : String(error ?? '');
+  if (/invalid login credentials/i.test(message)) {
+    return 'The email or password is incorrect.';
+  }
+  if (/email not confirmed/i.test(message)) {
+    return 'Confirm your email address before signing in.';
+  }
+  if (/timed out|fetch failed|network|offline/i.test(message)) {
+    return 'Authentication service is temporarily unavailable. Please try again.';
+  }
+  if (/already registered|user already exists/i.test(message)) {
+    return 'An account already exists for this email address.';
+  }
+  if (/jwt|token|refresh|session.*expired/i.test(message)) {
+    return 'Your session expired. Please sign in again.';
+  }
+  return fallback;
 }
 
 interface Session {
@@ -70,38 +106,61 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [sessions, setSessions] = useState<Session[]>([]);
   const [archivedWorkspaceIds, setArchivedWorkspaceIds] = useState<string[]>([]);
   const [error, setError] = useState<string | null>(null);
+  const authEpochRef = useRef(0);
+  const activeUserIdRef = useRef<string | null>(null);
 
-  const persistArchivedWorkspaceIds = useCallback((ids: string[]) => {
+  const persistArchivedWorkspaceIds = useCallback((ids: string[], ownerId?: string) => {
     const unique = Array.from(new Set(ids));
     setArchivedWorkspaceIds(unique);
-    if (typeof window !== 'undefined') {
-      window.localStorage.setItem(ARCHIVED_WORKSPACES_KEY, JSON.stringify(unique));
+    const scopedOwner = ownerId ?? activeUserIdRef.current ?? undefined;
+    if (typeof window !== 'undefined' && scopedOwner) {
+      window.localStorage.setItem(
+        getUserScopedStorageKey(
+          ARCHIVED_WORKSPACES_KEY,
+          scopedOwner,
+          window.localStorage
+        ),
+        JSON.stringify(unique)
+      );
     }
   }, []);
 
   useEffect(() => {
     if (typeof window === 'undefined') return;
+    if (!user?.id) {
+      setArchivedWorkspaceIds([]);
+      return;
+    }
     try {
-      const parsed = JSON.parse(window.localStorage.getItem(ARCHIVED_WORKSPACES_KEY) ?? '[]');
+      const parsed = JSON.parse(
+        window.localStorage.getItem(
+          getUserScopedStorageKey(
+            ARCHIVED_WORKSPACES_KEY,
+            user.id,
+            window.localStorage
+          )
+        ) ?? '[]'
+      );
       if (Array.isArray(parsed)) {
         setArchivedWorkspaceIds(parsed.filter((id): id is string => typeof id === 'string'));
       }
     } catch {
       setArchivedWorkspaceIds([]);
     }
-  }, []);
+  }, [user?.id]);
 
   /**
    * Set the active session AND persist its ID to localStorage so the
    * choice survives a refresh. Pass `null` to clear (e.g. on sign-out).
    * (Milestone B — session persistence.)
    */
-  const persistAndSetSession = useCallback((s: Session | null) => {
+  const persistAndSetSession = useCallback((s: Session | null, ownerId?: string) => {
     setSession(s);
+    const scopedOwner = ownerId ?? activeUserIdRef.current ?? undefined;
     if (s?.id) {
-      setStoredActiveSessionId(s.id);
-    } else {
-      clearStoredActiveSessionId();
+      setStoredActiveSessionId(s.id, scopedOwner);
+    } else if (scopedOwner) {
+      clearStoredActiveSessionId(scopedOwner);
     }
   }, []);
 
@@ -110,9 +169,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
    *   1. The one whose ID is stored in localStorage (if still valid).
    *   2. Otherwise the first one returned by the backend.
    */
-  const pickRestoredSession = (userSessions: Session[]): Session | null => {
+  const pickRestoredSession = (
+    userSessions: Session[],
+    ownerId?: string
+  ): Session | null => {
     if (userSessions.length === 0) return null;
-    const storedId = getStoredActiveSessionId();
+    const storedId = getStoredActiveSessionId(ownerId);
     if (storedId) {
       const found = userSessions.find((s) => s.id === storedId);
       if (found) return found;
@@ -132,30 +194,41 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   const useLocalWorkspaceFallback = useCallback(
     (reason: unknown, title = 'Local Workspace') => {
-      const message = reason instanceof Error ? reason.message : String(reason);
+      const message = sanitizeAuthenticationError(
+        reason,
+        'Cloud workspaces are temporarily unavailable.'
+      );
       console.warn('Workspace session fallback:', message);
-      logToTerminal(`[auth] using local workspace fallback reason="${message}"`, 'warn');
-      const localSession = createLocalWorkspaceSession(title);
-      persistAndSetSession(localSession);
+      logToTerminal('[auth] using user-scoped local-only workspace fallback', 'warn');
+      const localSession = createLocalWorkspaceSession(`${title} (local-only)`);
+      persistAndSetSession(localSession, activeUserIdRef.current ?? undefined);
       setSessions([localSession]);
+      setError(`${message} Changes will remain local until cloud sync returns.`);
       return localSession;
     },
     [createLocalWorkspaceSession, persistAndSetSession]
   );
 
   const restoreUserWorkspace = useCallback(
-    async (authUser: User, source: string) => {
+    async (authUser: User, source: string, epoch = authEpochRef.current) => {
+      const isCurrent = () =>
+        epoch === authEpochRef.current &&
+        activeUserIdRef.current === authUser.id;
       try {
-        console.log(`Loading sessions for user from ${source}:`, authUser.id);
+        console.log(`Loading workspaces from ${source}.`);
         const userSessions = await withTimeout(
           getUserSessions(authUser.id),
           SESSION_OPERATION_TIMEOUT_MS,
           'Loading workspaces'
         );
+        if (!isCurrent()) return;
         setSessions(userSessions);
 
         if (userSessions.length > 0) {
-          persistAndSetSession(pickRestoredSession(userSessions));
+          persistAndSetSession(
+            pickRestoredSession(userSessions, authUser.id),
+            authUser.id
+          );
           return;
         }
 
@@ -165,13 +238,14 @@ export function AuthProvider({ children }: { children: ReactNode }) {
             SESSION_OPERATION_TIMEOUT_MS,
             'Creating workspace'
           );
-          persistAndSetSession(newSession);
+          if (!isCurrent()) return;
+          persistAndSetSession(newSession, authUser.id);
           setSessions([newSession]);
         } catch (createErr) {
-          useLocalWorkspaceFallback(createErr, 'Main Workspace');
+          if (isCurrent()) useLocalWorkspaceFallback(createErr, 'Main Workspace');
         }
       } catch (loadErr) {
-        useLocalWorkspaceFallback(loadErr, 'Main Workspace');
+        if (isCurrent()) useLocalWorkspaceFallback(loadErr, 'Main Workspace');
       }
     },
     [persistAndSetSession, useLocalWorkspaceFallback]
@@ -179,7 +253,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   // Initialize auth on mount
   useEffect(() => {
+    let disposed = false;
     const initAuth = async () => {
+      const epoch = ++authEpochRef.current;
       try {
         // Get current user
         const currentUser = await withTimeout(
@@ -187,17 +263,27 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           AUTH_OPERATION_TIMEOUT_MS,
           'Restoring auth session'
         );
-        console.log('Auth init - currentUser:', currentUser?.email || 'not logged in');
-        setUser(currentUser || null);
+        if (disposed || epoch !== authEpochRef.current) return;
+        console.log('Auth session restore completed.');
+        activeUserIdRef.current = currentUser?.id ?? null;
+        if (currentUser) setActiveStorageUserId(currentUser.id);
+        else clearActiveStorageUserId();
+        setUser(currentUser ?? null);
 
         if (currentUser) {
-          await restoreUserWorkspace(currentUser, 'initial-auth');
+          await restoreUserWorkspace(currentUser, 'initial-auth', epoch);
         }
       } catch (err) {
-        console.error('Auth init error:', err);
-        setError(err instanceof Error ? err.message : 'Auth error');
+        if (disposed || epoch !== authEpochRef.current) return;
+        console.error('Auth session restore failed.');
+        activeUserIdRef.current = null;
+        clearActiveStorageUserId();
+        setUser(null);
+        setSessions([]);
+        setSession(null);
+        setError(sanitizeAuthenticationError(err));
       } finally {
-        setIsLoading(false);
+        if (!disposed && epoch === authEpochRef.current) setIsLoading(false);
       }
     };
 
@@ -209,29 +295,40 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
     // Set up auth state listener. Supabase warns against awaiting more
     // Supabase calls inside this callback, so defer workspace restoration.
-    let disposed = false;
     const pendingAuthTimers = new Set<ReturnType<typeof setTimeout>>();
 
     const { data: authListener } = supabase.auth.onAuthStateChange((_event, authSession) => {
       if (authSession?.user) {
+        const epoch = ++authEpochRef.current;
+        activeUserIdRef.current = authSession.user.id;
+        setActiveStorageUserId(authSession.user.id);
         setUser(authSession.user);
+        setError(null);
         const timer = setTimeout(() => {
           pendingAuthTimers.delete(timer);
           if (disposed) return;
-          void restoreUserWorkspace(authSession.user, 'auth-state').catch((err) => {
-            if (!disposed) useLocalWorkspaceFallback(err, 'Main Workspace');
+          void restoreUserWorkspace(authSession.user, 'auth-state', epoch).catch((err) => {
+            if (!disposed && epoch === authEpochRef.current) {
+              useLocalWorkspaceFallback(err, 'Main Workspace');
+            }
           });
         }, 0);
         pendingAuthTimers.add(timer);
       } else {
+        const previousUserId = activeUserIdRef.current ?? undefined;
+        authEpochRef.current += 1;
+        activeUserIdRef.current = null;
         setUser(null);
-        persistAndSetSession(null);
+        persistAndSetSession(null, previousUserId);
         setSessions([]);
+        setArchivedWorkspaceIds([]);
+        clearActiveStorageUserId();
       }
     });
 
     return () => {
       disposed = true;
+      authEpochRef.current += 1;
       for (const timer of pendingAuthTimers) clearTimeout(timer);
       pendingAuthTimers.clear();
       authListener?.subscription.unsubscribe();
@@ -247,11 +344,14 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         'Sign up'
       );
       if (newUser) {
+        const epoch = ++authEpochRef.current;
+        activeUserIdRef.current = newUser.id;
+        setActiveStorageUserId(newUser.id);
         setUser(newUser);
-        await restoreUserWorkspace(newUser, 'sign-up');
+        await restoreUserWorkspace(newUser, 'sign-up', epoch);
       }
     } catch (err) {
-      const message = err instanceof Error ? err.message : 'Sign up failed';
+      const message = sanitizeAuthenticationError(err, 'Sign up failed.');
       setError(message);
       throw err;
     }
@@ -266,29 +366,43 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         'Sign in'
       );
       if (authUser) {
+        const epoch = ++authEpochRef.current;
+        activeUserIdRef.current = authUser.id;
+        setActiveStorageUserId(authUser.id);
         setUser(authUser);
-        void restoreUserWorkspace(authUser, 'sign-in').catch((err) => {
-          useLocalWorkspaceFallback(err, 'Main Workspace');
+        await restoreUserWorkspace(authUser, 'sign-in', epoch).catch((err) => {
+          if (epoch === authEpochRef.current) {
+            useLocalWorkspaceFallback(err, 'Main Workspace');
+          }
         });
       }
     } catch (err) {
-      const message = err instanceof Error ? err.message : 'Sign in failed';
+      const message = sanitizeAuthenticationError(err, 'Sign in failed.');
       setError(message);
       throw err;
     }
   };
 
   const signOut = async () => {
+    const previousUserId = activeUserIdRef.current ?? undefined;
+    authEpochRef.current += 1;
     try {
       setError(null);
       await signOutUser();
-      setUser(null);
-      persistAndSetSession(null);
-      setSessions([]);
     } catch (err) {
-      const message = err instanceof Error ? err.message : 'Sign out failed';
-      setError(message);
-      throw err;
+      setError(
+        sanitizeAuthenticationError(
+          err,
+          'Signed out locally. The remote session could not be confirmed.'
+        )
+      );
+    } finally {
+      activeUserIdRef.current = null;
+      setUser(null);
+      persistAndSetSession(null, previousUserId);
+      setSessions([]);
+      setArchivedWorkspaceIds([]);
+      clearActiveStorageUserId();
     }
   };
 
@@ -302,7 +416,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       logToTerminal(`[workspace] create ok id=${newSession.id} title="${newSession.title}"`);
       return newSession;
     } catch (err) {
-      const message = err instanceof Error ? err.message : 'Failed to create session';
+      const message = sanitizeAuthenticationError(
+        err,
+        'Failed to create workspace.'
+      );
       logToTerminal(`[workspace] create failed title="${title}" reason="${message}"`, 'error');
       setError(message);
       throw err;
@@ -342,7 +459,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     try {
       logToTerminal(`[workspace] delete start id=${sessionId}`);
       const summary = await deleteSessionCascade(sessionId);
-      clearStoredActiveFilePath(sessionId);
+      clearStoredActiveFilePath(sessionId, user?.id);
 
       const remaining = sessions.filter((s) => s.id !== sessionId);
       const nextActive = session?.id === sessionId ? pickRestoredSession(remaining) : session;

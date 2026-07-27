@@ -2,7 +2,7 @@
 import { useState } from 'react';
 import { useForm } from 'react-hook-form';
 import { useRouter } from 'next/navigation';
-import { Eye, EyeOff, Terminal, Copy, Check, Loader2 } from 'lucide-react';
+import { Eye, EyeOff, Loader2 } from 'lucide-react';
 import { toast } from 'sonner';
 import { useAuth } from '@/contexts/AuthContext';
 
@@ -11,11 +11,6 @@ interface LoginFormData {
   password: string;
   rememberMe: boolean;
 }
-
-const DEMO_CREDENTIALS = {
-  email: 'dev@codepilot.sh',
-  password: 'matrix://pilot#2026',
-};
 
 interface Props {
   onSwitchToSignup: () => void;
@@ -27,29 +22,12 @@ export default function LoginForm({ onSwitchToSignup }: Props) {
   const [showPassword, setShowPassword] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
   const [authError, setAuthError] = useState<string | null>(null);
-  const [copiedField, setCopiedField] = useState<string | null>(null);
 
   const {
     register,
     handleSubmit,
-    setValue,
     formState: { errors },
   } = useForm<LoginFormData>({ defaultValues: { rememberMe: false } });
-
-  const autofillDemo = () => {
-    setValue('email', DEMO_CREDENTIALS.email);
-    setValue('password', DEMO_CREDENTIALS.password);
-    toast.success('Demo credentials loaded', {
-      description: 'Click Login to authenticate',
-      style: { background: '#0d1a0d', border: '1px solid #0a5c25', color: '#00ff66' },
-    });
-  };
-
-  const copyField = async (field: 'email' | 'password') => {
-    await navigator.clipboard.writeText(DEMO_CREDENTIALS[field]);
-    setCopiedField(field);
-    setTimeout(() => setCopiedField(null), 2000);
-  };
 
   const onSubmit = async (data: LoginFormData) => {
     setIsLoading(true);
@@ -75,7 +53,7 @@ export default function LoginForm({ onSwitchToSignup }: Props) {
   };
 
   return (
-    <form onSubmit={handleSubmit(onSubmit)} method="post" action="/sign-up-login-screen" className="flex flex-col gap-4" noValidate>
+    <form onSubmit={handleSubmit(onSubmit)} className="flex flex-col gap-4" noValidate>
       {/* Email */}
       <div className="flex flex-col gap-1.5">
         <label htmlFor="login-email" className="text-xs font-mono text-matrix-green-muted tracking-widest uppercase">
@@ -85,7 +63,7 @@ export default function LoginForm({ onSwitchToSignup }: Props) {
           id="login-email"
           type="email"
           autoComplete="email"
-          placeholder="dev@codepilot.sh"
+          placeholder="you@yourdomain.dev"
           className={`w-full rounded-lg border border-matrix-border bg-matrix-surface/90 px-3 py-2.5 text-sm font-mono text-matrix-green shadow-inner shadow-black/20 placeholder-matrix-green-muted outline-none transition-all duration-150 ${
             errors.email
               ? 'border-matrix-red focus:shadow-[0_0_0_1px_#ff4444]'
@@ -171,41 +149,6 @@ export default function LoginForm({ onSwitchToSignup }: Props) {
           '// EXECUTE LOGIN'
         )}
       </button>
-
-      {/* Demo credentials box */}
-      <div className="mt-2 rounded-xl border border-matrix-border/80 bg-matrix-green-ghost p-3 shadow-[0_0_22px_rgba(0,255,102,0.08)]">
-        <div className="flex items-center justify-between mb-2">
-          <div className="flex items-center gap-1.5">
-            <Terminal size={11} className="text-matrix-green-muted" />
-            <span className="text-xs font-mono text-matrix-green-muted tracking-widest uppercase">Demo Credentials</span>
-          </div>
-          <button
-            type="button"
-            onClick={autofillDemo}
-            className="text-xs font-mono text-matrix-green hover:text-matrix-green-dim underline underline-offset-2 transition-colors"
-          >
-            autofill {'->'}
-          </button>
-        </div>
-        {(['email', 'password'] as const).map((field) => (
-          <div key={`cred-${field}`} className="flex items-center justify-between py-1">
-            <div className="flex items-center gap-2 min-w-0">
-              <span className="text-matrix-green-muted text-xs font-mono w-14 flex-shrink-0">{field}:</span>
-              <span className="text-matrix-green text-xs font-mono truncate">
-                {field === 'password' ? '****************' : DEMO_CREDENTIALS[field]}
-              </span>
-            </div>
-            <button
-              type="button"
-              onClick={() => copyField(field)}
-              className="text-matrix-green-muted hover:text-matrix-green transition-colors flex-shrink-0 ml-2"
-              aria-label={`Copy ${field}`}
-            >
-              {copiedField === field ? <Check size={12} className="text-matrix-green" /> : <Copy size={12} />}
-            </button>
-          </div>
-        ))}
-      </div>
 
       <p className="text-xs font-mono text-matrix-green-muted text-center">
         No account?{' '}

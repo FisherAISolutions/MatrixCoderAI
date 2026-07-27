@@ -5,7 +5,10 @@ import { PRIMARY_MODEL } from '@/lib/ai/modelConfig';
 import { CHAT_REQUEST_PROFILES } from '@/lib/ai/requestProfiles';
 import { requireServerEnv } from '@/lib/env';
 import { logError, publicErrorMessage } from '@/lib/logger';
-import { rejectIfRequestTooLarge } from '@/lib/api/hardening';
+import {
+  parseJsonBody,
+  rejectIfRequestTooLarge,
+} from '@/lib/api/hardening';
 import { normalizeStyleBrief, MAX_STYLE_SCREENSHOTS } from '@/lib/styleInspiration';
 import {
   buildMatrixCoderStylePrompt,
@@ -35,7 +38,9 @@ export async function POST(request: NextRequest) {
   if (tooLarge) return tooLarge;
 
   try {
-    const body = (await request.json()) as AnalyzeRequestBody;
+    const parsedBody = await parseJsonBody<AnalyzeRequestBody>(request);
+    if (!parsedBody.ok) return parsedBody.response;
+    const body = parsedBody.body ?? {};
     const appName = typeof body.appName === 'string' ? body.appName.trim() : '';
     const feedback = typeof body.feedback === 'string' ? body.feedback.trim() : '';
     const images = Array.isArray(body.images) ? body.images : [];

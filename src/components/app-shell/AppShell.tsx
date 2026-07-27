@@ -1,7 +1,7 @@
 'use client';
 
 import Link from 'next/link';
-import { usePathname } from 'next/navigation';
+import { usePathname, useRouter } from 'next/navigation';
 import { useEffect, useMemo, useState, type ReactNode } from 'react';
 import { ChevronLeft, ChevronRight, Menu, X } from 'lucide-react';
 import { useAuth } from '@/contexts/AuthContext';
@@ -197,8 +197,16 @@ export function AppShell({
   contentClassName = '',
 }: AppShellProps) {
   const pathname = usePathname();
+  const router = useRouter();
+  const { user, isLoading } = useAuth();
   const [collapsed, setCollapsed] = useState(false);
   const [mobileOpen, setMobileOpen] = useState(false);
+
+  useEffect(() => {
+    if (!isLoading && !user) {
+      router.replace('/sign-up-login-screen');
+    }
+  }, [isLoading, router, user]);
 
   useEffect(() => {
     const stored = window.localStorage.getItem(STORAGE_KEY);
@@ -217,6 +225,25 @@ export function AppShell({
     if (breadcrumbs?.length) return breadcrumbs;
     return [{ label: 'Matrix Coder AI', href: '/' }, { label: title }];
   }, [breadcrumbs, title]);
+
+  if (isLoading || !user) {
+    return (
+      <div
+        className="flex h-screen w-screen items-center justify-center bg-[#05070a] font-mono text-slate-100"
+        role="status"
+        aria-live="polite"
+      >
+        <div className="border border-slate-800 bg-slate-950/80 px-6 py-5 text-center">
+          <p className="text-xs uppercase tracking-[0.24em] text-matrix-green">
+            Restoring secure session
+          </p>
+          <p className="mt-2 text-xs text-slate-500">
+            Verifying your account and workspace ownership.
+          </p>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="flex h-screen w-screen overflow-hidden bg-[#05070a] text-slate-100 font-mono">

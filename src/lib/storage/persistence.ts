@@ -11,6 +11,8 @@
  *   - quota-exceeded errors are silently ignored.
  */
 
+import { getUserScopedStorageKey } from './userScope';
+
 const ACTIVE_SESSION_KEY = 'codepilot:active-session-id';
 const ACTIVE_FILE_KEY_PREFIX = 'codepilot:active-file-path:';
 
@@ -20,28 +22,35 @@ function isClient(): boolean {
 
 // ─── Active session ─────────────────────────────────────────────────────────
 
-export function getStoredActiveSessionId(): string | null {
+export function getStoredActiveSessionId(userId?: string): string | null {
   if (!isClient()) return null;
   try {
-    return window.localStorage.getItem(ACTIVE_SESSION_KEY);
+    return window.localStorage.getItem(
+      getUserScopedStorageKey(ACTIVE_SESSION_KEY, userId, window.localStorage)
+    );
   } catch {
     return null;
   }
 }
 
-export function setStoredActiveSessionId(sessionId: string): void {
+export function setStoredActiveSessionId(sessionId: string, userId?: string): void {
   if (!isClient()) return;
   try {
-    window.localStorage.setItem(ACTIVE_SESSION_KEY, sessionId);
+    window.localStorage.setItem(
+      getUserScopedStorageKey(ACTIVE_SESSION_KEY, userId, window.localStorage),
+      sessionId
+    );
   } catch {
     // ignore quota / private-mode errors
   }
 }
 
-export function clearStoredActiveSessionId(): void {
+export function clearStoredActiveSessionId(userId?: string): void {
   if (!isClient()) return;
   try {
-    window.localStorage.removeItem(ACTIVE_SESSION_KEY);
+    window.localStorage.removeItem(
+      getUserScopedStorageKey(ACTIVE_SESSION_KEY, userId, window.localStorage)
+    );
   } catch {
     // ignore
   }
@@ -49,32 +58,46 @@ export function clearStoredActiveSessionId(): void {
 
 // ─── Active file (per session) ──────────────────────────────────────────────
 
-function activeFileKey(sessionId: string): string {
-  return `${ACTIVE_FILE_KEY_PREFIX}${sessionId}`;
+function activeFileKey(sessionId: string, userId?: string): string {
+  return getUserScopedStorageKey(
+    `${ACTIVE_FILE_KEY_PREFIX}${sessionId}`,
+    userId,
+    typeof window !== 'undefined' ? window.localStorage : null
+  );
 }
 
-export function getStoredActiveFilePath(sessionId: string): string | null {
+export function getStoredActiveFilePath(
+  sessionId: string,
+  userId?: string
+): string | null {
   if (!isClient() || !sessionId) return null;
   try {
-    return window.localStorage.getItem(activeFileKey(sessionId));
+    return window.localStorage.getItem(activeFileKey(sessionId, userId));
   } catch {
     return null;
   }
 }
 
-export function setStoredActiveFilePath(sessionId: string, path: string): void {
+export function setStoredActiveFilePath(
+  sessionId: string,
+  path: string,
+  userId?: string
+): void {
   if (!isClient() || !sessionId || !path) return;
   try {
-    window.localStorage.setItem(activeFileKey(sessionId), path);
+    window.localStorage.setItem(activeFileKey(sessionId, userId), path);
   } catch {
     // ignore
   }
 }
 
-export function clearStoredActiveFilePath(sessionId: string): void {
+export function clearStoredActiveFilePath(
+  sessionId: string,
+  userId?: string
+): void {
   if (!isClient() || !sessionId) return;
   try {
-    window.localStorage.removeItem(activeFileKey(sessionId));
+    window.localStorage.removeItem(activeFileKey(sessionId, userId));
   } catch {
     // ignore
   }
