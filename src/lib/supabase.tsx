@@ -2,6 +2,10 @@
 import { getPublicEnv } from '@/lib/env';
 import type { Database } from '@/types/supabase';
 import {
+  ApplicationSessionError,
+  createOwnedApplicationSession,
+} from '@/lib/auth/applicationSession';
+import {
   STYLE_INSPIRATION_BUCKET,
   buildTemporaryStyleImagePath,
   type StyleBrief,
@@ -38,70 +42,74 @@ export async function getAuthenticatedRequestHeaders(): Promise<Record<string, s
 // Auth helpers
 export async function getCurrentUser() {
   if (!supabase) return null;
-  try {
-    const { data: { user } } = await supabase.auth.getUser();
-    return user;
-  } catch (error) {
-    console.error('getCurrentUser error:', error);
-    return null;
-  }
+  const {
+    data: { user },
+    error,
+  } = await supabase.auth.getUser();
+  if (error) throw error;
+  return user;
+}
+
+export async function getCurrentAuthSession() {
+  if (!supabase) return null;
+  const { data, error } = await supabase.auth.getSession();
+  if (error) throw error;
+  return data.session;
 }
 
 export async function signUpUser(email: string, password: string) {
   if (!supabase) throw new Error('Supabase not configured');
-  try {
-    const { data, error } = await supabase.auth.signUp({ email, password });
-    if (error) throw error;
-    return data;
-  } catch (error) {
-    console.error('signUpUser error:', error);
-    throw error;
-  }
+  const { data, error } = await supabase.auth.signUp({ email, password });
+  if (error) throw error;
+  return data;
 }
 
 export async function signInUser(email: string, password: string) {
   if (!supabase) throw new Error('Supabase not configured');
-  try {
-    const { data, error } = await supabase.auth.signInWithPassword({ email, password });
-    if (error) throw error;
-    return data;
-  } catch (error) {
-    console.error('signInUser error:', error);
-    throw error;
-  }
+  const { data, error } = await supabase.auth.signInWithPassword({ email, password });
+  if (error) throw error;
+  return data;
 }
 
 export async function signOutUser() {
   if (!supabase) return;
-  try {
-    const { error } = await supabase.auth.signOut();
-    if (error) throw error;
-  } catch (error) {
-    console.error('signOutUser error:', error);
-    throw error;
-  }
+  const { error } = await supabase.auth.signOut();
+  if (error) throw error;
 }
 
 // Session helpers
-export async function createSession(userId: string, title: string = 'Untitled Session') {
-  if (!supabase) throw new Error('Supabase not configured');
-  try {
-    const { data, error } = await supabase
-      .from('sessions')
-      .insert({ user_id: userId, title })
-      .select()
-      .single();
-
-    if (error) {
-      const errorMessage = error.message || error.details || error.hint || JSON.stringify(error);
-      console.error('createSession error:', errorMessage);
-      throw new Error(errorMessage);
-    }
-    return data;
-  } catch (error) {
-    console.error('createSession error:', error);
-    throw error;
+export async function createSession(
+  requestedUserId?: string,
+  title: string = 'Untitled Session'
+) {
+  if (!supabase) {
+    throw new ApplicationSessionError(
+      'not-configured',
+      'Cloud workspace storage is not configured.',
+      true
+    );
   }
+
+  return createOwnedApplicationSession<
+    Database['public']['Tables']['sessions']['Row']
+  >(
+    {
+      async getAuthenticatedUserId() {
+        const { data, error } = await supabase.auth.getSession();
+        if (error) throw error;
+        return data.session?.user.id ?? null;
+      },
+      async insertSession(input) {
+        const { data, error } = await supabase
+          .from('sessions')
+          .insert({ user_id: input.userId, title: input.title })
+          .select()
+          .single();
+        return { data, error };
+      },
+    },
+    { requestedUserId, title }
+  );
 }
 
 export async function getUserSessions(userId: string) {

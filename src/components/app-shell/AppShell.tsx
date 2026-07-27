@@ -206,7 +206,7 @@ export function AppShell({
 }: AppShellProps) {
   const pathname = usePathname();
   const router = useRouter();
-  const { user, isLoading } = useAuth();
+  const { user, isLoading, authStatus } = useAuth();
   const [collapsed, setCollapsed] = useState(false);
   const [mobileOpen, setMobileOpen] = useState(false);
 
@@ -243,7 +243,7 @@ export function AppShell({
     return [{ label: 'Matrix Coder AI', href: '/' }, { label: title }];
   }, [breadcrumbs, title]);
 
-  if (isLoading || !user) {
+  if (isLoading || authStatus === 'restoring') {
     return (
       <div
         className="flex h-screen w-screen items-center justify-center bg-[#05070a] font-mono text-slate-100"
@@ -258,6 +258,20 @@ export function AppShell({
             Verifying your account and workspace ownership.
           </p>
         </div>
+      </div>
+    );
+  }
+
+  if (!user) {
+    return (
+      <div
+        className="flex h-screen w-screen items-center justify-center bg-[#05070a] font-mono text-slate-100"
+        role="status"
+        aria-live="polite"
+      >
+        <p className="text-xs uppercase tracking-[0.24em] text-slate-500">
+          Redirecting to sign in
+        </p>
       </div>
     );
   }

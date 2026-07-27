@@ -24,6 +24,7 @@ export default function SignUpForm({ onSwitchToLogin }: Props) {
   const [showConfirm, setShowConfirm] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
   const [authError, setAuthError] = useState<string | null>(null);
+  const [verificationEmail, setVerificationEmail] = useState<string | null>(null);
 
   const {
     register,
@@ -69,9 +70,20 @@ export default function SignUpForm({ onSwitchToLogin }: Props) {
         );
       }
       // Supabase Auth signUp({ email, password }) + create user profile row
-      await signUp(data.email, data.password);
+      const result = await signUp(data.email, data.password);
+      if (result.status === 'verification-required') {
+        setVerificationEmail(result.email);
+        toast.success('Check your email', {
+          description: 'Confirm your address, then return here to sign in.',
+          style: { background: '#0d1a0d', border: '1px solid #00ff66', color: '#00ff66' },
+        });
+        return;
+      }
       toast.success('Account initialized', {
-        description: 'Deploying your Matrix Coder AI workspace...',
+        description:
+          result.status === 'recoverable-error'
+            ? 'Signed in. Cloud workspace sync will retry later.'
+            : 'Preparing your Matrix Coder AI workspace...',
         style: { background: '#0d1a0d', border: '1px solid #00ff66', color: '#00ff66' },
       });
       setTimeout(() => router.push('/projects'), 700);
@@ -86,6 +98,28 @@ export default function SignUpForm({ onSwitchToLogin }: Props) {
       setIsLoading(false);
     }
   };
+
+  if (verificationEmail) {
+    return (
+      <div className="space-y-4" role="status" aria-live="polite">
+        <div className="rounded-xl border border-matrix-green/60 bg-matrix-green/10 p-4">
+          <p className="text-sm font-bold text-matrix-green">Confirm your email</p>
+          <p className="mt-2 text-xs leading-relaxed text-matrix-green-muted">
+            We sent a confirmation link to {verificationEmail}. Open it, then
+            return here and sign in. No workspace was created before your
+            account became authenticated.
+          </p>
+        </div>
+        <button
+          type="button"
+          onClick={onSwitchToLogin}
+          className="w-full rounded-xl bg-matrix-green py-3 text-sm font-mono font-bold uppercase tracking-widest text-black"
+        >
+          Continue to login
+        </button>
+      </div>
+    );
+  }
 
   return (
     <form onSubmit={handleSubmit(onSubmit)} className="flex flex-col gap-4" noValidate>

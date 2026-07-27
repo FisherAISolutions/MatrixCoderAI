@@ -34,10 +34,13 @@ export default function LoginForm({ onSwitchToSignup }: Props) {
     setAuthError(null);
     try {
       // Supabase Auth signInWithPassword({ email, password })
-      await signIn(data.email, data.password);
+      const result = await signIn(data.email, data.password);
 
       toast.success('Authentication successful', {
-        description: 'Initializing Matrix Coder AI workspace...',
+        description:
+          result.status === 'recoverable-error'
+            ? 'Signed in. Cloud workspace sync will retry later.'
+            : 'Preparing your Matrix Coder AI workspace...',
         style: { background: '#0d1a0d', border: '1px solid #00ff66', color: '#00ff66' },
       });
       setTimeout(() => router.push('/projects'), 600);
@@ -48,6 +51,7 @@ export default function LoginForm({ onSwitchToSignup }: Props) {
         description: message,
         style: { background: '#1a0000', border: '1px solid #ff4444', color: '#ff4444' },
       });
+    } finally {
       setIsLoading(false);
     }
   };
