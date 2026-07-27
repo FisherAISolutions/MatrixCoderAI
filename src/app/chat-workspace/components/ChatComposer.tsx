@@ -58,6 +58,11 @@ import type { BuildContract } from '@/lib/build-contract';
 import type { CapabilityResolutionResult } from '@/lib/capabilities';
 import type { ArchitectDraft } from '@/lib/matrix-ai-architect/types';
 import type { MatrixIntelligenceCore } from '@/lib/intelligence-core';
+import {
+  formatBuildChangePlanSummary,
+  isChangePlanApprovalMessage,
+  isChangePlanCancellationMessage,
+} from '@/lib/change-planning';
 import { selectWorkspaceGenerationMode } from '@/lib/build-orchestration';
 import {
   loadMatrixProjectWorkspaceContext,
@@ -2012,6 +2017,69 @@ export default function ChatComposer({
         });
         onSetActivityStatus('Approve an Architect plan and Blueprint first');
         toast('Plan this application with Matrix AI Architect first.');
+        return;
+      }
+
+      if (
+        taskDrivenBuild.pendingChangePlan &&
+        isChangePlanCancellationMessage(text)
+      ) {
+        const cancelled = await taskDrivenBuild.cancelChange(text);
+        onAddMessage({
+          id: generateId('msg'),
+          role: 'assistant',
+          agent: 'orchestrator',
+          content: cancelled
+            ? 'The proposed change was cancelled. Your Blueprint, Build Contract, repository, and completed tasks were left unchanged.'
+            : 'There is no pending project change to cancel.',
+          timestamp: new Date().toISOString(),
+          memoryStage: 'context',
+        });
+        return;
+      }
+
+      if (
+        taskDrivenBuild.pendingChangePlan &&
+        isChangePlanApprovalMessage(text)
+      ) {
+        const approved = await taskDrivenBuild.approveChange();
+        if (!approved) {
+          onAddMessage({
+            id: generateId('msg'),
+            role: 'assistant',
+            agent: 'orchestrator',
+            content:
+              'Matrix could not safely apply that approval. The project may have changed since the plan was prepared; submit the change again for a fresh review.',
+            timestamp: new Date().toISOString(),
+            memoryStage: 'context',
+          });
+          return;
+        }
+        onAddMessage({
+          id: generateId('msg'),
+          role: 'assistant',
+          agent: 'orchestrator',
+          content:
+            'Change approved. Matrix updated the Architect Draft, Blueprint, Build Contract, capabilities, Task Graph, and Intelligence Core. Starting only the new or invalidated engineering work now.',
+          timestamp: new Date().toISOString(),
+          memoryStage: 'context',
+        });
+        await taskDrivenBuild.start();
+        return;
+      }
+
+      if (taskDrivenBuild.canPlanChanges) {
+        const plan = await taskDrivenBuild.planChange(text);
+        onAddMessage({
+          id: generateId('msg'),
+          role: 'assistant',
+          agent: 'orchestrator',
+          content: plan
+            ? formatBuildChangePlanSummary(plan)
+            : 'Matrix could not create a safe change plan from the current project state. Existing work was not modified.',
+          timestamp: new Date().toISOString(),
+          memoryStage: 'context',
+        });
         return;
       }
 

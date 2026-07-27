@@ -19,6 +19,14 @@ import {
   markGuidedBuildTaskSkipped,
 } from '@/lib/guided-build';
 import {
+  applyApprovedBuildChangePlan,
+  cancelBuildChangePlan,
+  createBuildChangePlan,
+  isChangePlanStale,
+  markBuildChangePlanStatus,
+  type BuildChangePlan,
+} from '@/lib/change-planning';
+import {
   checkpointActiveMatrixProject,
   loadMatrixProjectWorkspaceContext,
   loadMatrixProjectWorkspaceSnapshot,
@@ -31,10 +39,15 @@ import { pushTerminalLog } from '@/lib/terminal/store';
 
 export interface WorkspaceTaskDrivenBuildController {
   available: boolean;
+  canPlanChanges: boolean;
+  pendingChangePlan?: BuildChangePlan;
   active: boolean;
   status: BuildOrchestrationStatus | 'unavailable';
   statusMessage: string;
   revision: number;
+  planChange: (request: string) => Promise<BuildChangePlan | null>;
+  approveChange: () => Promise<BuildChangePlan | null>;
+  cancelChange: (reason?: string) => Promise<BuildChangePlan | null>;
   start: () => Promise<void>;
   resume: (taskId?: string) => Promise<void>;
   retryTask: (taskId: string) => Promise<void>;
@@ -143,11 +156,170 @@ export function useTaskDrivenBuild(
     };
   }, [options.sessionId, refresh]);
 
+  const persistPlanningState = useCallback(
+    async (nextContext: MatrixProjectWorkspaceContext) => {
+      if (typeof window === 'undefined' || !nextContext.currentProjectId) return;
+      saveMatrixProjectWorkspaceContext(window.localStorage, nextContext);
+      const previousSnapshot = loadMatrixProjectWorkspaceSnapshot(
+        window.localStorage
+      );
+      const snapshot: MatrixProjectWorkspaceSnapshot = {
+        projectId: nextContext.currentProjectId,
+        name:
+          nextContext.currentProjectName ??
+          previousSnapshot?.name ??
+          projectNameRef.current ??
+          'Matrix Project',
+        description: previousSnapshot?.description ?? '',
+        files: filesRef.current,
+        chatMessages: messagesRef.current,
+        buildManifest: nextContext.buildManifest,
+        blueprintDraft: nextContext.blueprintDraft,
+        architectDraft: nextContext.architectDraft,
+        buildContract: nextContext.buildContract,
+        capabilityResolution: nextContext.capabilityResolution,
+        taskGraph: nextContext.taskGraph,
+        repositoryModel: nextContext.repositoryModel,
+        engineeringMemory: nextContext.engineeringMemory,
+        engineeringForemanState: nextContext.engineeringForemanState,
+        taskExecutionState: nextContext.taskExecutionState,
+        buildOrchestrationState: nextContext.buildOrchestrationState,
+        contractReviewReport: nextContext.contractReviewReport,
+        intelligenceCore: nextContext.intelligenceCore,
+        changePlan: nextContext.changePlan,
+        validationStatus: previousSnapshot?.validationStatus ?? 'pending',
+        deploymentStatus: previousSnapshot?.deploymentStatus ?? 'unknown',
+        workspaceState: activeFilePathRef.current
+          ? { activeFilePath: activeFilePathRef.current }
+          : previousSnapshot?.workspaceState,
+        favorite: previousSnapshot?.favorite,
+        lastOpenedAt: previousSnapshot?.lastOpenedAt,
+        updatedAt: new Date().toISOString(),
+      };
+      saveMatrixProjectWorkspaceSnapshot(window.localStorage, snapshot);
+      setContext(nextContext);
+      setRevision((value) => value + 1);
+      const result = await checkpointActiveMatrixProject(snapshot);
+      if (result?.saveState === 'conflict' || result?.saveState === 'save-failed') {
+        pushTerminalLog({
+          level: 'error',
+          text: `[project-evolution] checkpoint ${result.saveState}: ${result.warning ?? 'unknown persistence error'}\n`,
+          timestamp: Date.now(),
+        });
+      }
+    },
+    []
+  );
+
+  const planChange = useCallback(
+    async (request: string): Promise<BuildChangePlan | null> => {
+      if (typeof window === 'undefined' || active) return null;
+      const latest = loadMatrixProjectWorkspaceContext(window.localStorage);
+      const projectId = latest.currentProjectId?.trim();
+      if (
+        !projectId ||
+        !latest.architectDraft ||
+        !latest.blueprintDraft ||
+        !latest.buildContract ||
+        !latest.capabilityResolution
+      ) {
+        options.onSystemMessage(
+          'Matrix needs an approved Architect Draft, Blueprint, and Build Contract before it can plan a localized project change.'
+        );
+        return null;
+      }
+      const plan = createBuildChangePlan({
+        projectId,
+        userRequest: request,
+        source: 'conversation',
+        architectDraft: latest.architectDraft,
+        buildManifest: latest.buildManifest,
+        blueprintDraft: latest.blueprintDraft,
+        buildContract: latest.buildContract,
+        capabilityResolution: latest.capabilityResolution,
+        taskGraph: latest.taskGraph,
+        repositoryModel: latest.repositoryModel,
+      });
+      await persistPlanningState({ ...latest, changePlan: plan });
+      setStatusMessage('Project change planned. Waiting for explicit approval.');
+      return plan;
+    },
+    [active, options, persistPlanningState]
+  );
+
+  const approveChange = useCallback(async (): Promise<BuildChangePlan | null> => {
+    if (typeof window === 'undefined' || active) return null;
+    const latest = loadMatrixProjectWorkspaceContext(window.localStorage);
+    const projectId = latest.currentProjectId?.trim();
+    const plan = latest.changePlan;
+    if (!projectId || !plan || plan.status !== 'approval-required') return null;
+    if (
+      isChangePlanStale(plan, {
+        architectDraft: latest.architectDraft,
+        blueprintDraft: latest.blueprintDraft,
+        buildContract: latest.buildContract,
+        taskGraph: latest.taskGraph,
+        repositoryModel: latest.repositoryModel,
+      })
+    ) {
+      options.onSystemMessage(
+        'This change plan is stale because the project changed after it was prepared. Matrix preserved your work; please submit the change again for a fresh impact review.'
+      );
+      return null;
+    }
+    const applied = applyApprovedBuildChangePlan({
+      plan,
+      projectId,
+      buildManifest: latest.buildManifest,
+      repositoryModel: latest.repositoryModel,
+      engineeringMemory: latest.engineeringMemory,
+      intelligenceCore: latest.intelligenceCore,
+    });
+    await persistPlanningState({
+      ...latest,
+      architectDraft: applied.architectDraft,
+      blueprintDraft: applied.blueprintDraft,
+      buildContract: applied.buildContract,
+      capabilityResolution: applied.capabilityResolution,
+      taskGraph: applied.taskGraph,
+      intelligenceCore: applied.intelligenceCore,
+      changePlan: applied.plan,
+    });
+    setStatusMessage('Approved project change is ready for bounded engineering.');
+    return applied.plan;
+  }, [active, options, persistPlanningState]);
+
+  const cancelChange = useCallback(
+    async (reason = 'Cancelled by user'): Promise<BuildChangePlan | null> => {
+      if (typeof window === 'undefined' || active) return null;
+      const latest = loadMatrixProjectWorkspaceContext(window.localStorage);
+      if (
+        !latest.changePlan ||
+        !['draft', 'approval-required'].includes(latest.changePlan.status)
+      ) {
+        return null;
+      }
+      const plan = cancelBuildChangePlan(latest.changePlan, reason);
+      await persistPlanningState({ ...latest, changePlan: plan });
+      setStatusMessage('Project change cancelled. Existing work was not modified.');
+      return plan;
+    },
+    [active, persistPlanningState]
+  );
+
   const persistEvent = useCallback(
     async (event: BuildOrchestrationEvent, cloudCheckpoint: boolean) => {
       if (typeof window === 'undefined') return;
       const latest = loadMatrixProjectWorkspaceContext(window.localStorage);
       if (latest.currentProjectId !== event.state.projectId) return;
+      let changePlan = latest.changePlan;
+      if (changePlan?.status === 'executing') {
+        if (event.state.status === 'completed') {
+          changePlan = markBuildChangePlanStatus(changePlan, 'validated');
+        } else if (['failed', 'blocked'].includes(event.state.status)) {
+          changePlan = markBuildChangePlanStatus(changePlan, 'failed');
+        }
+      }
 
       const nextContext: MatrixProjectWorkspaceContext = {
         ...latest,
@@ -159,6 +331,7 @@ export function useTaskDrivenBuild(
         taskExecutionState: event.taskExecutionState,
         buildOrchestrationState: event.state,
         contractReviewReport: event.contractReviewReport,
+        changePlan,
       };
       saveMatrixProjectWorkspaceContext(window.localStorage, nextContext);
 
@@ -189,7 +362,7 @@ export function useTaskDrivenBuild(
         buildOrchestrationState: event.state,
         contractReviewReport: event.contractReviewReport,
         intelligenceCore: event.intelligenceCore,
-        changePlan: latest.changePlan,
+        changePlan,
         validationStatus: validationStatusForEvent(event),
         deploymentStatus: previousSnapshot?.deploymentStatus ?? 'unknown',
         workspaceState: activeFilePathRef.current
@@ -219,7 +392,7 @@ export function useTaskDrivenBuild(
 
   const start = useCallback(async () => {
     if (active || typeof window === 'undefined') return;
-    const latest = loadMatrixProjectWorkspaceContext(window.localStorage);
+    let latest = loadMatrixProjectWorkspaceContext(window.localStorage);
     const projectId = latest.currentProjectId?.trim();
     if (!projectId || !latest.buildContract || !latest.capabilityResolution) {
       const message = projectId
@@ -230,6 +403,29 @@ export function useTaskDrivenBuild(
       options.onSystemMessage(message);
       return;
     }
+    if (
+      latest.changePlan &&
+      ['draft', 'approval-required'].includes(latest.changePlan.status)
+    ) {
+      const message =
+        'Review and explicitly approve the pending project change before engineering starts.';
+      setStatusMessage(message);
+      options.onSystemMessage(message);
+      return;
+    }
+    if (latest.changePlan?.status === 'ready-to-execute') {
+      latest = {
+        ...latest,
+        changePlan: markBuildChangePlanStatus(
+          latest.changePlan,
+          'executing'
+        ),
+      };
+      await persistPlanningState(latest);
+    }
+    const buildContract = latest.buildContract;
+    const capabilityResolution = latest.capabilityResolution;
+    if (!buildContract || !capabilityResolution) return;
 
     abortRef.current?.abort('Superseded by a newer build run');
     const controller = new AbortController();
@@ -238,8 +434,8 @@ export function useTaskDrivenBuild(
     runTokenRef.current = runToken;
     const initialized = initializeTaskDrivenBuild({
       projectId,
-      contract: latest.buildContract,
-      capabilityResolution: latest.capabilityResolution,
+      contract: buildContract,
+      capabilityResolution,
       files: filesRef.current,
       existingGraph: latest.taskGraph,
       existingRepositoryModel: latest.repositoryModel,
@@ -262,8 +458,8 @@ export function useTaskDrivenBuild(
       const result = await runTaskDrivenBuild({
         ...initialized,
         projectId,
-        contract: latest.buildContract,
-        capabilityResolution: latest.capabilityResolution,
+        contract: buildContract,
+        capabilityResolution,
         architectDraft: latest.architectDraft,
         blueprintDraft: latest.blueprintDraft,
         budgetMode: latest.architectDraft?.answers.investmentLevel,
@@ -345,7 +541,7 @@ export function useTaskDrivenBuild(
         refresh();
       }
     }
-  }, [active, options, persistEvent, refresh]);
+  }, [active, options, persistEvent, persistPlanningState, refresh]);
 
   const retryTask = useCallback(
     async (taskId: string) => {
@@ -413,16 +609,35 @@ export function useTaskDrivenBuild(
     options.onStatusChange('Paused by user');
   }, [options]);
 
+  const canPlanChanges = Boolean(
+    context.buildContract &&
+      context.capabilityResolution &&
+      (context.buildOrchestrationState ||
+        context.taskGraph?.tasks.some(
+          (task) => !['pending', 'ready'].includes(task.status)
+        ))
+  );
+  const pendingChangePlan =
+    context.changePlan &&
+    ['draft', 'approval-required'].includes(context.changePlan.status)
+      ? context.changePlan
+      : undefined;
+
   return {
     available: Boolean(
       context.currentProjectId &&
         context.buildContract &&
         context.capabilityResolution
     ),
+    canPlanChanges,
+    pendingChangePlan,
     active,
     status,
     statusMessage,
     revision,
+    planChange,
+    approveChange,
+    cancelChange,
     start,
     resume,
     retryTask,

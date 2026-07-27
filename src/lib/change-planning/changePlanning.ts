@@ -3,6 +3,7 @@ import {
   type BlueprintDataModel,
   type BlueprintDraft,
   type BlueprintDraftItem,
+  type BlueprintRouteItem,
 } from '@/lib/blueprint-studio/blueprintDraft';
 import {
   createBuildContract,
@@ -12,6 +13,11 @@ import {
   type BuildContractRoute,
 } from '@/lib/build-contract';
 import { createTaskGraph, type TaskGraph, type TaskGraphTask } from '@/lib/task-graph';
+import { resolveCapabilities } from '@/lib/capabilities';
+import {
+  addIntelligenceRecord,
+  createIntelligenceCore,
+} from '@/lib/intelligence-core';
 import type { RepositoryModel } from '@/lib/repository-model';
 import {
   createArchitectDraft,
@@ -25,12 +31,15 @@ import {
   CHANGE_PLAN_METADATA_VERSION,
   CHANGE_PLAN_SCHEMA_VERSION,
   type BlueprintChangeSummary,
+  type AppliedBuildChange,
+  type ApplyApprovedChangePlanOptions,
   type BuildChangePlan,
   type BuildChangePlanStatus,
   type BuildChangeRequest,
   type BuildContractChangeSummary,
   type ChangeEffortEstimate,
   type ChangeIntent,
+  type ChangeServiceCostEstimate,
   type ChangePlanApprovalRequirement,
   type ChangePlanRisk,
   type ChangePlanTaskSummary,
@@ -52,6 +61,18 @@ function unique(values: string[]): string[] {
 
 function normalizeText(value: string): string {
   return value.trim().toLowerCase();
+}
+
+export function isChangePlanApprovalMessage(value: string): boolean {
+  return /^(approve|approved|approve change|apply change|go ahead|yes,? apply it|yes,? approve)$/i.test(
+    value.trim()
+  );
+}
+
+export function isChangePlanCancellationMessage(value: string): boolean {
+  return /^(cancel|cancel change|discard change|never mind|nevermind|do not apply)$/i.test(
+    value.trim()
+  );
 }
 
 function includesAny(text: string, terms: string[]): boolean {
@@ -82,6 +103,19 @@ function blueprintItem(prefix: string, name: string, description?: string): Blue
   return {
     id: `${prefix}-${slug || 'item'}`,
     name,
+    description,
+  };
+}
+
+function blueprintRoute(
+  path: string,
+  name: string,
+  description: string
+): BlueprintRouteItem {
+  return {
+    ...blueprintItem('route', path === '/' ? 'home' : path),
+    name,
+    path,
     description,
   };
 }
@@ -181,6 +215,14 @@ export function interpretChangeRequest(userRequest: string): ChangeIntent {
     'children instead of one',
     'child profiles',
   ]);
+  const subscriptions = includesAny(text, [
+    'add subscriptions',
+    'add subscription',
+    'subscription plans',
+    'recurring billing',
+    'paid plans',
+    'membership plans',
+  ]);
 
   if (destructive) {
     return {
@@ -210,12 +252,205 @@ export function interpretChangeRequest(userRequest: string): ChangeIntent {
       ],
     };
   }
+  if (subscriptions) {
+    return {
+      kind: 'localized-feature-change',
+      summary:
+        'Add subscription plans, customer billing state, and account billing workflows.',
+      confidence: 0.93,
+      assumptions: [
+        'Existing product features and completed engineering tasks remain unchanged.',
+        'Billing secrets and provider operations remain server-side.',
+        'The selected billing provider can be changed before approval.',
+      ],
+    };
+  }
 
   return {
     kind: 'localized-feature-change',
     summary: 'Treat this as a localized product change until the user approves broader architecture work.',
     confidence: 0.55,
     assumptions: ['Prefer targeted tasks over whole-application regeneration.'],
+  };
+}
+
+function ensureSubscriptionsArchitect(
+  draft: ArchitectDraft,
+  now: Date
+): ArchitectDraft {
+  const requirement =
+    'Change request: add recurring subscription plans and account billing management.';
+  let next = updateArchitectAnswer(draft, 'payments', true, now);
+  next = updateArchitectAnswer(
+    next,
+    'integrations',
+    fieldListWith(next.answers.integrations, ['stripe']),
+    now
+  );
+  next = updateArchitectAnswer(
+    next,
+    'customRequirements',
+    appendSentence(next.answers.customRequirements, requirement),
+    now
+  );
+  return next;
+}
+
+function ensureBlueprintRoute(
+  routes: BlueprintRouteItem[],
+  path: string,
+  name: string,
+  description: string
+): { routes: BlueprintRouteItem[]; added: boolean } {
+  if (routes.some((route) => route.path.toLowerCase() === path.toLowerCase())) {
+    return { routes, added: false };
+  }
+  return {
+    routes: [...routes, blueprintRoute(path, name, description)],
+    added: true,
+  };
+}
+
+function ensureBlueprintItem(
+  items: BlueprintDraftItem[],
+  prefix: string,
+  name: string,
+  description: string
+): { items: BlueprintDraftItem[]; added: boolean } {
+  if (items.some((item) => item.name.toLowerCase() === name.toLowerCase())) {
+    return { items, added: false };
+  }
+  return {
+    items: [...items, blueprintItem(prefix, name, description)],
+    added: true,
+  };
+}
+
+function ensureSubscriptionsBlueprint(
+  draft: BlueprintDraft,
+  now: Date
+): { draft: BlueprintDraft; summary: BlueprintChangeSummary } {
+  let routes = draft.routes;
+  const routesAdded: string[] = [];
+  for (const route of [
+    ['/pricing', 'Pricing', 'Compare available subscription plans.'],
+    [
+      '/account/billing',
+      'Account Billing',
+      'Manage the current plan, billing state, and subscription actions.',
+    ],
+  ] as const) {
+    const result = ensureBlueprintRoute(routes, route[0], route[1], route[2]);
+    routes = result.routes;
+    if (result.added) routesAdded.push(route[0]);
+  }
+
+  let models = draft.dataModels;
+  const modelsAdded: string[] = [];
+  const modelsChanged: string[] = [];
+  for (const model of [
+    {
+      name: 'Plan',
+      fields: ['id', 'name', 'priceId', 'status', 'features'],
+      description: 'Subscription plan configuration and entitlement metadata.',
+    },
+    {
+      name: 'Subscription',
+      fields: [
+        'id',
+        'userId',
+        'planId',
+        'providerCustomerId',
+        'providerSubscriptionId',
+        'status',
+        'currentPeriodEnd',
+      ],
+      description: 'Account subscription lifecycle and provider references.',
+    },
+  ]) {
+    const result = ensureModel(
+      models,
+      model.name,
+      model.fields,
+      model.description
+    );
+    models = result.models;
+    if (result.added) modelsAdded.push(model.name);
+    if (result.changed) modelsChanged.push(model.name);
+  }
+
+  let components = draft.components;
+  const componentsAdded: string[] = [];
+  for (const component of [
+    [
+      'Pricing Table',
+      'Compare approved plans and start a subscription safely.',
+    ],
+    [
+      'Subscription Manager',
+      'Display subscription state and guarded account billing actions.',
+    ],
+  ] as const) {
+    const result = ensureBlueprintItem(
+      components,
+      'component',
+      component[0],
+      component[1]
+    );
+    components = result.items;
+    if (result.added) componentsAdded.push(component[0]);
+  }
+
+  const integration = ensureBlueprintItem(
+    draft.integrations,
+    'integration',
+    'Stripe',
+    'Server-side subscription billing provider with webhook reconciliation.'
+  );
+
+  let navigation = draft.navigation;
+  for (const route of routesAdded) {
+    navigation = ensureBlueprintItem(
+      navigation,
+      'navigation',
+      route === '/pricing' ? 'Pricing' : 'Account Billing',
+      `Link to ${route}`
+    ).items;
+  }
+
+  return {
+    draft: {
+      ...draft,
+      appDescription: appendSentence(
+        draft.appDescription,
+        'The approved product supports recurring subscription plans and account billing management.'
+      ),
+      routes,
+      dataModels: models,
+      components,
+      integrations: integration.items,
+      navigation,
+      updatedAt: now.toISOString(),
+    },
+    summary: {
+      changed:
+        routesAdded.length > 0 ||
+        modelsAdded.length > 0 ||
+        modelsChanged.length > 0 ||
+        componentsAdded.length > 0 ||
+        integration.added,
+      routesAdded: unique(routesAdded),
+      routesRemoved: [],
+      routesChanged: [],
+      modelsAdded: unique(modelsAdded),
+      modelsRemoved: [],
+      modelsChanged: unique(modelsChanged),
+      componentsAdded: unique(componentsAdded),
+      componentsChanged: [],
+      integrationsChanged: integration.added ? ['Stripe'] : [],
+      summary:
+        'Added subscription routes, billing models, account components, navigation, and provider planning.',
+    },
   };
 }
 
@@ -629,7 +864,92 @@ function inferAffectedCapabilities(intent: ChangeIntent, contractDiff: BuildCont
   if (contractDiff.routes.added.length || contractDiff.routes.changed.length) {
     capabilities.push('app-routes');
   }
+  if (/subscription|billing/i.test(intent.summary) || contractDiff.billingChanged) {
+    capabilities.push('billing', 'subscriptions');
+  }
   return unique(capabilities);
+}
+
+function affectedSystemsForChange(
+  intent: ChangeIntent,
+  contractDiff: BuildContractChangeSummary
+): string[] {
+  const systems: string[] = [];
+  if (contractDiff.routes.added.length || contractDiff.routes.changed.length) {
+    systems.push('App Router and navigation');
+  }
+  if (
+    contractDiff.dataModels.added.length ||
+    contractDiff.dataModels.changed.length
+  ) {
+    systems.push('Data model and persistence');
+  }
+  if (contractDiff.apis.added.length || contractDiff.apis.changed.length) {
+    systems.push('Server APIs');
+  }
+  if (contractDiff.authenticationChanged) systems.push('Authentication');
+  if (contractDiff.billingChanged || /subscription|billing/i.test(intent.summary)) {
+    systems.push('Subscription billing');
+  }
+  if (contractDiff.integrations.added.length) {
+    systems.push('Third-party integrations');
+  }
+  if (contractDiff.deploymentTargetChanged) systems.push('Deployment');
+  return unique(systems);
+}
+
+function requiredChangesForPlan(
+  blueprintChanges: BlueprintChangeSummary,
+  contractDiff: BuildContractChangeSummary
+): string[] {
+  const changes: string[] = [];
+  if (blueprintChanges.routesAdded.length) {
+    changes.push(`Create routes: ${blueprintChanges.routesAdded.join(', ')}.`);
+  }
+  if (blueprintChanges.modelsAdded.length || blueprintChanges.modelsChanged.length) {
+    changes.push(
+      `Update data models: ${[
+        ...blueprintChanges.modelsAdded,
+        ...blueprintChanges.modelsChanged,
+      ].join(', ')}.`
+    );
+  }
+  if (blueprintChanges.componentsAdded.length) {
+    changes.push(
+      `Add UI workflows: ${blueprintChanges.componentsAdded.join(', ')}.`
+    );
+  }
+  if (contractDiff.apis.added.length) {
+    changes.push(`Add server APIs: ${contractDiff.apis.added.join(', ')}.`);
+  }
+  if (contractDiff.billingChanged) {
+    changes.push(
+      'Add server-only billing configuration, subscription lifecycle handling, and provider reconciliation.'
+    );
+  }
+  return unique(changes);
+}
+
+function monthlyServiceEstimates(
+  intent: ChangeIntent,
+  contractDiff: BuildContractChangeSummary
+): ChangeServiceCostEstimate[] {
+  if (!contractDiff.billingChanged && !/subscription|billing/i.test(intent.summary)) {
+    return [];
+  }
+  return [
+    {
+      category: 'billing',
+      service: 'Payment and subscription provider',
+      estimatedMonthlyCostBand: 'usage-based',
+      freeTierAvailable: 'unknown',
+      assumptions: [
+        'Estimate only; provider charges generally vary with transaction volume and selected billing features.',
+        'Existing hosting, database, email, and tax-compliance costs are not included.',
+        'The provider choice can be changed before approval.',
+      ],
+    },
+  ];
 }
 
 function risksForChange(
@@ -719,11 +1039,21 @@ function risksForChange(
   return risks;
 }
 
-function approvalForRisks(risks: ChangePlanRisk[]): ChangePlanApprovalRequirement {
+function approvalForRisks(
+  risks: ChangePlanRisk[],
+  source: ChangeRequestSource
+): ChangePlanApprovalRequirement {
   const approvalRisks = risks.filter((risk) => risk.severity === 'requires-approval');
+  const conversationReason =
+    source === 'conversation'
+      ? ['Conversational project changes require approval before engineering begins.']
+      : [];
   return {
-    required: approvalRisks.length > 0,
-    reasons: approvalRisks.map((risk) => risk.message),
+    required: approvalRisks.length > 0 || conversationReason.length > 0,
+    reasons: unique([
+      ...conversationReason,
+      ...approvalRisks.map((risk) => risk.message),
+    ]),
     riskKinds: unique(approvalRisks.map((risk) => risk.kind)) as ChangePlanApprovalRequirement['riskKinds'],
   };
 }
@@ -785,6 +1115,26 @@ function applyKnownChange(
       blueprintChanges: blueprint.summary,
     };
   }
+  if (/subscription plans|subscription billing|account billing/i.test(intent.summary)) {
+    const proposedArchitect = ensureSubscriptionsArchitect(architectDraft, now);
+    const blueprint = ensureSubscriptionsBlueprint(blueprintDraft, now);
+    return {
+      architectDraft: proposedArchitect,
+      architectChanges: {
+        changed: true,
+        fields: [
+          'answers.payments',
+          'answers.integrations',
+          'answers.customRequirements',
+          'specification',
+        ],
+        summary:
+          'Recorded recurring subscriptions and server-side billing in Architect planning data.',
+      },
+      blueprintDraft: blueprint.draft,
+      blueprintChanges: blueprint.summary,
+    };
+  }
 
   return {
     architectDraft,
@@ -802,6 +1152,7 @@ export function createBuildChangePlan(options: CreateChangePlanOptions): BuildCh
   const now = options.now ?? new Date();
   const timestamp = now.toISOString();
   const intent = interpretChangeRequest(options.userRequest);
+  const source = options.source ?? 'conversation';
   const baseArchitect =
     options.architectDraft ??
     createArchitectDraft({
@@ -828,9 +1179,13 @@ export function createBuildChangePlan(options: CreateChangePlanOptions): BuildCh
     now,
   });
   const contractChanges = createContractDiff(options.buildContract, proposedBuildContract);
+  const proposedCapabilityResolution = resolveCapabilities(proposedBuildContract, {
+    budgetMode: applied.architectDraft.answers.investmentLevel,
+    now,
+  });
   const proposedTaskGraph = createTaskGraph({
     contract: proposedBuildContract,
-    capabilityResolution: options.capabilityResolution ?? null,
+    capabilityResolution: proposedCapabilityResolution,
     existingGraph: options.taskGraph ?? null,
     now,
   });
@@ -859,12 +1214,21 @@ export function createBuildChangePlan(options: CreateChangePlanOptions): BuildCh
     affectedApis
   );
   const affectedCapabilities = inferAffectedCapabilities(intent, contractChanges);
+  const affectedSystems = affectedSystemsForChange(intent, contractChanges);
+  const requiredChanges = requiredChangesForPlan(
+    applied.blueprintChanges,
+    contractChanges
+  );
+  const estimatedMonthlyServices = monthlyServiceEstimates(
+    intent,
+    contractChanges
+  );
   const risks = risksForChange(
     options.userRequest,
     contractChanges,
     fileImpact.protectedUserEditedFiles
   );
-  const explicitApprovalRequirement = approvalForRisks(risks);
+  const explicitApprovalRequirement = approvalForRisks(risks, source);
   const status: BuildChangePlanStatus = explicitApprovalRequirement.required
     ? 'approval-required'
     : 'draft';
@@ -875,6 +1239,7 @@ export function createBuildChangePlan(options: CreateChangePlanOptions): BuildCh
     id: createId('change-plan', now),
     projectId: options.projectId,
     userRequest: options.userRequest,
+    source,
     interpretedIntent: intent,
     architectChanges: applied.architectChanges,
     blueprintChanges: applied.blueprintChanges,
@@ -884,6 +1249,9 @@ export function createBuildChangePlan(options: CreateChangePlanOptions): BuildCh
     affectedModels,
     affectedApis,
     affectedFiles: fileImpact.affectedFiles,
+    affectedSystems,
+    requiredChanges,
+    estimatedMonthlyServices,
     protectedUserEditedFiles: fileImpact.protectedUserEditedFiles,
     newTasks: reconciled.newTasks,
     invalidatedTasks: reconciled.invalidatedTasks,
@@ -913,6 +1281,7 @@ export function createBuildChangePlan(options: CreateChangePlanOptions): BuildCh
     proposedArchitectDraft: applied.architectDraft,
     proposedBlueprintDraft: applied.blueprintDraft,
     proposedBuildContract,
+    proposedCapabilityResolution,
     proposedTaskGraph,
     createdAt: timestamp,
     updatedAt: timestamp,
@@ -927,6 +1296,151 @@ export function approveBuildChangePlan(
     ...plan,
     status: 'approved',
     updatedAt: now.toISOString(),
+  };
+}
+
+export function markBuildChangePlanStatus(
+  plan: BuildChangePlan,
+  status: BuildChangePlanStatus,
+  now = new Date()
+): BuildChangePlan {
+  return {
+    ...plan,
+    status,
+    updatedAt: now.toISOString(),
+  };
+}
+
+export function formatBuildChangePlanSummary(plan: BuildChangePlan): string {
+  const systems = plan.affectedSystems.length
+    ? plan.affectedSystems.join(', ')
+    : 'No implementation systems inferred yet';
+  const changes = plan.requiredChanges.length
+    ? plan.requiredChanges.map((change) => `- ${change}`).join('\n')
+    : '- Matrix needs a more specific change request before engineering.';
+  const taskCount = plan.newTasks.length + plan.invalidatedTasks.length;
+  const costs = plan.estimatedMonthlyServices.length
+    ? plan.estimatedMonthlyServices
+        .map(
+          (estimate) =>
+            `- ${estimate.service}: ${estimate.estimatedMonthlyCostBand.replace(/-/g, ' ')} estimate${estimate.freeTierAvailable === true ? '; free-tier path available' : ''}.`
+        )
+        .join('\n')
+    : '- No new monthly service cost was identified.';
+  const risks = plan.risks.length
+    ? plan.risks.map((risk) => `- ${risk.message}`).join('\n')
+    : '- No material architecture risks identified.';
+
+  return [
+    '**Proposed project change**',
+    '',
+    plan.interpretedIntent.summary,
+    '',
+    `**Affected systems:** ${systems}`,
+    `**Estimated effort:** ${plan.estimatedEffort}`,
+    `**Engineering tasks affected:** ${taskCount}`,
+    '',
+    '**Required changes**',
+    changes,
+    '',
+    '**Estimated monthly services**',
+    costs,
+    '',
+    '**Risks and assumptions**',
+    risks,
+    '',
+    '**Approval required**',
+    'Reply `Approve change` to apply this plan and run only its affected engineering tasks, or `Cancel change` to discard it.',
+  ].join('\n');
+}
+
+export function applyApprovedBuildChangePlan(
+  options: ApplyApprovedChangePlanOptions
+): AppliedBuildChange {
+  const now = options.now ?? new Date();
+  const {
+    proposedArchitectDraft,
+    proposedBlueprintDraft,
+    proposedBuildContract,
+    proposedCapabilityResolution,
+    proposedTaskGraph,
+  } = options.plan;
+  if (
+    !proposedArchitectDraft ||
+    !proposedBlueprintDraft ||
+    !proposedBuildContract ||
+    !proposedCapabilityResolution ||
+    !proposedTaskGraph
+  ) {
+    throw new Error(
+      'The approved change plan is incomplete and cannot be applied safely.'
+    );
+  }
+  if (!['approval-required', 'approved'].includes(options.plan.status)) {
+    throw new Error(
+      `Change plan ${options.plan.id} cannot be applied from status ${options.plan.status}.`
+    );
+  }
+
+  const approved = markBuildChangePlanStatus(
+    approveBuildChangePlan(options.plan, now),
+    'ready-to-execute',
+    now
+  );
+  let intelligenceCore = createIntelligenceCore({
+    projectId: options.projectId,
+    projectName: proposedBlueprintDraft.projectName,
+    architectDraft: proposedArchitectDraft,
+    buildManifest: options.buildManifest ?? null,
+    blueprintDraft: proposedBlueprintDraft,
+    buildContract: proposedBuildContract,
+    capabilityResolution: proposedCapabilityResolution,
+    taskGraph: proposedTaskGraph,
+    repositoryModel: options.repositoryModel ?? null,
+    engineeringMemory: options.engineeringMemory ?? null,
+    existingCore: options.intelligenceCore ?? null,
+    now,
+  });
+  intelligenceCore = addIntelligenceRecord(intelligenceCore, {
+    domain: 'conversation',
+    category: 'decision',
+    key: `approved-change:${approved.id}`,
+    value: {
+      request: approved.userRequest,
+      intent: approved.interpretedIntent.summary,
+      affectedSystems: approved.affectedSystems,
+      affectedCapabilities: approved.affectedCapabilities,
+      requiredChanges: approved.requiredChanges,
+      estimatedEffort: approved.estimatedEffort,
+      approvedAt: now.toISOString(),
+    },
+    source: {
+      kind: 'user-approved',
+      id: approved.id,
+      updatedAt: now.toISOString(),
+    },
+    confidence: approved.interpretedIntent.confidence,
+    status: 'approved',
+    userApproved: true,
+    validationStrategy: 'user-approval',
+    evidenceReferences: [
+      {
+        kind: 'note',
+        ref: approved.id,
+        description: 'Explicitly approved conversational project change.',
+      },
+    ],
+    now,
+  });
+
+  return {
+    plan: approved,
+    architectDraft: proposedArchitectDraft,
+    blueprintDraft: proposedBlueprintDraft,
+    buildContract: proposedBuildContract,
+    capabilityResolution: proposedCapabilityResolution,
+    taskGraph: proposedTaskGraph,
+    intelligenceCore,
   };
 }
 
@@ -952,19 +1466,50 @@ export function cancelBuildChangePlan(
 export function isChangePlanStale(
   plan: BuildChangePlan,
   options: {
+    architectDraft?: ArchitectDraft | null;
     blueprintDraft?: BlueprintDraft | null;
+    buildContract?: BuildContract | null;
+    taskGraph?: TaskGraph | null;
     repositoryModel?: RepositoryModel | null;
   }
 ): boolean {
+  const architectChanged =
+    options.architectDraft?.updatedAt &&
+    plan.sourceVersions.architectDraftUpdatedAt &&
+    Date.parse(options.architectDraft.updatedAt) >
+      Date.parse(plan.sourceVersions.architectDraftUpdatedAt);
   const blueprintChanged =
     options.blueprintDraft?.updatedAt &&
     plan.sourceVersions.blueprintDraftUpdatedAt &&
     Date.parse(options.blueprintDraft.updatedAt) >
       Date.parse(plan.sourceVersions.blueprintDraftUpdatedAt);
+  const contractChanged =
+    options.buildContract &&
+    ((plan.sourceVersions.buildContractId &&
+      options.buildContract.id !== plan.sourceVersions.buildContractId) ||
+      (plan.sourceVersions.buildContractVersion !== undefined &&
+        options.buildContract.contractVersion !==
+          plan.sourceVersions.buildContractVersion) ||
+      (plan.sourceVersions.buildContractUpdatedAt &&
+        Date.parse(options.buildContract.updatedAt) >
+          Date.parse(plan.sourceVersions.buildContractUpdatedAt)));
+  const taskGraphChanged =
+    options.taskGraph &&
+    ((plan.sourceVersions.taskGraphId &&
+      options.taskGraph.id !== plan.sourceVersions.taskGraphId) ||
+      (plan.sourceVersions.taskGraphUpdatedAt &&
+        Date.parse(options.taskGraph.updatedAt) >
+          Date.parse(plan.sourceVersions.taskGraphUpdatedAt)));
   const repositoryChanged =
     options.repositoryModel?.repositoryFingerprint &&
     plan.sourceVersions.repositoryFingerprint &&
     options.repositoryModel.repositoryFingerprint !==
       plan.sourceVersions.repositoryFingerprint;
-  return Boolean(blueprintChanged || repositoryChanged);
+  return Boolean(
+    architectChanged ||
+      blueprintChanged ||
+      contractChanged ||
+      taskGraphChanged ||
+      repositoryChanged
+  );
 }

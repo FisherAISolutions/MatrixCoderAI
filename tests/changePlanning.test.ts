@@ -1,14 +1,19 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+  applyApprovedBuildChangePlan,
   approveBuildChangePlan,
   cancelBuildChangePlan,
   createBuildChangePlan,
   deserializeBuildChangePlan,
+  formatBuildChangePlanSummary,
+  isChangePlanApprovalMessage,
+  isChangePlanCancellationMessage,
   isChangePlanStale,
   serializeBuildChangePlan,
 } from '@/lib/change-planning';
 import { createBuildContract } from '@/lib/build-contract';
+import { resolveCapabilities } from '@/lib/capabilities';
 import { createTaskGraph } from '@/lib/task-graph';
 import {
   createMatrixProject,
@@ -192,11 +197,22 @@ function baseState() {
     blueprintDraft,
     now: new Date('2026-07-20T00:00:00.000Z'),
   });
-  const taskGraph = createTaskGraph({
-    contract: buildContract,
+  const capabilityResolution = resolveCapabilities(buildContract, {
+    budgetMode: architectDraft.answers.investmentLevel,
     now: new Date('2026-07-20T00:00:00.000Z'),
   });
-  return { architectDraft, blueprintDraft, buildContract, taskGraph };
+  const taskGraph = createTaskGraph({
+    contract: buildContract,
+    capabilityResolution,
+    now: new Date('2026-07-20T00:00:00.000Z'),
+  });
+  return {
+    architectDraft,
+    blueprintDraft,
+    buildContract,
+    capabilityResolution,
+    taskGraph,
+  };
 }
 
 describe('change planning', () => {
@@ -217,7 +233,7 @@ describe('change planning', () => {
     expect(plan.proposedArchitectDraft?.answers.customRequirements).toContain(
       'multiple child profiles'
     );
-    expect(plan.status).toBe('draft');
+    expect(plan.status).toBe('approval-required');
   });
 
   it('preserves unaffected completed tasks while creating or invalidating affected tasks', () => {
@@ -372,5 +388,107 @@ describe('change planning', () => {
         repositoryModel: repositoryModel(),
       })
     ).toBe(true);
+  });
+
+  it('plans subscription changes as localized approved architecture work', () => {
+    const state = baseState();
+    const passedGraph = {
+      ...state.taskGraph,
+      tasks: state.taskGraph.tasks.map((task) => ({
+        ...task,
+        status: 'passed' as const,
+      })),
+    };
+    const plan = createBuildChangePlan({
+      projectId: 'project-story',
+      userRequest: 'Add subscriptions.',
+      architectDraft: state.architectDraft,
+      blueprintDraft: state.blueprintDraft,
+      buildContract: state.buildContract,
+      taskGraph: passedGraph,
+      repositoryModel: repositoryModel(),
+      now,
+    });
+
+    expect(plan.status).toBe('approval-required');
+    expect(plan.explicitApprovalRequirement.required).toBe(true);
+    expect(plan.affectedSystems).toContain('Subscription billing');
+    expect(plan.affectedCapabilities).toEqual(
+      expect.arrayContaining(['billing', 'subscriptions'])
+    );
+    expect(plan.proposedBlueprintDraft?.routes.map((route) => route.path)).toEqual(
+      expect.arrayContaining(['/pricing', '/account/billing'])
+    );
+    expect(
+      plan.proposedBlueprintDraft?.dataModels.map((model) => model.name)
+    ).toEqual(expect.arrayContaining(['Plan', 'Subscription']));
+    expect(
+      plan.proposedCapabilityResolution?.capabilities.map(
+        (capability) => capability.capabilityId
+      )
+    ).toEqual(expect.arrayContaining(['billing', 'subscriptions']));
+    expect(
+      [...plan.newTasks, ...plan.invalidatedTasks].map((task) => task.taskId)
+    ).toContain('task-billing-subscriptions');
+    expect(plan.preservedTasks.length).toBeGreaterThan(0);
+    expect(plan.preservedTasks.every((task) => task.status === 'passed')).toBe(
+      true
+    );
+    expect(plan.estimatedMonthlyServices[0]).toEqual(
+      expect.objectContaining({
+        category: 'billing',
+        estimatedMonthlyCostBand: 'usage-based',
+      })
+    );
+    expect(formatBuildChangePlanSummary(plan)).toContain('Approve change');
+  });
+
+  it('applies an approved subscription plan without mutating the prior sources', () => {
+    const state = baseState();
+    const originalArchitect = JSON.parse(JSON.stringify(state.architectDraft));
+    const originalBlueprint = JSON.parse(JSON.stringify(state.blueprintDraft));
+    const originalContract = JSON.parse(JSON.stringify(state.buildContract));
+    const plan = createBuildChangePlan({
+      projectId: 'project-story',
+      userRequest: 'Add subscriptions.',
+      ...state,
+      repositoryModel: repositoryModel(),
+      now,
+    });
+    const applied = applyApprovedBuildChangePlan({
+      plan,
+      projectId: 'project-story',
+      repositoryModel: repositoryModel(),
+      now,
+    });
+
+    expect(applied.plan.status).toBe('ready-to-execute');
+    expect(applied.architectDraft.answers.payments).toBe(true);
+    expect(applied.blueprintDraft.integrations.map((item) => item.name)).toContain(
+      'Stripe'
+    );
+    expect(applied.buildContract.billingRequirements.length).toBeGreaterThan(0);
+    expect(
+      applied.capabilityResolution.capabilities.map(
+        (capability) => capability.capabilityId
+      )
+    ).toEqual(expect.arrayContaining(['billing', 'subscriptions']));
+    expect(
+      applied.intelligenceCore.conversation.records.some(
+        (record) =>
+          record.key === `approved-change:${plan.id}` &&
+          record.userApproved
+      )
+    ).toBe(true);
+    expect(state.architectDraft).toEqual(originalArchitect);
+    expect(state.blueprintDraft).toEqual(originalBlueprint);
+    expect(state.buildContract).toEqual(originalContract);
+  });
+
+  it('recognizes explicit approval and cancellation language only', () => {
+    expect(isChangePlanApprovalMessage('Approve change')).toBe(true);
+    expect(isChangePlanCancellationMessage('Cancel change')).toBe(true);
+    expect(isChangePlanApprovalMessage('Maybe add subscriptions')).toBe(false);
+    expect(isChangePlanCancellationMessage('Keep building')).toBe(false);
   });
 });

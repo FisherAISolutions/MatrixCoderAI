@@ -45,7 +45,19 @@ export function deserializeBuildChangePlan(raw: string): BuildChangePlan | null 
     ) {
       return null;
     }
-    return parsed as BuildChangePlan;
+    return {
+      ...(parsed as BuildChangePlan),
+      source: parsed.source ?? 'conversation',
+      affectedSystems: Array.isArray(parsed.affectedSystems)
+        ? parsed.affectedSystems
+        : [],
+      requiredChanges: Array.isArray(parsed.requiredChanges)
+        ? parsed.requiredChanges
+        : [],
+      estimatedMonthlyServices: Array.isArray(parsed.estimatedMonthlyServices)
+        ? parsed.estimatedMonthlyServices
+        : [],
+    };
   } catch {
     return null;
   }

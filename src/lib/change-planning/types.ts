@@ -1,6 +1,8 @@
 import type { ArchitectDraft } from '@/lib/matrix-ai-architect/types';
 import type { BlueprintDraft } from '@/lib/blueprint-studio/blueprintDraft';
 import type { BuildContract } from '@/lib/build-contract';
+import type { CapabilityResolutionResult } from '@/lib/capabilities';
+import type { MatrixIntelligenceCore } from '@/lib/intelligence-core';
 import type { TaskGraph, TaskGraphTask } from '@/lib/task-graph';
 
 export const CHANGE_PLAN_SCHEMA_VERSION = 1;
@@ -39,6 +41,22 @@ export type ChangeRiskKind =
   | 'broad-regeneration-risk';
 
 export type ChangeEffortEstimate = 'small' | 'medium' | 'large' | 'platform';
+
+export type ChangeCostBand =
+  | 'no-new-monthly-cost'
+  | 'low'
+  | 'moderate'
+  | 'high'
+  | 'usage-based'
+  | 'unknown';
+
+export interface ChangeServiceCostEstimate {
+  category: string;
+  service: string;
+  estimatedMonthlyCostBand: ChangeCostBand;
+  freeTierAvailable: boolean | 'unknown';
+  assumptions: string[];
+}
 
 export interface BuildChangeRequest {
   schemaVersion: typeof CHANGE_PLAN_SCHEMA_VERSION;
@@ -137,6 +155,7 @@ export interface BuildChangePlan {
   id: string;
   projectId?: string;
   userRequest: string;
+  source: ChangeRequestSource;
   interpretedIntent: ChangeIntent;
   architectChanges: ArchitectChangeSummary;
   blueprintChanges: BlueprintChangeSummary;
@@ -146,6 +165,9 @@ export interface BuildChangePlan {
   affectedModels: string[];
   affectedApis: string[];
   affectedFiles: string[];
+  affectedSystems: string[];
+  requiredChanges: string[];
+  estimatedMonthlyServices: ChangeServiceCostEstimate[];
   protectedUserEditedFiles: string[];
   newTasks: ChangePlanTaskSummary[];
   invalidatedTasks: ChangePlanTaskSummary[];
@@ -159,9 +181,30 @@ export interface BuildChangePlan {
   proposedArchitectDraft?: ArchitectDraft;
   proposedBlueprintDraft?: BlueprintDraft;
   proposedBuildContract?: BuildContract;
+  proposedCapabilityResolution?: CapabilityResolutionResult;
   proposedTaskGraph?: TaskGraph;
   createdAt: string;
   updatedAt: string;
+}
+
+export interface ApplyApprovedChangePlanOptions {
+  plan: BuildChangePlan;
+  projectId: string;
+  buildManifest?: import('@/lib/build-suite/buildManifest').BuildManifest | null;
+  repositoryModel?: import('@/lib/repository-model').RepositoryModel | null;
+  engineeringMemory?: import('@/lib/engineering-memory').EngineeringMemory | null;
+  intelligenceCore?: MatrixIntelligenceCore | null;
+  now?: Date;
+}
+
+export interface AppliedBuildChange {
+  plan: BuildChangePlan;
+  architectDraft: ArchitectDraft;
+  blueprintDraft: BlueprintDraft;
+  buildContract: BuildContract;
+  capabilityResolution: CapabilityResolutionResult;
+  taskGraph: TaskGraph;
+  intelligenceCore: MatrixIntelligenceCore;
 }
 
 export interface CreateChangePlanOptions {
@@ -173,7 +216,7 @@ export interface CreateChangePlanOptions {
   blueprintDraft?: BlueprintDraft | null;
   buildContract?: BuildContract | null;
   taskGraph?: TaskGraph | null;
-  capabilityResolution?: import('@/lib/capabilities').CapabilityResolutionResult | null;
+  capabilityResolution?: CapabilityResolutionResult | null;
   repositoryModel?: import('@/lib/repository-model').RepositoryModel | null;
   now?: Date;
 }

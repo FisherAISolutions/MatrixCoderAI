@@ -724,6 +724,55 @@ function buildTaskDrafts(
     );
   }
 
+  const billingTaskId = stableTaskId('billing', 'subscriptions');
+  if (hasAny(capabilityIds, ['billing', 'subscriptions'])) {
+    tasks.push(
+      baseTask({
+        id: billingTaskId,
+        title: 'Implement subscription billing',
+        description:
+          'Add the approved plan model, account subscription lifecycle, server-only provider boundary, and billing reconciliation workflow.',
+        category: 'backend',
+        assignedDiscipline: 'backend',
+        priority: 'high',
+        dependencies: unique([
+          needsDatabase ? databaseTaskId : FOUNDATION_TASK_ID,
+          ...(envVars.length > 0 ? [environmentTaskId] : []),
+          ...(hasAny(capabilityIds, ['authentication']) ? [authTaskId] : []),
+        ]),
+        capabilityIds: unique(
+          ['billing', 'subscriptions'].filter((id) => capabilityIds.has(id))
+        ),
+        sourceRequirementIds: requirementIdsForCapabilities(
+          capabilityResolution,
+          ['billing', 'subscriptions']
+        ),
+        allowedFileScope: [
+          'src/app/api/billing/**',
+          'src/app/api/webhooks/**',
+          'src/lib/**',
+          'src/types/**',
+          'supabase/**',
+        ],
+        expectedFiles: [
+          'src/lib/billing.ts',
+          'src/app/api/billing/route.ts',
+          'src/app/api/webhooks/stripe/route.ts',
+        ],
+        expectedOutputs: [
+          'Typed subscription lifecycle',
+          'Server-only billing API boundary',
+          'Idempotent provider reconciliation',
+        ],
+        acceptanceChecks: [
+          'Billing secrets are never exposed to client bundles.',
+          'Subscription state is reconciled through a guarded server boundary.',
+          'Existing completed capabilities remain unchanged.',
+        ],
+      })
+    );
+  }
+
   const storageTaskId = stableTaskId('storage', 'media-boundary');
   if (hasAny(capabilityIds, ['file-storage', 'image-upload', 'media-library'])) {
     tasks.push(
