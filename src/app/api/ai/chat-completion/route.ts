@@ -7,6 +7,7 @@ import {
   parseJsonBody,
   rejectIfRequestTooLarge,
 } from '@/lib/api/hardening';
+import { guardCostlyOperation } from '@/lib/api/costGuard';
 
 /**
  * Chat-completion proxy.
@@ -99,6 +100,28 @@ export async function POST(request: NextRequest) {
         { status: 400 }
       );
     }
+
+    const systemText = messages
+      .filter((message) => message.role === 'system')
+      .map((message) => (typeof message.content === 'string' ? message.content : ''))
+      .join(' ')
+      .toLowerCase();
+    const category = systemText.includes('auto-fix') || systemText.includes('repair')
+      ? 'repair'
+      : systemText.includes('architect')
+        ? 'architect-ai'
+        : systemText.includes('blueprint')
+          ? 'blueprint-ai'
+          : systemText.includes('task') || systemText.includes('engineering foreman')
+            ? 'task-execution'
+            : 'workspace-ai';
+    const guarded = await guardCostlyOperation(request, {
+      category,
+      killSwitch: category === 'task-execution' ? 'task-builds' : 'ai',
+      ratePolicy: { limit: 30, windowMs: 60_000 },
+      rateScope: 'ai',
+    });
+    if (!guarded.ok) return guarded.response;
 
     if (provider !== 'OPEN_AI') {
       return NextResponse.json(
@@ -199,6 +222,7 @@ export async function POST(request: NextRequest) {
           'Content-Type': 'text/event-stream',
           'Cache-Control': 'no-cache',
           Connection: 'keep-alive',
+          'x-operation-id': guarded.operationId,
         },
       });
     }
@@ -210,7 +234,9 @@ export async function POST(request: NextRequest) {
       ...params,
     });
 
-    return NextResponse.json(response);
+    return NextResponse.json(response, {
+      headers: { 'x-operation-id': guarded.operationId },
+    });
   } catch (error) {
     const formatted = formatErrorResponse(error, body?.provider);
     logError('API Route Error', error, {

@@ -17,6 +17,7 @@ import {
   extractJsonObject,
   styleBriefFromJson,
 } from '@/lib/styleInspirationPrompt';
+import { guardCostlyOperation } from '@/lib/api/costGuard';
 
 type AnalyzeImageInput = {
   name: string;
@@ -38,6 +39,13 @@ export async function POST(request: NextRequest) {
   if (tooLarge) return tooLarge;
 
   try {
+    const guarded = await guardCostlyOperation(request, {
+      category: 'style-analysis',
+      killSwitch: 'ai',
+      ratePolicy: { limit: 10, windowMs: 60_000 },
+    });
+    if (!guarded.ok) return guarded.response;
+
     const parsedBody = await parseJsonBody<AnalyzeRequestBody>(request);
     if (!parsedBody.ok) return parsedBody.response;
     const body = parsedBody.body ?? {};
@@ -140,7 +148,7 @@ export async function POST(request: NextRequest) {
       styleBrief,
       promptBlock,
       model: PRIMARY_MODEL,
-    });
+    }, { headers: { 'x-operation-id': guarded.operationId } });
   } catch (error) {
     logError('style-inspiration analyze error', error, {
       operation: 'style-inspiration-analyze',

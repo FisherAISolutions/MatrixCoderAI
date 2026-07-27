@@ -1,6 +1,8 @@
 import { callAIEndpoint } from './aiClient';
 import { buildChatCompletionRequest } from './chatRequestBuilder';
 import { createAbortError, isAbortLikeError } from '@/lib/generation/cancellation';
+import { getAuthenticatedRequestHeaders } from '@/lib/supabase';
+import { createOperationId } from '@/lib/operations/operationId';
 
 const ENDPOINT = '/api/ai/chat-completion';
 
@@ -35,7 +37,11 @@ export async function getStreamingChatCompletion(
     if (signal?.aborted) throw createAbortError();
     const response = await fetch(ENDPOINT, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: {
+        'Content-Type': 'application/json',
+        'x-operation-id': createOperationId('ai'),
+        ...(await getAuthenticatedRequestHeaders()),
+      },
       body: JSON.stringify(buildChatCompletionRequest({
         provider,
         model,

@@ -12,6 +12,7 @@ import type {
   VercelDeploymentResult,
   VercelProjectConfig,
 } from '@/lib/deployment/vercelIntegration';
+import type { VercelDeploymentPhase } from './vercelDeploymentState';
 
 export type VercelFlowLogLevel = 'info' | 'warning' | 'error';
 export type VercelFlowTerminalStatus = 'ready' | 'failed' | 'timeout';
@@ -54,6 +55,7 @@ export interface VercelDeploymentFlowResult {
   lastDeploymentTime: string;
   logs: VercelFlowLogEntry[];
   error?: string;
+  phase?: VercelDeploymentPhase;
 }
 
 export interface VercelDeploymentFlowInput {
@@ -65,6 +67,8 @@ export interface VercelDeploymentFlowInput {
   now?: () => string;
   sleep?: (ms: number) => Promise<void>;
   onLog?: (entry: VercelFlowLogEntry) => void;
+  onPhase?: (phase: VercelDeploymentPhase) => void;
+  signal?: AbortSignal;
 }
 
 export interface VercelConnectionTestResult {
@@ -219,22 +223,41 @@ export async function runVercelDeploymentFlow({
   now = defaultNow,
   sleep = defaultSleep,
   onLog,
+  onPhase,
+  signal,
 }: VercelDeploymentFlowInput): Promise<VercelDeploymentFlowResult> {
   const logs: VercelFlowLogEntry[] = [];
   const log = createLogger(logs, token, now, onLog);
   const projectName = dryRun.projectName;
   const completedAt = () => now();
+  let phase: VercelDeploymentPhase = 'readiness-check';
+  const setPhase = (next: VercelDeploymentPhase) => {
+    phase = next;
+    onPhase?.(next);
+  };
+  const assertNotCancelled = () => {
+    if (signal?.aborted) {
+      setPhase('cancelled');
+      throw new DOMException('Vercel deployment was cancelled.', 'AbortError');
+    }
+  };
 
   try {
+    onPhase?.(phase);
     if (!token.trim()) {
+      setPhase('configuration-required');
       throw new Error('Vercel token is required for deployment.');
     }
     assertRunnableDryRun(dryRun);
+    assertNotCancelled();
 
     const client = createClient(token);
+    setPhase('preparing-files');
     log('info', 'Validating Vercel connection before deployment.');
     await client.validateToken();
+    assertNotCancelled();
 
+    setPhase('creating-or-finding-project');
     log('info', `Creating or finding Vercel project ${dryRun.request.project.projectName}.`);
     const project = await client.createOrFindProject(dryRun.request.project);
     const teamId = getProjectTeamId(dryRun.request.project);
@@ -243,9 +266,13 @@ export async function runVercelDeploymentFlow({
       projectId: project.id,
     };
 
+    assertNotCancelled();
+    setPhase('uploading');
     log('info', `Uploading ${dryRun.request.files.length} generated project files.`);
     await client.uploadDeploymentFiles(dryRun.request.files, teamId);
 
+    assertNotCancelled();
+    setPhase('building');
     log('info', 'Creating Vercel production deployment.');
     const deployment = await client.createDeployment({
       project: projectConfig,
@@ -268,6 +295,7 @@ export async function runVercelDeploymentFlow({
       log('info', `Deployment status ${latestStatus.state} (${attempt}/${maxPolls}).`);
 
       if (latestStatus.state === 'READY') {
+        setPhase('deployed');
         const deploymentUrl = getDeploymentUrl(deployment, latestStatus);
         return {
           success: true,
@@ -279,6 +307,7 @@ export async function runVercelDeploymentFlow({
           productionUrl: deploymentUrl,
           lastDeploymentTime: completedAt(),
           logs,
+          phase,
         };
       }
 
@@ -287,6 +316,7 @@ export async function runVercelDeploymentFlow({
       }
 
       if (attempt < maxPolls) {
+        assertNotCancelled();
         await sleep(pollIntervalMs);
       }
     }
@@ -303,9 +333,14 @@ export async function runVercelDeploymentFlow({
       productionUrl: deploymentUrl,
       lastDeploymentTime: completedAt(),
       logs,
+      phase,
       error: 'Timed out while waiting for Vercel deployment readiness.',
     };
   } catch (error) {
+    const failedFrom = phase as VercelDeploymentPhase;
+    if (failedFrom !== 'cancelled' && failedFrom !== 'configuration-required') {
+      setPhase('failed');
+    }
     const message = cleanError(error, token);
     log('error', message);
     return {
@@ -314,6 +349,7 @@ export async function runVercelDeploymentFlow({
       projectName,
       lastDeploymentTime: completedAt(),
       logs,
+      phase,
       error: message,
     };
   }

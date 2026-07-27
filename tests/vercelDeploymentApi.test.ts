@@ -11,7 +11,7 @@ function mockFetch(payload: unknown, ok = true) {
   const fetchMock = vi.fn(async () => ({
     ok,
     json: async () => payload,
-  })) as unknown as typeof fetch;
+  }));
   vi.stubGlobal('fetch', fetchMock);
   return fetchMock;
 }
@@ -63,10 +63,10 @@ describe('Vercel deployment API wrapper', () => {
         method: 'POST',
         body: JSON.stringify({
           action: 'test-connection',
-          token: 'secret-token',
         }),
       })
     );
+    expect(JSON.stringify(fetchMock.mock.calls)).not.toContain('secret-token');
   });
 
   it('posts project preparation dry-runs to the internal server route', async () => {
@@ -89,11 +89,11 @@ describe('Vercel deployment API wrapper', () => {
       expect.objectContaining({
         body: JSON.stringify({
           action: 'prepare-project',
-          token: 'secret-token',
           dryRun,
         }),
       })
     );
+    expect(JSON.stringify(fetchMock.mock.calls)).not.toContain('secret-token');
   });
 
   it('posts deploy requests to the internal server route', async () => {

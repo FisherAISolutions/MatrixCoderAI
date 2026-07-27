@@ -8,18 +8,21 @@ import type {
   VercelServerAction,
   VercelServerActionResponse,
 } from '@/lib/deployment/vercelServerActions';
+import { getAuthenticatedRequestHeaders } from '@/lib/supabase';
+import { createOperationId } from '@/lib/operations/operationId';
 
 async function postVercelAction<T>(
   action: VercelServerAction,
-  token: string,
   dryRun?: VercelDeploymentDryRunSummary
 ): Promise<T> {
   const response = await fetch('/api/deployment/vercel', {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
+      'x-operation-id': createOperationId('deploy'),
+      ...(await getAuthenticatedRequestHeaders()),
     },
-    body: JSON.stringify({ action, token, dryRun }),
+    body: JSON.stringify({ action, dryRun }),
   });
   const payload = (await response.json()) as VercelServerActionResponse;
   if (payload.result) {
@@ -32,25 +35,34 @@ async function postVercelAction<T>(
 }
 
 export function testVercelConnectionViaServer(
-  token: string
+  _legacyToken?: string
 ): Promise<VercelConnectionTestResult> {
-  return postVercelAction<VercelConnectionTestResult>('test-connection', token);
+  return postVercelAction<VercelConnectionTestResult>('test-connection');
 }
 
 export function createOrFindVercelProjectViaServer(
-  token: string,
-  dryRun: VercelDeploymentDryRunSummary
+  dryRunOrLegacyToken: VercelDeploymentDryRunSummary | string,
+  legacyDryRun?: VercelDeploymentDryRunSummary
 ): Promise<VercelProjectPrepareResult> {
+  const dryRun =
+    typeof dryRunOrLegacyToken === 'string' ? legacyDryRun : dryRunOrLegacyToken;
+  if (!dryRun) {
+    return Promise.reject(new Error('Vercel deployment dry run is required.'));
+  }
   return postVercelAction<VercelProjectPrepareResult>(
     'prepare-project',
-    token,
     dryRun
   );
 }
 
 export function deployToVercelViaServer(
-  token: string,
-  dryRun: VercelDeploymentDryRunSummary
+  dryRunOrLegacyToken: VercelDeploymentDryRunSummary | string,
+  legacyDryRun?: VercelDeploymentDryRunSummary
 ): Promise<VercelDeploymentFlowResult> {
-  return postVercelAction<VercelDeploymentFlowResult>('deploy', token, dryRun);
+  const dryRun =
+    typeof dryRunOrLegacyToken === 'string' ? legacyDryRun : dryRunOrLegacyToken;
+  if (!dryRun) {
+    return Promise.reject(new Error('Vercel deployment dry run is required.'));
+  }
+  return postVercelAction<VercelDeploymentFlowResult>('deploy', dryRun);
 }

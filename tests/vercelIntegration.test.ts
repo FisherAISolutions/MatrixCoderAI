@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   detectVercelEnvironment,
   getVercelConnectionState,
@@ -8,6 +8,10 @@ import {
 } from '@/lib/deployment/vercelIntegration';
 
 describe('Vercel integration foundation', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
   it('detects a private Vercel token env var', () => {
     expect(
       detectVercelEnvironment({
@@ -28,6 +32,11 @@ describe('Vercel integration foundation', () => {
       hasToken: true,
       tokenSource: 'NEXT_PUBLIC_VERCEL_TOKEN_CONFIGURED',
     });
+  });
+
+  it('uses only browser-safe configuration detection in a client runtime', () => {
+    vi.stubGlobal('window', {});
+    expect(() => detectVercelEnvironment()).not.toThrow();
   });
 
   it('reports missing token before connection can start', () => {

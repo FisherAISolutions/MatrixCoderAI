@@ -1,3 +1,5 @@
+import { getAuthenticatedRequestHeaders } from '@/lib/supabase';
+
 export async function callAIEndpoint(
   endpoint: string,
   payload: object,
@@ -6,7 +8,10 @@ export async function callAIEndpoint(
   try {
     const response = await fetch(endpoint, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: {
+        'Content-Type': 'application/json',
+        ...(await getAuthenticatedRequestHeaders()),
+      },
       body: JSON.stringify(payload),
       signal: options.signal,
     });

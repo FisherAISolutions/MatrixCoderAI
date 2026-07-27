@@ -63,6 +63,12 @@ type VercelEnv = Record<string, string | undefined>;
 
 function defaultEnv(): VercelEnv {
   if (typeof process === 'undefined') return {};
+  if (typeof window !== 'undefined') {
+    return {
+      NEXT_PUBLIC_VERCEL_TOKEN_CONFIGURED:
+        getPublicEnv('NEXT_PUBLIC_VERCEL_TOKEN_CONFIGURED'),
+    };
+  }
   return {
     VERCEL_TOKEN: getOptionalServerEnv('VERCEL_TOKEN'),
     NEXT_PUBLIC_VERCEL_TOKEN_CONFIGURED:

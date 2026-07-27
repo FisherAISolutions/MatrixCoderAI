@@ -10,16 +10,22 @@ export type VercelLocalConfigStatus =
   | 'Ready for future deployment';
 
 export interface VercelLocalConfig {
-  tokenConfigured: boolean;
+  /** @deprecated Credentials are server-side; retained only for old snapshot parsing. */
+  tokenConfigured?: boolean;
+  /** @deprecated Team ownership is configured by VERCEL_TEAM_ID on the server. */
   teamId?: string;
   projectName?: string;
+  rootDirectory?: string;
   savedAt: string;
 }
 
 export interface SaveVercelLocalConfigInput {
+  /** @deprecated Ignored. Never store browser-provided credentials. */
   tokenPlaceholder?: string;
+  /** @deprecated Ignored. Team ownership is server-controlled. */
   teamId?: string;
   projectName?: string;
+  rootDirectory?: string;
   savedAt?: string;
 }
 
@@ -47,19 +53,17 @@ function cleanOptional(value?: string): string | undefined {
 }
 
 function hasConfigDetails(config: VercelLocalConfig | null): boolean {
-  return Boolean(config?.tokenConfigured || config?.teamId || config?.projectName);
+  return Boolean(config?.projectName || config?.rootDirectory);
 }
 
 export function createVercelLocalConfig({
-  tokenPlaceholder,
-  teamId,
   projectName,
+  rootDirectory,
   savedAt = new Date().toISOString(),
 }: SaveVercelLocalConfigInput): VercelLocalConfig {
   return {
-    tokenConfigured: Boolean(tokenPlaceholder?.trim()),
-    teamId: cleanOptional(teamId),
     projectName: cleanOptional(projectName),
+    rootDirectory: cleanOptional(rootDirectory),
     savedAt,
   };
 }
@@ -71,9 +75,8 @@ export function parseVercelLocalConfig(raw: string | null): VercelLocalConfig | 
     if (!parsed || typeof parsed !== 'object') return null;
     if (typeof parsed.savedAt !== 'string') return null;
     return {
-      tokenConfigured: Boolean(parsed.tokenConfigured),
-      teamId: cleanOptional(parsed.teamId),
       projectName: cleanOptional(parsed.projectName),
+      rootDirectory: cleanOptional(parsed.rootDirectory),
       savedAt: parsed.savedAt,
     };
   } catch {
@@ -110,19 +113,21 @@ export function getVercelLocalConfigState({
   environment,
   readinessStatus,
 }: VercelLocalConfigStateInput): VercelLocalConfigState {
-  const tokenAvailable = Boolean(config?.tokenConfigured || environment.hasToken);
+  const tokenAvailable = environment.hasToken;
 
   if (!hasConfigDetails(config)) {
     return {
       status: 'Not configured',
-      message: 'Open Connect Vercel and save local settings when you are ready.',
+      message:
+        'Save the Vercel project name and optional validated root override when you are ready.',
     };
   }
 
   if (!tokenAvailable) {
     return {
       status: 'Missing token',
-      message: 'Add a Vercel token placeholder before future deployment can run.',
+      message:
+        'Configure VERCEL_TOKEN on the Matrix Coder server before deployment.',
     };
   }
 

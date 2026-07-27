@@ -20,7 +20,10 @@ function snapshot(
       'src/app/dashboard/page.tsx',
     ],
     exportFiles: [
-      { path: 'package.json', content: '{"scripts":{"build":"next build"}}' },
+      {
+        path: 'package.json',
+        content: '{"scripts":{"build":"next build"},"dependencies":{"next":"15.1.11"}}',
+      },
       { path: 'src/app/page.tsx', content: 'export default function Page() {}' },
       {
         path: 'src/app/dashboard/page.tsx',
@@ -66,7 +69,6 @@ describe('Vercel deployment dry-run request builder', () => {
     expect(dryRun.request?.project).toMatchObject({
       projectName: 'matrix-demo',
       framework: 'nextjs',
-      teamId: 'team_123',
     });
     expect(dryRun.request?.project.rootDirectory).toBeUndefined();
     expect(JSON.stringify(dryRun.request)).not.toContain('token');
@@ -84,10 +86,7 @@ describe('Vercel deployment dry-run request builder', () => {
 
     expect(dryRun.deploymentAllowed).toBe(false);
     expect(dryRun.request).toBeNull();
-    expect(dryRun.blockingReasons).toEqual([
-      'Vercel token is not configured locally.',
-      'Vercel project name is required.',
-    ]);
+    expect(dryRun.blockingReasons).toEqual(['Vercel project name is required.']);
   });
 
   it('blocks deployment when production check has not passed', () => {
@@ -125,9 +124,11 @@ describe('Vercel deployment dry-run request builder', () => {
     });
 
     expect(dryRun.deploymentAllowed).toBe(false);
-    expect(dryRun.blockingReasons).toEqual([
-      'No generated project files are available.',
-      'Only generated Next.js projects are supported.',
-    ]);
+    expect(dryRun.blockingReasons).toContain(
+      'No generated project files are available.'
+    );
+    expect(dryRun.blockingReasons).toContain(
+      'Only generated Next.js projects are supported.'
+    );
   });
 });

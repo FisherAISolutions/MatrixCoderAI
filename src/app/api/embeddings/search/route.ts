@@ -8,6 +8,8 @@ import {
   requireBearerAuthorization,
   safeApiErrorResponse,
 } from '@/lib/api/hardening';
+import { authenticateServerRequest } from '@/lib/auth/serverAuth';
+import { consumeRateLimit } from '@/lib/operations/rateLimit';
 
 /**
  * POST /api/embeddings/search
@@ -34,6 +36,18 @@ export async function POST(request: NextRequest) {
 
   const authError = requireBearerAuthorization(request);
   if (authError) return authError;
+  try {
+    const user = await authenticateServerRequest(request);
+    const rate = consumeRateLimit(`embedding-search:${user.id}`, {
+      limit: 120,
+      windowMs: 60_000,
+    });
+    if (!rate.allowed) {
+      return NextResponse.json({ error: 'Search rate limit reached.' }, { status: 429 });
+    }
+  } catch {
+    return NextResponse.json({ error: 'Authentication required.' }, { status: 401 });
+  }
 
   const parsed = await parseJsonBody<EmbeddingsSearchRequestBody>(request);
   if (!parsed.ok || !parsed.body) return parsed.response!;

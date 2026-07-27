@@ -10,7 +10,8 @@ export interface LogContext {
 const SECRET_PATTERNS = [
   /sk-[A-Za-z0-9_-]{12,}/g,
   /Bearer\s+[A-Za-z0-9._~-]{12,}/gi,
-  /(OPENAI_API_KEY|ANTHROPIC_API_KEY|GEMINI_API_KEY|PERPLEXITY_API_KEY|VERCEL_TOKEN|SUPABASE_SERVICE_ROLE_KEY)\s*[:=]\s*['"]?[^'",\s}]+/gi,
+  /(OPENAI_API_KEY|ANTHROPIC_API_KEY|GEMINI_API_KEY|PERPLEXITY_API_KEY|VERCEL_TOKEN|SUPABASE_SERVICE_ROLE_KEY|STRIPE_SECRET_KEY|STRIPE_WEBHOOK_SECRET|MATRIX_ERROR_REPORTING_TOKEN)\s*[:=]\s*['"]?[^'",\s}]+/gi,
+  /(?:rk|sk)_(?:live|test)_[A-Za-z0-9]{12,}/g,
 ];
 
 export function redactSecrets(value: unknown): unknown {

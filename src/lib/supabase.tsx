@@ -28,6 +28,13 @@ export const supabase = (supabaseUrl && supabaseAnonKey)
 
 export const isSupabaseConfigured = !!supabase;
 
+export async function getAuthenticatedRequestHeaders(): Promise<Record<string, string>> {
+  if (!supabase) return {};
+  const { data } = await supabase.auth.getSession();
+  const token = data.session?.access_token;
+  return token ? { Authorization: `Bearer ${token}` } : {};
+}
+
 // Auth helpers
 export async function getCurrentUser() {
   if (!supabase) return null;

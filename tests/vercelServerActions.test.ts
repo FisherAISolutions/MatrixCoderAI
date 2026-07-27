@@ -24,7 +24,11 @@ function allowedDryRun(
         teamId: 'team_1',
       } as VercelProjectConfig & { teamId: string },
       files: [
-        { path: 'package.json', content: '{}' },
+        {
+          path: 'package.json',
+          content:
+            '{"scripts":{"build":"next build"},"dependencies":{"next":"15.1.11"}}',
+        },
         { path: 'src/app/page.tsx', content: 'export default function Page() {}' },
       ],
       target: 'production',
@@ -115,7 +119,7 @@ describe('Vercel server actions', () => {
     });
 
     expect(response.success).toBe(false);
-    expect(response.error).toBe('Vercel token is required for this action.');
+    expect(response.error).toBe('VERCEL_TOKEN is not configured.');
   });
 
   it('redacts token text from server action errors', async () => {

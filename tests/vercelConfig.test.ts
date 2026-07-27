@@ -25,7 +25,7 @@ describe('Vercel local config helpers', () => {
     expect(parseVercelLocalConfig(JSON.stringify({ tokenConfigured: true }))).toBeNull();
   });
 
-  it('saves local config without persisting the token value', () => {
+  it('saves only non-secret project config and ignores legacy token/team inputs', () => {
     const storage = memoryStorage();
     const config = saveVercelLocalConfig(
       {
@@ -38,11 +38,11 @@ describe('Vercel local config helpers', () => {
     );
     const raw = storage.getItem(VERCEL_LOCAL_CONFIG_KEY) ?? '';
 
-    expect(config.tokenConfigured).toBe(true);
+    expect(config.tokenConfigured).toBeUndefined();
+    expect(config.teamId).toBeUndefined();
     expect(raw).not.toContain('secret-token');
+    expect(raw).not.toContain('team_123');
     expect(loadVercelLocalConfig(storage)).toMatchObject({
-      tokenConfigured: true,
-      teamId: 'team_123',
       projectName: 'matrix-demo',
     });
   });
@@ -92,7 +92,7 @@ describe('Vercel local config helpers', () => {
           projectName: 'matrix-demo',
           savedAt: '2026-06-29T12:00:00.000Z',
         },
-        environment: { hasToken: false },
+        environment: { hasToken: true },
         readinessStatus: 'Needs production check',
       })
     ).toMatchObject({
@@ -108,7 +108,7 @@ describe('Vercel local config helpers', () => {
           projectName: 'matrix-demo',
           savedAt: '2026-06-29T12:00:00.000Z',
         },
-        environment: { hasToken: false },
+        environment: { hasToken: true },
         readinessStatus: 'Ready to connect',
       })
     ).toMatchObject({

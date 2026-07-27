@@ -339,12 +339,10 @@ export default function DeploymentCenterClient() {
     null
   );
   const [vercelConfigOpen, setVercelConfigOpen] = useState(false);
-  const [vercelTokenInput, setVercelTokenInput] = useState('');
-  const [vercelTeamIdInput, setVercelTeamIdInput] = useState('');
+  const [vercelRootDirectoryInput, setVercelRootDirectoryInput] = useState('');
   const [vercelProjectNameInput, setVercelProjectNameInput] = useState('');
   const [vercelDeployDryRun, setVercelDeployDryRun] =
     useState<VercelDeploymentDryRunSummary | null>(null);
-  const [vercelRuntimeToken, setVercelRuntimeToken] = useState('');
   const [vercelLiveStatus, setVercelLiveStatus] =
     useState<VercelLiveStatus>('Not connected');
   const [vercelLiveMessage, setVercelLiveMessage] = useState<string | null>(
@@ -373,7 +371,7 @@ export default function DeploymentCenterClient() {
       setHistoryEntries(loadDeploymentHistory());
       const loadedConfig = loadVercelLocalConfig();
       setVercelConfig(loadedConfig);
-      setVercelTeamIdInput(loadedConfig?.teamId ?? '');
+      setVercelRootDirectoryInput(loadedConfig?.rootDirectory ?? '');
       setVercelProjectNameInput(loadedConfig?.projectName ?? '');
       const metadata = loadVercelDeploymentMetadata(currentSnapshot.projectName);
       if (metadata) {
@@ -408,18 +406,8 @@ export default function DeploymentCenterClient() {
     productionStatus,
   });
   const vercelEnvironment = detectVercelEnvironment();
-  const runtimeTokenAvailable = Boolean(
-    vercelRuntimeToken.trim() || vercelTokenInput.trim()
-  );
-  const effectiveVercelEnvironment = {
-    ...vercelEnvironment,
-    hasToken:
-      vercelEnvironment.hasToken ||
-      runtimeTokenAvailable ||
-      Boolean(vercelConfig?.tokenConfigured),
-  };
   const vercelConnection = getVercelConnectionState({
-    environment: effectiveVercelEnvironment,
+    environment: vercelEnvironment,
     readinessStatus: vercelReadiness.status,
   });
   const vercelLocalConfigState = getVercelLocalConfigState({
@@ -439,7 +427,7 @@ export default function DeploymentCenterClient() {
   const canRunVercelAction = !vercelActionBusy;
   const canDeployToVercel =
     canRunVercelAction &&
-    Boolean(vercelConfig?.tokenConfigured) &&
+    vercelEnvironment.hasToken &&
     productionStatus === 'Passed' &&
     exportFiles.length > 0;
 
@@ -457,38 +445,25 @@ export default function DeploymentCenterClient() {
   }
 
   function handleSaveVercelConfig() {
-    const token = vercelTokenInput.trim();
-    const tokenPlaceholder =
-      token || vercelRuntimeToken || vercelConfig?.tokenConfigured
-        ? 'configured'
-        : '';
     const config = saveVercelLocalConfig({
-      tokenPlaceholder,
-      teamId: vercelTeamIdInput,
       projectName: vercelProjectNameInput || snapshot.projectName,
+      rootDirectory: vercelRootDirectoryInput,
     });
-    if (token) {
-      setVercelRuntimeToken(token);
-    }
     setVercelConfig(config);
-    setVercelTokenInput('');
-    setVercelTeamIdInput(config.teamId ?? '');
+    setVercelRootDirectoryInput(config.rootDirectory ?? '');
     setVercelProjectNameInput(config.projectName ?? '');
     setVercelDeployDryRun(null);
     recordHistory({
       action: 'Vercel config saved',
-      status: config.tokenConfigured ? 'Ready' : 'Not ready',
-      details:
-        'Saved local Vercel settings. Token text is kept only in memory for this session.',
+      status: vercelEnvironment.hasToken ? 'Ready' : 'Not ready',
+      details: 'Saved non-secret Vercel project settings for this browser session.',
     });
   }
 
   function handleClearVercelConfig() {
     clearVercelLocalConfig();
     setVercelConfig(null);
-    setVercelRuntimeToken('');
-    setVercelTokenInput('');
-    setVercelTeamIdInput('');
+    setVercelRootDirectoryInput('');
     setVercelProjectNameInput('');
     setVercelDeployDryRun(null);
     setVercelLiveStatus('Not connected');
@@ -526,26 +501,6 @@ export default function DeploymentCenterClient() {
     });
   }
 
-  function getVercelActionToken(action: string): string | null {
-    const token = vercelRuntimeToken.trim() || vercelTokenInput.trim();
-    if (token) {
-      setVercelRuntimeToken(token);
-      setVercelTokenInput('');
-      return token;
-    }
-
-    const details =
-      'Enter and save a Vercel token in this session before running this action.';
-    setVercelLiveStatus('Failed');
-    setVercelLiveMessage(details);
-    recordHistory({
-      action,
-      status: 'Failed',
-      details,
-    });
-    return null;
-  }
-
   function handleVercelActionError(action: string, error: unknown) {
     const details =
       error instanceof Error ? error.message : 'Vercel action failed.';
@@ -560,8 +515,13 @@ export default function DeploymentCenterClient() {
 
   async function handleTestVercelConnection() {
     if (vercelActionBusy) return;
-    const token = getVercelActionToken('Vercel connection test failed');
-    if (!token) return;
+    if (!vercelEnvironment.hasToken) {
+      handleVercelActionError(
+        'Vercel connection test failed',
+        new Error('Configure VERCEL_TOKEN on the Matrix Coder server first.')
+      );
+      return;
+    }
 
     setVercelActionBusy(true);
     setVercelLiveStatus('Testing connection');
@@ -573,7 +533,7 @@ export default function DeploymentCenterClient() {
     });
 
     try {
-      const result = await testVercelConnectionViaServer(token);
+      const result = await testVercelConnectionViaServer();
       setVercelDeploymentLogs(result.logs);
       setVercelLiveStatus(result.success ? 'Connection OK' : 'Failed');
       setVercelLiveMessage(
@@ -599,8 +559,6 @@ export default function DeploymentCenterClient() {
 
   async function handleCreateOrFindVercelProject() {
     if (vercelActionBusy) return;
-    const token = getVercelActionToken('Vercel project preparation failed');
-    if (!token) return;
 
     const dryRun = createAndStoreVercelDryRun();
     if (!dryRun.deploymentAllowed) {
@@ -625,7 +583,7 @@ export default function DeploymentCenterClient() {
     });
 
     try {
-      const result = await createOrFindVercelProjectViaServer(token, dryRun);
+      const result = await createOrFindVercelProjectViaServer(dryRun);
       setVercelDeploymentLogs(result.logs);
       setVercelLiveStatus(result.success ? 'Project ready' : 'Failed');
       setVercelLiveMessage(
@@ -652,8 +610,6 @@ export default function DeploymentCenterClient() {
 
   async function handleDeployToVercel() {
     if (vercelActionBusy) return;
-    const token = getVercelActionToken('Vercel deployment failed');
-    if (!token) return;
 
     const dryRun = createAndStoreVercelDryRun();
     if (!dryRun.deploymentAllowed) {
@@ -679,7 +635,7 @@ export default function DeploymentCenterClient() {
     });
 
     try {
-      const result = await deployToVercelViaServer(token, dryRun);
+      const result = await deployToVercelViaServer(dryRun);
       setVercelDeploymentLogs(result.logs);
       setVercelLiveStatus(
         result.status === 'ready'
@@ -1116,40 +1072,11 @@ export default function DeploymentCenterClient() {
                   Local Vercel Config
                 </p>
                 <p className="mt-2 text-sm leading-6 text-matrix-green-muted">
-                  This stores settings in this browser session only. Matrix Coder
-                  keeps token text in memory only and sends it only to Vercel
-                  when you run a guarded Vercel action.
+                  Non-secret project settings are stored in this browser session.
+                  Vercel credentials and team ownership remain server-side.
                 </p>
               </div>
-              <div className="grid gap-3 md:grid-cols-3">
-                <label className="block">
-                  <span className="mb-2 block text-[10px] uppercase tracking-[0.24em] text-matrix-green-muted">
-                    Vercel token
-                  </span>
-                  <input
-                    type="password"
-                    value={vercelTokenInput}
-                    onChange={(event) => setVercelTokenInput(event.target.value)}
-                    placeholder={
-                      vercelConfig?.tokenConfigured
-                        ? 'Token configured for this session'
-                        : 'Paste Vercel token'
-                    }
-                    className="w-full border border-matrix-border bg-matrix-card px-3 py-2 text-sm text-matrix-green-bright outline-none transition-colors placeholder:text-matrix-green-muted/70 focus:border-matrix-green"
-                  />
-                </label>
-                <label className="block">
-                  <span className="mb-2 block text-[10px] uppercase tracking-[0.24em] text-matrix-green-muted">
-                    Team ID
-                  </span>
-                  <input
-                    type="text"
-                    value={vercelTeamIdInput}
-                    onChange={(event) => setVercelTeamIdInput(event.target.value)}
-                    placeholder="team_..."
-                    className="w-full border border-matrix-border bg-matrix-card px-3 py-2 text-sm text-matrix-green-bright outline-none transition-colors placeholder:text-matrix-green-muted/70 focus:border-matrix-green"
-                  />
-                </label>
+              <div className="grid gap-3 md:grid-cols-2">
                 <label className="block">
                   <span className="mb-2 block text-[10px] uppercase tracking-[0.24em] text-matrix-green-muted">
                     Project name
@@ -1161,6 +1088,20 @@ export default function DeploymentCenterClient() {
                       setVercelProjectNameInput(event.target.value)
                     }
                     placeholder={snapshot.projectName}
+                    className="w-full border border-matrix-border bg-matrix-card px-3 py-2 text-sm text-matrix-green-bright outline-none transition-colors placeholder:text-matrix-green-muted/70 focus:border-matrix-green"
+                  />
+                </label>
+                <label className="block">
+                  <span className="mb-2 block text-[10px] uppercase tracking-[0.24em] text-matrix-green-muted">
+                    Root directory override
+                  </span>
+                  <input
+                    type="text"
+                    value={vercelRootDirectoryInput}
+                    onChange={(event) =>
+                      setVercelRootDirectoryInput(event.target.value)
+                    }
+                    placeholder="Auto-detect"
                     className="w-full border border-matrix-border bg-matrix-card px-3 py-2 text-sm text-matrix-green-bright outline-none transition-colors placeholder:text-matrix-green-muted/70 focus:border-matrix-green"
                   />
                 </label>
@@ -1254,18 +1195,16 @@ export default function DeploymentCenterClient() {
             {[
               ['Vercel project name', vercelConfig?.projectName ?? 'Not configured yet'],
               ['Vercel project ID', vercelProjectId ?? 'Not available yet'],
-              ['Team ID', vercelConfig?.teamId ?? 'Not configured yet'],
+              ['Root directory', vercelDeployDryRun?.inspection?.projectRoot || 'Repository root'],
               ['Deployment status', vercelLiveStatus],
               ['Production URL', vercelProductionUrl ?? 'Not available yet'],
               ['Deployment URL', vercelDeploymentUrl ?? 'Not available yet'],
               ['Last deployment time', formatDate(vercelLastDeploymentAt ?? undefined)],
               [
                 'Token status',
-                vercelRuntimeToken
-                  ? 'Token available in this session'
-                  : vercelConfig?.tokenConfigured || vercelEnvironment.hasToken
-                    ? 'Token metadata configured; re-enter token after refresh'
-                  : 'Missing token',
+                vercelEnvironment.hasToken
+                  ? 'Configured securely on server'
+                  : 'Missing server configuration',
               ],
             ].map(([label, value]) => (
               <div

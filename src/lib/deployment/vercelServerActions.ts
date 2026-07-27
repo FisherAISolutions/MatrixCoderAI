@@ -6,6 +6,9 @@ import {
 } from '@/lib/deployment/vercelDeploymentFlow';
 import type { VercelDeploymentDryRunSummary } from '@/lib/deployment/vercelDeploymentRequest';
 import { redactTokenFromText } from '@/lib/deployment/vercelApiClient';
+import { requireServerEnv, getOptionalServerEnv } from '@/lib/env';
+import { inspectDeploymentProject } from './projectInspection';
+import { normalizeOperationId } from '@/lib/operations/operationId';
 
 export type VercelServerAction =
   | 'test-connection'
@@ -14,8 +17,10 @@ export type VercelServerAction =
 
 export interface VercelServerActionRequest {
   action: VercelServerAction;
+  /** Legacy input accepted for compatibility but never used by the server. */
   token?: string;
   dryRun?: VercelDeploymentDryRunSummary;
+  operationId?: string;
 }
 
 export interface VercelServerActionResponse {
@@ -27,6 +32,7 @@ export interface VercelServerActionResponse {
 
 export interface RunVercelServerActionOptions {
   createClient?: (token: string) => VercelDeploymentClient;
+  signal?: AbortSignal;
 }
 
 function cleanError(error: unknown, token?: string): string {
@@ -45,12 +51,6 @@ function assertAction(value: unknown): asserts value is VercelServerAction {
   }
 }
 
-function assertToken(value: unknown): asserts value is string {
-  if (typeof value !== 'string' || !value.trim()) {
-    throw new Error('Vercel token is required for this action.');
-  }
-}
-
 function assertDryRun(
   value: unknown
 ): asserts value is VercelDeploymentDryRunSummary {
@@ -65,11 +65,15 @@ export async function runVercelServerAction(
 ): Promise<VercelServerActionResponse> {
   try {
     assertAction(request.action);
-    assertToken(request.token);
+    const token =
+      options.createClient && request.token
+        ? request.token
+        : requireServerEnv('VERCEL_TOKEN');
+    const operationId = normalizeOperationId(request.operationId, 'deploy');
 
     if (request.action === 'test-connection') {
       const result = await testVercelConnection({
-        token: request.token,
+        token,
         createClient: options.createClient,
       });
       return {
@@ -81,11 +85,38 @@ export async function runVercelServerAction(
     }
 
     assertDryRun(request.dryRun);
+    const inspection = inspectDeploymentProject(
+      request.dryRun.request?.files ?? [],
+      request.dryRun.inspection?.projectRoot
+    );
+    if (!inspection.supported) {
+      throw new Error(inspection.blockingReasons.join(' '));
+    }
+    const submittedFingerprint =
+      request.dryRun.repositoryFingerprint ?? inspection.fingerprint;
+    const reviewedFingerprint =
+      request.dryRun.reviewedFingerprint ?? submittedFingerprint;
+    if (
+      inspection.fingerprint !== submittedFingerprint ||
+      reviewedFingerprint !== submittedFingerprint
+    ) {
+      throw new Error('Repository fingerprint is stale; run Production Build Check again.');
+    }
+    if (request.dryRun.request) {
+      (
+        request.dryRun.request.project as typeof request.dryRun.request.project & {
+          teamId?: string;
+        }
+      ).teamId = getOptionalServerEnv('VERCEL_TEAM_ID') || undefined;
+      request.dryRun.request.project.rootDirectory =
+        inspection.projectRoot || undefined;
+      request.dryRun.request.project.buildCommand = inspection.buildCommand;
+    }
 
     if (request.action === 'prepare-project') {
       const result = await createOrFindVercelProjectForDryRun({
         dryRun: request.dryRun,
-        token: request.token,
+        token,
         createClient: options.createClient,
       });
       return {
@@ -98,8 +129,9 @@ export async function runVercelServerAction(
 
     const result = await runVercelDeploymentFlow({
       dryRun: request.dryRun,
-      token: request.token,
+      token,
       createClient: options.createClient,
+      signal: options.signal,
     });
     return {
       success: result.success,
@@ -117,7 +149,7 @@ export async function runVercelServerAction(
     return {
       success: false,
       action,
-      error: cleanError(error, request.token),
+      error: cleanError(error),
     };
   }
 }

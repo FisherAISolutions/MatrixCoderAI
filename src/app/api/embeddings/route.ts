@@ -9,6 +9,8 @@ import {
   safeApiErrorResponse,
 } from '@/lib/api/hardening';
 import { logWarning } from '@/lib/logger';
+import { authenticateServerRequest } from '@/lib/auth/serverAuth';
+import { consumeRateLimit } from '@/lib/operations/rateLimit';
 
 /**
  * POST /api/embeddings
@@ -38,6 +40,18 @@ export async function POST(request: NextRequest) {
 
   const authError = requireBearerAuthorization(request);
   if (authError) return authError;
+  try {
+    const user = await authenticateServerRequest(request);
+    const rate = consumeRateLimit(`embeddings:${user.id}`, {
+      limit: 60,
+      windowMs: 60_000,
+    });
+    if (!rate.allowed) {
+      return NextResponse.json({ error: 'Embedding rate limit reached.' }, { status: 429 });
+    }
+  } catch {
+    return NextResponse.json({ error: 'Authentication required.' }, { status: 401 });
+  }
 
   const parsed = await parseJsonBody<EmbeddingsRequestBody>(request);
   if (!parsed.ok || !parsed.body) return parsed.response!;
