@@ -332,16 +332,24 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         setUser(authSession.user);
         setError(null);
         setVerificationEmail(null);
+        setIsLoading(true);
         setAuthStatus('restoring');
         const timer = setTimeout(() => {
-          pendingAuthTimers.delete(timer);
-          if (disposed) return;
-          void restoreUserWorkspace(authSession.user, 'auth-state', epoch).catch((err) => {
-            if (!disposed && epoch === authEpochRef.current) {
-              useLocalWorkspaceFallback(err, 'Main Workspace');
-            }
-          });
-        }, 0);
+  pendingAuthTimers.delete(timer);
+  if (disposed) return;
+
+  void restoreUserWorkspace(authSession.user, 'auth-state', epoch)
+    .catch((err) => {
+      if (!disposed && epoch === authEpochRef.current) {
+        useLocalWorkspaceFallback(err, 'Main Workspace');
+      }
+    })
+    .finally(() => {
+      if (!disposed && epoch === authEpochRef.current) {
+        setIsLoading(false);
+      }
+    });
+}, 0);
         pendingAuthTimers.add(timer);
       } else {
         const previousUserId = activeUserIdRef.current ?? undefined;
